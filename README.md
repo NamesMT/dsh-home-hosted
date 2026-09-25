@@ -2,6 +2,8 @@
 
 A DeepSeek Harness plugin for [home-hosted](https://github.com/NamesMT/home-hosted): start the panel at boot, and manage its servers from inside dsh.
 
+![The plugin's page under Settings → Home Hosted](assets/settings.png)
+
 ## What it does
 
 - **Boot autostart** — installs, verifies and removes the OS entry that starts `home-hosted` at boot (systemd on Linux, launchd on macOS, Run key / Task Scheduler on Windows). Off by default; opt in from the plugin's page.
