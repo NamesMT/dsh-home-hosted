@@ -1,0 +1,115 @@
+import { Context } from '@deepseek-ai/cordis'
+import fs from 'node:fs'
+import path from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { BootStatus } from '../src/shared/contracts.js'
+import { HomeHostedService } from '../src/service.js'
+import type { BootInstallResult, BootLadderLike } from '../src/service.js'
+import { SettingsStore } from '../src/settings.js'
+import { tempDir } from './helpers/temp.js'
+import type { TempDir } from './helpers/temp.js'
+
+let scratch: TempDir | null = null
+
+afterEach(() => {
+  scratch?.cleanup()
+  scratch = null
+})
+
+function statusWith(overrides: Partial<BootStatus>): BootStatus {
+  return {
+    platform: 'linux',
+    mechanism: 'systemd-user',
+    recommended: 'systemd-user',
+    state: 'not-installed',
+    bootCapable: false,
+    privileged: false,
+    unitPath: null,
+    commands: [],
+    detail: 'stub',
+    candidates: [],
+    ...overrides,
+  }
+}
+
+interface Harness {
+  service: HomeHostedService
+  installs: number[]
+  unitPath: string
+}
+
+/**
+ * `make` receives the path a file-backed entry would live at; the file is only
+ * written when `unitFile: true`, so a test can describe "reported installed, but
+ * nothing on disk".
+ */
+function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean } = {}): Harness {
+  scratch = tempDir()
+  const home = path.join(scratch.path, 'home')
+  const state = path.join(scratch.path, 'state')
+  fs.mkdirSync(home, { recursive: true })
+  fs.mkdirSync(state, { recursive: true })
+
+  const fakeCli = path.join(scratch.path, 'home-hosted.mjs')
+  fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
+
+  const unitPath = path.join(scratch.path, 'home-hosted.service')
+  if (options.unitFile === true)
+    fs.writeFileSync(unitPath, 'unit', 'utf8')
+  const status = make(unitPath)
+
+  const installs: number[] = []
+  const ladder: BootLadderLike = {
+    status: async () => status,
+    install: async (): Promise<BootInstallResult> => {
+      installs.push(Date.now())
+      return { ok: true, changed: true, detail: 'repaired', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status }
+    },
+    uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, status }),
+  }
+
+  const settings = new SettingsStore(path.join(state, 'settings.json'), 'dsh')
+  settings.update({ autostart: { enabled: options.enabled ?? true, mechanism: 'auto' } })
+  const service = new HomeHostedService(new Context(), {
+    home,
+    stateDir: state,
+    homeHostedCommand: fakeCli,
+    defaultEntryId: 'dsh',
+    settings,
+    createLadder: () => ladder,
+  })
+
+  return { service, installs, unitPath }
+}
+
+describe('startup reconcile', () => {
+  it('does nothing while autostart is off', async () => {
+    const { service, installs } = harness(unit => statusWith({ state: 'enabled-failing', unitPath: unit }), { enabled: false, unitFile: true })
+    await service.reconcile()
+    expect(installs).toHaveLength(0)
+  })
+
+  it('never installs an entry that is not there', async () => {
+    const { service, installs } = harness(unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }))
+    await service.reconcile()
+    expect(installs).toHaveLength(0)
+  })
+
+  it('refuses to trust a state that claims an installed unit with no file', async () => {
+    const { service, installs } = harness(unit => statusWith({ state: 'installed-disabled', mechanism: 'systemd-user', unitPath: unit }))
+    await service.reconcile()
+    expect(installs).toHaveLength(0)
+  })
+
+  it('repairs an installed entry that stopped working', async () => {
+    const { service, installs } = harness(unit => statusWith({ state: 'enabled-failing', mechanism: 'systemd-user', unitPath: unit }), { unitFile: true })
+    await service.reconcile()
+    expect(installs).toHaveLength(1)
+  })
+
+  it('leaves a healthy entry alone', async () => {
+    const { service, installs } = harness(unit => statusWith({ state: 'enabled-running', mechanism: 'systemd-user', unitPath: unit }), { unitFile: true })
+    await service.reconcile()
+    expect(installs).toHaveLength(0)
+  })
+})

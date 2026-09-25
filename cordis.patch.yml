@@ -1,0 +1,6 @@
+# The layer this bundle contributes to a profile's composition: one row that
+# mounts the host half. The browser half is claimed by dsh.client in
+# package.json and attaches to this same row.
+- insert:
+    - id: dsh-home-hosted
+      name: 'dsh-home-hosted'

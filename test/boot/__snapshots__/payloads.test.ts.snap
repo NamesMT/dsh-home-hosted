@@ -1,0 +1,146 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`launchd payload > writes a plist with argv, KeepAlive, ThrottleInterval and log paths 1`] = `
+"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.home-hosted.home-hosted</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/node</string>
+		<string>/opt/home-hosted/dist/cli.js</string>
+		<string>up</string>
+		<string>--foreground</string>
+		<string>--home</string>
+		<string>/home/mt/.home-hosted</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>WorkingDirectory</key>
+	<string>/home/mt</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/bin:/bin</string>
+		<key>HOME</key>
+		<string>/home/mt</string>
+		<key>HHOSTED_HOME</key>
+		<string>/home/mt/.home-hosted</string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/home/mt/.home-hosted/.logs/dev.home-hosted.home-hosted.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/home/mt/.home-hosted/.logs/dev.home-hosted.home-hosted.err.log</string>
+	<!-- Managed by managed-by:dsh-home-hosted -->
+</dict>
+</plist>
+"
+`;
+
+exports[`systemd payloads > writes a system unit with StartLimit* in [Unit] and User= only when known 1`] = `
+"# Managed by managed-by:dsh-home-hosted
+[Unit]
+Description=home-hosted panel
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=mt
+Type=exec
+ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted
+WorkingDirectory=/home/mt
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/bin:/bin
+Environment=HOME=/home/mt
+Environment=HHOSTED_HOME=/home/mt/.home-hosted
+
+[Install]
+WantedBy=multi-user.target
+"
+`;
+
+exports[`systemd payloads > writes a user unit with Type=exec, Restart and an explicit environment 1`] = `
+"# Managed by managed-by:dsh-home-hosted
+[Unit]
+Description=home-hosted panel
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted
+WorkingDirectory=/home/mt
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/bin:/bin
+Environment=HOME=/home/mt
+Environment=HHOSTED_HOME=/home/mt/.home-hosted
+
+[Install]
+WantedBy=default.target
+"
+`;
+
+exports[`windows payloads > builds the Register-ScheduledTask script from cmdlets 1`] = `"$action = New-ScheduledTaskAction -Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument 'C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\mt\\.home-hosted' -WorkingDirectory 'C:\\Users\\mt'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Register-ScheduledTask -TaskName 'home-hosted' -Action $action -Trigger $trigger -Settings $settings -Description 'managed-by:dsh-home-hosted' -Force | Out-Null"`;
+
+exports[`windows payloads > writes task XML with the marker, a logon trigger and restart settings 1`] = `
+"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+<RegistrationInfo>
+<Description>managed-by:dsh-home-hosted</Description>
+</RegistrationInfo>
+<Triggers>
+<LogonTrigger>
+<Enabled>true</Enabled>
+</LogonTrigger>
+</Triggers>
+<Principals>
+<Principal id="Author">
+<LogonType>InteractiveToken</LogonType>
+<RunLevel>LeastPrivilege</RunLevel>
+</Principal>
+</Principals>
+<Settings>
+<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+<StartWhenAvailable>true</StartWhenAvailable>
+<RestartOnFailure>
+<Interval>PT1M</Interval>
+<Count>3</Count>
+</RestartOnFailure>
+<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+</Settings>
+<Actions Context="Author">
+<Exec>
+<Command>C:\\Program Files\\nodejs\\node.exe</Command>
+<Arguments>C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\mt\\.home-hosted</Arguments>
+<WorkingDirectory>C:\\Users\\mt</WorkingDirectory>
+</Exec>
+</Actions>
+</Task>
+"
+`;
+
+exports[`xdg payload > writes a login-scope desktop entry with a non-shell Exec 1`] = `
+"[Desktop Entry]
+Type=Application
+Name=home-hosted panel
+Comment=home-hosted daemon, managed by managed-by:dsh-home-hosted
+Exec=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted
+Path=/home/mt
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-HomeHosted-Marker=managed-by:dsh-home-hosted
+"
+`;
