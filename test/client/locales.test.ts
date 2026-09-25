@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createTranslator, en, englishTranslator, interpolate, LOCALE_NS, zh } from '../../src/client/locales.js'
+import {
+  createTranslator,
+  en,
+  englishTranslator,
+  interpolate,
+  LOCALE_NS,
+  resolveTranslator,
+  zh,
+} from '../../src/client/locales.js'
 
 describe('dictionaries', () => {
   it('keeps English and Chinese in step', () => {
@@ -54,5 +62,36 @@ describe('translators', () => {
       register: () => () => {},
     }
     expect(createTranslator(service)('tab')).toBe(en.tab)
+  })
+})
+
+describe('resolveTranslator', () => {
+  it('uses the bundled copy when no seat was injected', () => {
+    expect(resolveTranslator(undefined)('panelTitle')).toBe(en.panelTitle)
+  })
+
+  it('replaces a key-echoing seat with the bundled copy', () => {
+    // The framework `t` seat of a namespace it has no dictionary for.
+    const rawSeat = (key: string) => key
+    const t = resolveTranslator(rawSeat)
+    expect(t('panelTitle')).toBe(en.panelTitle)
+    expect(t('entriesAdopt')).toBe(en.entriesAdopt)
+  })
+
+  it('keeps a real translation, including a non-English one', () => {
+    const zhSeat = (key: string) => zh[key as keyof typeof zh]
+    const t = resolveTranslator(zhSeat)
+    expect(t('refresh')).toBe(zh.refresh)
+    expect(t('tab')).toBe(zh.tab)
+  })
+
+  it('falls back when the seat throws or returns nothing', () => {
+    expect(resolveTranslator(() => { throw new Error('boom') })('tab')).toBe(en.tab)
+    expect(resolveTranslator(() => '')('tab')).toBe(en.tab)
+  })
+
+  it('interpolates the fallback', () => {
+    expect(resolveTranslator(key => key)('agentToolMutating', { name: 'servers_start' }))
+      .toBe('servers_start · asks approval')
   })
 })

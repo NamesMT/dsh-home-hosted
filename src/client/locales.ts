@@ -196,3 +196,26 @@ export function createTranslator(locale?: LocaleService): TranslateFn {
   }
   return englishTranslator
 }
+
+/**
+ * Wrap a translator that is out of our control (the framework's injected `t`
+ * seat) so a missing dictionary — a result equal to the key — falls back to
+ * the bundled copy instead of rendering the raw locale key.
+ */
+export function resolveTranslator(
+  candidate?: TranslateFn,
+  fallback: TranslateFn = englishTranslator,
+): TranslateFn {
+  if (candidate === undefined) return fallback
+  return (key, params) => {
+    let value: string | undefined
+    try {
+      value = candidate(key, params)
+    }
+    catch {
+      value = undefined
+    }
+    if (value === undefined || value.length === 0 || value === key) return fallback(key, params)
+    return value
+  }
+}

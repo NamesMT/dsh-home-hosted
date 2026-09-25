@@ -12,7 +12,10 @@ export interface TranslateFn {
 /** Locale registry face (`@deepseek-ai/dsh-client-locale`). */
 export interface LocaleService {
   bind(ns: string): TranslateFn
+  /** Single-locale form. */
   register(ns: string, locale: string, dict: Record<string, string>): () => void
+  /** Typed bilingual form: every shipped locale in one call. */
+  register(ns: string, dicts: { en: Record<string, string>, zh: Record<string, string> }): () => void
 }
 
 /** One `settings.section` registration option bag. */

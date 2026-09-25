@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import type { RpcError } from '../shared/contracts.js'
 import { rpc, rpcSettingsUpdate, useStatus } from './api.js'
 import type { TranslateFn } from './context.js'
-import { englishTranslator } from './locales.js'
+import { resolveTranslator } from './locales.js'
 import type { Runner, SectionProps, SettingsUpdater } from './props.js'
 import { AgentsSection } from './section-agents.js'
 import { BootSection } from './section-boot.js'
@@ -13,14 +13,16 @@ import { diffSettings } from './settings.js'
 import { Button, ErrorNote, Hint } from './ui.js'
 
 export interface HomeHostedPageProps {
-  /** Framework-synthesized translate seat (falls back to bundled English). */
+  /** The registration's injected translator; the framework seat is only a fallback. */
   t?: TranslateFn
   /** Settings shell's close affordance. */
   close?: () => void
 }
 
 export function HomeHostedPage(props: HomeHostedPageProps) {
-  const t = props.t ?? englishTranslator
+  // Wrapped: a seat without our namespace returns the raw key, which must
+  // never reach the page — the bundled English copy takes over instead.
+  const t = resolveTranslator(props.t)
   const { data, error, loading, refresh } = useStatus()
   const [actionError, setActionError] = useState<RpcError | null>(null)
   const [busy, setBusy] = useState<string | null>(null)

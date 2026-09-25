@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ClientContext, SlotRegisterOptions } from '../../src/client/context.js'
+import type { ClientContext, SlotRegisterOptions, TranslateFn } from '../../src/client/context.js'
 import { apply, inject } from '../../src/client/index.js'
+import { en } from '../../src/client/locales.js'
 
 interface Recorded {
   options: SlotRegisterOptions
@@ -32,6 +33,21 @@ function makeCtx(services: Record<string, unknown>, options: { effectThrows?: bo
   }
 }
 
+/** A locale service whose `register` records the one bilingual call. */
+function makeLocale(bound: (key: string) => string = key => key) {
+  const registrations: Array<{ ns: string, dicts: { en: Record<string, string>, zh: Record<string, string> } }> = []
+  return {
+    registrations,
+    service: {
+      bind: () => bound,
+      register: (ns: string, dicts: { en: Record<string, string>, zh: Record<string, string> }) => {
+        registrations.push({ ns, dicts })
+        return () => {}
+      },
+    },
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -39,21 +55,17 @@ afterEach(() => {
 describe('apply', () => {
   it('registers one settings.section with the frozen slot spec', () => {
     const recorded: Recorded[] = []
-    const registered: Array<[string, string]> = []
-    const ctx = makeCtx({
-      slots: makeSlots(recorded),
-      locale: {
-        bind: () => (key: string) => key,
-        register: (ns: string, locale: string) => {
-          registered.push([ns, locale])
-          return () => {}
-        },
-      },
-    })
+    const { registrations, service } = makeLocale()
+    const ctx = makeCtx({ slots: makeSlots(recorded), locale: service })
 
     apply(ctx)
 
-    expect(registered).toEqual([['homeHosted', 'en'], ['homeHosted', 'zh']])
+    // One typed call registers every shipped locale.
+    expect(registrations).toHaveLength(1)
+    expect(registrations[0]?.ns).toBe('homeHosted')
+    expect(registrations[0]?.dicts.en.tab).toBe(en.tab)
+    expect(registrations[0]?.dicts.zh.tab).toBe('Home Hosted')
+
     expect(recorded).toHaveLength(1)
     const { options, component } = recorded[0]!
     expect(options.name).toBe('settings.section')
@@ -63,12 +75,36 @@ describe('apply', () => {
     expect(typeof options.label).toBe('function')
     // The label is a thunk resolved through the namespace-bound translator.
     expect((options.label as () => string)()).toBe('tab')
-    expect(options.inject?.()).toEqual({})
+    expect(typeof (options.inject?.().t as TranslateFn)).toBe('function')
     expect(typeof component).toBe('function')
   })
 
-  it('exports slots as its required service', () => {
-    expect(inject).toEqual(['slots'])
+  it('declares slots and locale as required services', () => {
+    expect(inject).toEqual(['slots', 'locale'])
+  })
+
+  it('injects its own translator, so copy never depends on the locale service', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const recorded: Recorded[] = []
+    // No locale service at all: the supported deployment the page must survive.
+    apply(makeCtx({ slots: makeSlots(recorded) }))
+
+    expect(recorded).toHaveLength(1)
+    const options = recorded[0]!.options
+    const injected = options.inject?.() ?? {}
+    const t = injected.t as TranslateFn
+    expect(typeof t).toBe('function')
+    expect(t('panelTitle')).toBe(en.panelTitle)
+    expect(t('bootStateNotInstalled')).toBe(en.bootStateNotInstalled)
+    expect((options.label as () => string)()).toBe(en.tab)
+  })
+
+  it('warns when the locale service is missing but still registers the section', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const recorded: Recorded[] = []
+    apply(makeCtx({ slots: makeSlots(recorded) }))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('locale service is unavailable'))
+    expect(recorded).toHaveLength(1)
   })
 
   it('warns and skips when the slots service is missing', () => {
@@ -80,7 +116,7 @@ describe('apply', () => {
   it('never throws when a registration is refused', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const recorded: Recorded[] = []
-    expect(() => apply(makeCtx({ slots: makeSlots(recorded, true) }))).not.toThrow()
+    expect(() => apply(makeCtx({ slots: makeSlots(recorded, true), locale: makeLocale().service }))).not.toThrow()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('registering the settings section failed'), expect.anything())
   })
 

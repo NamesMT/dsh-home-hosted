@@ -9,8 +9,12 @@ import type { ClientContext, LocaleService, SlotsService } from './context.js'
 import { createTranslator, en, LOCALE_NS, zh } from './locales.js'
 import { HomeHostedPage } from './page.js'
 
-/** Slots owns the registration; `locale` is optional (bundled English is the fallback). */
-export const inject: string[] = ['slots']
+/**
+ * Slots owns the registration and locale backs the copy. Cordis scopes
+ * service access to declared dependencies, so `locale` must be declared even
+ * though the page keeps its bundled dictionaries as the fallback.
+ */
+export const inject: string[] = ['slots', 'locale']
 
 const PREFIX = '[dsh-home-hosted]'
 
@@ -69,16 +73,11 @@ export function apply(ctx: ClientContext): void {
       runEffect(ctx, () => {
         const disposers: Array<() => void> = []
         try {
-          disposers.push(locale.register(LOCALE_NS, 'en', en))
+          // One typed call registers every shipped locale under the namespace.
+          disposers.push(locale.register(LOCALE_NS, { en, zh }))
         }
         catch (caught) {
-          warn('registering the English dictionary failed', caught)
-        }
-        try {
-          disposers.push(locale.register(LOCALE_NS, 'zh', zh))
-        }
-        catch (caught) {
-          warn('registering the Chinese dictionary failed', caught)
+          warn('registering the dictionaries failed', caught)
         }
         return () => {
           for (const dispose of disposers) {
@@ -109,7 +108,10 @@ export function apply(ctx: ClientContext): void {
               order: 60,
               label: () => t('tab'),
               locale: LOCALE_NS,
-              inject: () => ({}),
+              // The inject face is spread AFTER the standard kit, so our own
+              // translator wins over the framework `t` seat: the page never
+              // depends on the locale plugin for its copy.
+              inject: () => ({ t }),
             }, HomeHostedPage)
           }
           catch (caught) {
