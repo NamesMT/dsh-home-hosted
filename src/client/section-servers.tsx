@@ -35,6 +35,11 @@ export function ServersSection({ t, status, run, busy }: SectionProps) {
           {t('refresh')}
         </Button>
       </div>
+      <Hint>
+        {status.panel.url === null
+          ? t('serversHintNoPanel')
+          : t('serversHintPanel', { url: status.panel.url })}
+      </Hint>
       {servers.length === 0
         ? <Hint>{t('serversEmpty')}</Hint>
         : servers.map(server => (

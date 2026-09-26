@@ -82,6 +82,8 @@ export const en = {
 
   serversTitle: 'Servers',
   serversDesc: 'Servers supervised by the panel.',
+  serversHintPanel: 'Add, edit and remove entries in the home-hosted panel: {url}',
+  serversHintNoPanel: 'Add, edit and remove entries in the home-hosted panel (it is not running right now).',
   serversEmpty: 'The panel reports no servers.',
   serversPid: 'PID',
   serversUrl: 'URL',
@@ -164,6 +166,8 @@ export const zh: Record<keyof typeof en, string> = {
 
   serversTitle: '服务器',
   serversDesc: '面板监管的服务器。',
+  serversHintPanel: '在 home-hosted 面板中添加、编辑和删除条目：{url}',
+  serversHintNoPanel: '在 home-hosted 面板中添加、编辑和删除条目（当前未运行）。',
   serversEmpty: '面板未报告任何服务器。',
   serversPid: 'PID',
   serversUrl: 'URL',
