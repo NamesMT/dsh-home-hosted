@@ -6,6 +6,7 @@ import {
   assertNoControl,
   assertUnitName,
   assertXmlCommentSafe,
+  systemdPath,
   batchCommandLine,
   cmdQuote,
   desktopExec,
@@ -78,6 +79,10 @@ describe('systemd escaping', () => {
     expect(systemdExecWord('say "hi"')).toBe('"say \\"hi\\""')
   })
 
+  it('quotes a semicolon so it cannot separate systemd commands', () => {
+    expect(systemdExecWord('a;b')).toBe('"a;b"')
+  })
+
   it('writes Environment= as one assignment when the value needs quoting', () => {
     expect(systemdEnvLine('PATH', '/usr/bin:/bin')).toBe('PATH=/usr/bin:/bin')
     expect(systemdEnvLine('HOME', '/home/my user')).toBe('"HOME=/home/my user"')
@@ -112,9 +117,29 @@ describe('windows escaping', () => {
     expect(batchCommandLine('node.exe', ['--pct', '50%'])).toBe('node.exe --pct 50%%')
   })
 
+  it('neutralises & inside a .cmd wrapper', () => {
+    expect(batchCommandLine('cmd.exe', ['A&B'])).toBe('cmd.exe A^&B')
+  })
+
   it('quotes for powershell and cmd display forms', () => {
     expect(powershellLiteral('a\'b')).toBe(`'a''b'`)
     expect(cmdQuote('plain')).toBe('plain')
     expect(cmdQuote('C:\\a b')).toBe('"C:\\a b"')
   })
 })
+
+describe('systemd path settings', () => {
+  it('escapes specifiers and a trailing backslash', () => {
+    expect(systemdPath('/tmp/plain')).toBe('/tmp/plain')
+    expect(systemdPath('/tmp/100%')).toBe('/tmp/100%%')
+    expect(systemdPath('/tmp/trail\\')).toBe('/tmp/trail\\\\')
+    expect(systemdPath('/tmp/my dir')).toBe('/tmp/my dir')
+  })
+
+  it('refuses what cannot be encoded', () => {
+    expect(() => systemdPath('relative/path')).toThrow(/absolute/)
+    expect(() => systemdPath('/tmp/a"b')).toThrow(/double quote/)
+    expect(() => systemdPath('/tmp/a\nb')).toThrow(/control/)
+  })
+})
+

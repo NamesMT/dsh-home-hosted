@@ -257,6 +257,50 @@ describe('systemd --user', () => {
     expect(result.detail).toMatch(/unit name/)
     expect(runner.calls).toEqual([])
   })
+
+  it('writes WorkingDirectory= as the raw path while ExecStart= words stay quoted', () => {
+    const cwd = '/home/my user/My Project'
+    const unit = systemdUserUnit(spec({ cwd, args: ['/opt/home-hosted/dist/my cli.js', 'up'] }))
+    const lines = unit.split('\n')
+    // systemd takes path settings verbatim, so a space must not gain quotes.
+    expect(lines).toContain(`WorkingDirectory=${cwd}`)
+    expect(lines.some(line => line.startsWith('WorkingDirectory="'))).toBe(false)
+    expect(lines).toContain('ExecStart=/usr/bin/node "/opt/home-hosted/dist/my cli.js" up')
+  })
+
+  it('refuses a WorkingDirectory= path containing a double quote', async () => {
+    expect(() => systemdUserUnit(spec({ cwd: '/home/my "user"/project' }))).toThrow(/double quote/)
+    const runner = fakeRun()
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    const result = await provider.install(spec({ cwd: '/home/my "user"/project' }))
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/double quote/)
+    expect(runner.calls).toEqual([])
+    expect(fs.existsSync(unitPath(home))).toBe(false)
+  })
+
+  it('quotes an ExecStart= argument containing a semicolon', () => {
+    const unit = systemdUserUnit(spec({ args: ['run', 'a;b'] }))
+    expect(unit.split('\n')).toContain('ExecStart=/usr/bin/node run "a;b"')
+  })
+
+  it('refuses to uninstall a same-named unit file this plugin did not write', async () => {
+    fs.mkdirSync(path.dirname(unitPath(home)), { recursive: true })
+    fs.writeFileSync(unitPath(home), '[Unit]\nDescription=someone else\n')
+    const runner = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 0, stdout: 'enabled\n' }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=yes\n' }
+      return { code: 0, stdout: 'UnitFileState=enabled\nActiveState=active\nResult=success\n' }
+    })
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    const result = await provider.uninstall(spec())
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/marker/)
+    expect(runner.find('systemctl').some(call => call.args.includes('disable'))).toBe(false)
+    expect(fs.existsSync(unitPath(home))).toBe(true)
+  })
 })
 
 describe('systemd system', () => {
@@ -351,3 +395,15 @@ describe('systemd system', () => {
     expect(result.detail).toMatch(/nothing to remove/)
   })
 })
+
+describe('systemd working directory encoding', () => {
+  it('escapes a percent and a trailing backslash (verified against systemd-analyze verify)', () => {
+    // `%x` is a fatal invalid specifier, and a trailing `\\` continues the line
+    // into the next directive; both are escaped instead of passed raw.
+    const percent = systemdUserUnit(spec({ cwd: '/home/my dir/100%' }))
+    expect(percent.split('\n')).toContain('WorkingDirectory=/home/my dir/100%%')
+    const trailing = systemdUserUnit(spec({ cwd: '/home/my dir/trail\\' }))
+    expect(trailing.split('\n')).toContain('WorkingDirectory=/home/my dir/trail\\\\')
+  })
+})
+

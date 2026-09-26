@@ -137,6 +137,28 @@ describe('windows run key', () => {
     expect(status.detail).toMatch(/not marked as ours/)
   })
 
+  it('does not claim a foreign Run value whose data already equals ours', async () => {
+    const exact = windowsCommandLine(winSpec().command, winSpec().args)
+    store.set(regKeyOf(RUN_KEY, 'home-hosted'), exact)
+    const { provider, runner } = makeProvider()
+    const install = await provider.install(winSpec())
+    expect(install.ok).toBe(false)
+    expect(install.detail).toMatch(/refusing to overwrite/)
+    expect(runner.find('reg.exe').some(call => call.args[0] === 'add')).toBe(false)
+    expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toBe(exact)
+    expect(store.has(regKeyOf(MARKER_KEY, 'home-hosted'))).toBe(false)
+  })
+
+  it('neutralises batch metacharacters in the .cmd wrapper', () => {
+    const spaced = `C:\\Users\\tester\\A & B\\${'x'.repeat(240)}`
+    const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--home', spaced, '%TEMP%'] })
+    const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)
+    expect(payload.wrapperPath).not.toBeNull()
+    expect(payload.wrapperContent).toContain('A ^& B')
+    expect(payload.wrapperContent).toContain('%%TEMP%%')
+    expect(/[^^]&/.test(payload.wrapperContent ?? '')).toBe(false)
+  })
+
   it('deletes the value and the marker, tolerating reg exit 1', async () => {
     const { provider } = makeProvider()
     await provider.install(winSpec())

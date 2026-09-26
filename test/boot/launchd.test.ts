@@ -188,6 +188,18 @@ describe('launchd agent', () => {
     expect(fs.existsSync(plistPath)).toBe(true)
     expect(runner.calls).toEqual([])
   })
+
+  it('refuses to unload a same-named job whose plist is not ours', async () => {
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true })
+    fs.writeFileSync(plistPath, '<?xml version="1.0"?><plist version="1.0"><dict/></plist>')
+    const runner = fakeRun(() => ({ code: 0 }))
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    const result = await provider.uninstall(agentSpec)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/marker/)
+    expect(runner.find('launchctl').some(call => call.args[0] === 'bootout')).toBe(false)
+    expect(fs.existsSync(plistPath)).toBe(true)
+  })
 })
 
 describe('launchd daemon', () => {
@@ -260,5 +272,24 @@ describe('launchd daemon', () => {
     expect(lines.some(line => line.startsWith('sudo -n install -m 0644 '))).toBe(true)
     expect(lines).toContain(`sudo -n plutil -lint ${daemonPath}`)
     expect(lines).toContain(`sudo -n launchctl bootstrap system ${daemonPath}`)
+  })
+
+  it('stages the plist that the advertised sudo install command copies', async () => {
+    const runner = fakeRun()
+    const provider = createLaunchdDaemonProvider(ctxFor({
+      home,
+      run: runner.run,
+      platform: 'darwin',
+      sudo: async () => false,
+      env: { USER: 'tester', UID: '1000', TMPDIR: home },
+    }))
+    const result = await provider.install(daemonSpec)
+    expect(result.ok).toBe(false)
+    expect(result.needsPrivilege).toBe(true)
+    const staged = path.join(home, `${LABEL}.plist`)
+    expect(result.commands[0]).toContain(staged)
+    expect(fs.existsSync(staged)).toBe(true)
+    expect(fs.readFileSync(staged, 'utf8')).toBe(launchdPlist(daemonSpec))
+    expect(runner.calls.some(call => call.command === 'sudo')).toBe(false)
   })
 })

@@ -101,15 +101,17 @@ export function systemdText(value: string): string {
 }
 
 /**
- * A path setting (`WorkingDirectory=`). systemd takes these verbatim — it does
- * not unquote, and does not unescape `\%` or `\$` — so the only correct
- * encoding is the raw value; anything that would break the line is refused.
+ * A path setting (`WorkingDirectory=`). systemd does not unquote these, but it
+ * does expand `%` specifiers (an unknown one is fatal, verified with
+ * `systemd-analyze verify`), and a trailing `\` continues the line into the next
+ * directive. So both are escaped rather than passed raw.
  */
 export function systemdPath(value: string, what = 'path'): string {
   assertAbsolute(value, what)
+  assertNoControl(value, what)
   if (value.includes('"'))
     throw new Error(`${what} must not contain a double quote: ${JSON.stringify(value)}`)
-  return value
+  return replaceAll(value, [['\\', '\\\\'], ['%', '%%']])
 }
 
 /** `Environment=KEY=value`, quoted as one assignment when the value needs it. */
