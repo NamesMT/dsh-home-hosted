@@ -18,6 +18,30 @@ interface ApprovalLike {
   request: (request: { agent: unknown, toolName: string, reason?: string }) => Promise<string>
 }
 
+interface SandboxPolicyLike {
+  resolve?: (input: { session?: unknown }) => { mode?: string } | undefined
+}
+
+/**
+ * The calling session's file-sandbox mode.
+ *
+ * A session already on `danger-full-access` has made the decision this tool
+ * would otherwise ask about again — asking anyway is what makes a Full-access
+ * run fail when the deployment's approvals are set to auto-reject.
+ */
+function sandboxMode(ctx: Context, exec: unknown): string | null {
+  const policy = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
+  if (policy?.resolve === undefined)
+    return null
+  const session = (exec as { agent?: { session?: unknown } } | undefined)?.agent?.session
+  try {
+    return policy.resolve({ ...(session === undefined ? {} : { session }) })?.mode ?? null
+  }
+  catch {
+    return null
+  }
+}
+
 interface ToolSpec {
   endpoint: RpcEndpoint
   description: string
@@ -100,17 +124,20 @@ function registerOne(ctx: Context, service: HomeHostedService, name: AgentToolNa
     async execute(args, exec) {
       const input = (args ?? {}) as Record<string, unknown>
 
-      if (mutating) {
+      const mode = sandboxMode(ctx, exec)
+      const fullAccess = mode === 'danger-full-access'
+      if (mutating && !fullAccess) {
         const approval = ctx.get('approval') as ApprovalLike | undefined
+        const remedy = 'Set the session to Full access (danger-full-access), or use a session where approvals can be answered.'
         if (approval?.request === undefined)
-          return 'refused: this deployment has no approval service, so a mutating home-hosted tool cannot run.'
+          return `refused: this session runs in ${mode ?? 'an unknown'} sandbox and the deployment has no approval service. ${remedy}`
         const outcome = await approval.request({
           agent: (exec as { agent?: unknown } | undefined)?.agent,
           toolName,
           reason: `${spec.description} (${JSON.stringify(input)})`,
         })
         if (outcome !== 'allowed-once')
-          return `refused: approval answered "${outcome}".`
+          return `refused: approval answered "${outcome}" (session sandbox: ${mode ?? 'unknown'}). ${remedy}`
       }
 
       try {

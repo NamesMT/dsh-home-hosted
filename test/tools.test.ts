@@ -21,7 +21,7 @@ interface Harness {
   registeredNames: () => string[]
 }
 
-function harness(options: { approval?: (toolName: string) => string, allow?: AgentToolName[], enabled?: boolean } = {}): Harness {
+function harness(options: { approval?: (toolName: string) => string, allow?: AgentToolName[], enabled?: boolean, sandbox?: string | null } = {}): Harness {
   const scratch = tempDir()
   const settings = new SettingsStore(`${scratch.path}/settings.json`, 'dsh')
   settings.update({ agentTools: { enabled: options.enabled ?? true, allow: options.allow ?? ['status', 'servers_list'] } })
@@ -42,6 +42,11 @@ function harness(options: { approval?: (toolName: string) => string, allow?: Age
       },
     },
     get(name: string) {
+      if (name === 'sandboxPolicy') {
+        if (options.sandbox === null)
+          return undefined
+        return { resolve: () => ({ mode: options.sandbox ?? 'workspace-write' }) }
+      }
       if (name !== 'approval')
         return undefined
       if (options.approval === undefined)
@@ -122,7 +127,8 @@ describe('agent tools', () => {
       const h = harness({ allow: ['servers_delete'], approval: () => outcome })
       const tool = h.tools[0]!
       const answer = await tool.execute({ id: 'other' }, { agent: 'agent-1' })
-      expect(answer).toBe(`refused: approval answered "${outcome}".`)
+      expect(answer).toContain(`refused: approval answered "${outcome}"`)
+      expect(answer).toContain('Full access')
       expect(h.calls).toHaveLength(0)
     }
   })
@@ -162,5 +168,36 @@ describe('agent tools', () => {
     const answer = await tools[0]!.execute({ id: 'x' }, {})
     expect(answer).toContain('failed: panel unavailable')
     expect(h.tools.length).toBeGreaterThan(0)
+  })
+})
+
+describe('session sandbox', () => {
+  it('does not ask for approval when the session is already full access', async () => {
+    const h = harness({ allow: ['servers_create'], sandbox: 'danger-full-access' })
+    const tool = h.tools[0]!
+    const answer = await tool.execute({ entry: { id: 'x', command: 'sleep' } }, { agent: 'agent-1' })
+    expect(h.approvals).toHaveLength(0)
+    expect(h.calls).toHaveLength(1)
+    expect(answer).toContain('servers.create')
+  })
+
+  it('still asks — and fails closed — below full access', async () => {
+    const readOnly = harness({ allow: ['servers_create'], sandbox: 'read-only' })
+    const answer = await readOnly.tools[0]!.execute({ entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
+    expect(answer).toContain('refused')
+    expect(answer).toContain('Full access')
+    expect(readOnly.calls).toHaveLength(0)
+
+    const denied = harness({ allow: ['servers_create'], sandbox: 'workspace-write', approval: () => 'rejected' })
+    const deniedAnswer = await denied.tools[0]!.execute({ entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
+    expect(deniedAnswer).toContain('workspace-write')
+    expect(denied.calls).toHaveLength(0)
+  })
+
+  it('runs when the sandbox is unknown but approval is granted', async () => {
+    const h = harness({ allow: ['servers_start'], sandbox: null, approval: () => 'allowed-once' })
+    const answer = await h.tools[0]!.execute({ id: 'other' }, { agent: 'a' })
+    expect(h.approvals).toHaveLength(1)
+    expect(answer).toContain('servers.start')
   })
 })

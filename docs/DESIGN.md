@@ -31,6 +31,16 @@ node_modules (flat or pnpm), then PATH — and forwards its argv, so the entry
 survives plugin upgrades and profile reinstalls. The plugin preflights the
 launcher the way the unit invokes it and shows the version it answers.
 
+## Approvals follow the session's sandbox
+
+A mutating agent tool asks the approval service only when the calling session is
+*not* already `danger-full-access` (`ctx.sandboxPolicy.resolve({ session })`).
+Asking anyway made a Full-access run fail whenever the deployment's approvals
+auto-reject — the session had already granted exactly what the tool was asking
+about. Below full access the tool still asks and still fails closed, and the
+refusal names the mode and the remedy (Full access, or an answerable approval
+channel).
+
 ## Config compatibility
 
 `onPortConflict: kill` did not exist before home-hosted 0.6.0, and an older panel
