@@ -52,7 +52,7 @@ function PortField({ value, label, hint, invalidLabel, placeholder, disabled, on
   )
 }
 
-export function PanelSection({ t, status, run, updateSettings, busy }: SectionProps) {
+export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: SectionProps) {
   const panel = status.panel
   const cli = status.cli
   const preferred = cli?.prefer ?? status.settings.cli?.prefer ?? 'pinned'
@@ -61,7 +61,6 @@ export function PanelSection({ t, status, run, updateSettings, busy }: SectionPr
 
   const cliVersion = cli?.version ?? null
   const versionsKnown = cliVersion !== null && panel.version !== null
-  const sameCopy = panel.reachable && versionsKnown && cliVersion === panel.version
   const needsReplace = panel.reachable && versionsKnown && cliVersion !== panel.version
 
   const { dependency, global } = cli === undefined
@@ -142,13 +141,11 @@ export function PanelSection({ t, status, run, updateSettings, busy }: SectionPr
         {needsReplace && !confirming
           ? (
               <Button variant="primary" onClick={() => setConfirming(true)}>
-                {t('panelReplace', { version: cliVersion })}
+                {t('panelReplace', { copy: t(preferred === 'global' ? 'panelCopyGlobal' : 'panelCopyPinned') })}
               </Button>
             )
           : null}
       </div>
-
-      {sameCopy ? <Hint>{t('panelAlreadyPreferred')}</Hint> : null}
 
       {needsReplace && confirming
         ? (
@@ -176,7 +173,7 @@ export function PanelSection({ t, status, run, updateSettings, busy }: SectionPr
 
       {cli !== undefined && global === null
         ? (
-            <Details label={t('optionsInstallLabel')}>
+            <Details label={t('optionsInstallLabel')} open={uiStyle === 'detailed'}>
               <Hint>{t('optionsInstallHint')}</Hint>
               <CommandBox text={commands.join('\n')} copyLabel={t('copy')} copiedLabel={t('copied')} />
               <div className="hh-btn-row">
@@ -189,7 +186,7 @@ export function PanelSection({ t, status, run, updateSettings, busy }: SectionPr
           )
         : null}
 
-      <Details label={t('details')}>
+      <Details label={t('details')} open={uiStyle === 'detailed'}>
         <Spec label={t('panelHome')}><Code>{panel.home}</Code></Spec>
         <Spec label={t('panelUrl')}>
           {panel.url === null ? dash(panel.url) : <Link href={panel.url}>{panel.url}</Link>}

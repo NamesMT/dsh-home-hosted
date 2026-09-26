@@ -12,7 +12,7 @@ interface FreshFailure extends BootAttemptView {
   ok: false
 }
 
-export function BootSection({ t, status, run, updateSettings, busy }: SectionProps) {
+export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: SectionProps) {
   const boot = status.boot
   const autostart = status.settings.autostart
   const candidates = boot.candidates ?? []
@@ -125,14 +125,14 @@ export function BootSection({ t, status, run, updateSettings, busy }: SectionPro
 
       {commands.length > 0
         ? (
-            <Details label={t('bootCommandsLabel')}>
+            <Details label={t('bootCommandsLabel')} open={uiStyle === 'detailed'}>
               <Hint>{t('bootCommandsExplain')}</Hint>
               <CommandBox text={commands.join('\n')} copyLabel={t('copy')} copiedLabel={t('copied')} />
             </Details>
           )
         : null}
 
-      <Details label={t('details')}>
+      <Details label={t('details')} open={uiStyle === 'detailed'}>
         <Spec label={t('bootState')}>{t(BOOT_STATE_KEYS[boot.state] ?? 'bootStateUnsupported')}</Spec>
         <Spec label={t('bootBootCapable')}>{boot.bootCapable ? t('yes') : t('no')}</Spec>
         <Spec label={t('bootPrivileged')}>{boot.privileged ? t('yes') : t('no')}</Spec>

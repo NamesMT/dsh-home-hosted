@@ -8,6 +8,7 @@ const intent: EntryIntent = {
   autostart: true,
   onPortConflict: 'follow',
   stopKillPortHolders: false,
+  persistent: false,
 }
 
 function settings(overrides: Partial<PluginSettings> = {}): PluginSettings {
@@ -73,6 +74,10 @@ describe('diffSettings', () => {
     const base = settings()
     const next = settings({ cli: { prefer: 'global' } })
     expect(diffSettings(base, next)).toEqual({ cli: { prefer: 'global' } })
+  })
+
+  it('sends the page style on its own', () => {
+    expect(diffSettings(settings(), settings({ uiStyle: 'compact' }))).toEqual({ uiStyle: 'compact' })
   })
 
   it('sends nothing when the CLI preference is unchanged', () => {

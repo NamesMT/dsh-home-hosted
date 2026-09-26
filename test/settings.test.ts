@@ -26,6 +26,8 @@ describe('settings store', () => {
       manageDsh: false,
       entries: [],
       panel: { port: null },
+      authNotice: true,
+      uiStyle: 'detailed',
       agentTools: { enabled: true, allow: ['status', 'servers_list', 'servers_lifecycle', 'servers_edit', 'autostart_manage', 'ui_manage'] },
       cli: { prefer: 'pinned' },
     })
@@ -40,6 +42,7 @@ describe('settings store', () => {
       autostart: true,
       onPortConflict: process.platform === 'win32' ? 'kill' : 'follow',
       stopKillPortHolders: true,
+      persistent: true,
     })
   })
 
@@ -49,15 +52,15 @@ describe('settings store', () => {
     expect(s.get().autostart).toEqual({ enabled: true, mechanism: 'systemd-user' })
 
     s.update({ agentTools: { enabled: true, allow: ['status', 'servers_lifecycle'] } })
-    s.update({ entries: [{ id: 'dsh', autostart: false, onPortConflict: 'block', stopKillPortHolders: false }] })
+    s.update({ entries: [{ id: 'dsh', autostart: false, onPortConflict: 'block', stopKillPortHolders: false, persistent: false }] })
 
     const file = path.join(path.dirname(s.file), 'settings.json')
     expect(fs.statSync(file).mode & 0o777).toBe(0o600)
     const reloaded = new SettingsStore(file, 'dsh')
     expect(reloaded.get().autostart.enabled).toBe(true)
     expect(reloaded.get().agentTools.allow).toEqual(['status', 'servers_lifecycle'])
-    expect(reloaded.intentFor('dsh')).toEqual({ id: 'dsh', autostart: false, onPortConflict: 'block', stopKillPortHolders: false })
-    expect(reloaded.intentFor('other')).toEqual({ id: 'other', autostart: true, onPortConflict: process.platform === 'win32' ? 'kill' : 'follow', stopKillPortHolders: true })
+    expect(reloaded.intentFor('dsh')).toEqual({ id: 'dsh', autostart: false, onPortConflict: 'block', stopKillPortHolders: false, persistent: false })
+    expect(reloaded.intentFor('other')).toEqual({ id: 'other', autostart: true, onPortConflict: process.platform === 'win32' ? 'kill' : 'follow', stopKillPortHolders: true, persistent: true })
   })
 
   it('defaults to the pinned CLI and keeps a chosen preference', () => {
@@ -90,7 +93,7 @@ describe('settings store', () => {
 
   it('drops an unknown port-conflict policy instead of writing it into the panel config', () => {
     const s = store()
-    s.update({ entries: [{ id: 'dsh', autostart: true, onPortConflict: 'explode' as never, stopKillPortHolders: true }] })
+    s.update({ entries: [{ id: 'dsh', autostart: true, onPortConflict: 'explode' as never, stopKillPortHolders: true, persistent: true }] })
     expect(s.intentFor('dsh').onPortConflict).toBe(process.platform === 'win32' ? 'kill' : 'follow')
   })
 
@@ -143,7 +146,7 @@ describe('upgrading the management flag', () => {
   it('reads a legacy file that holds the harness entry as managed', () => {
     scratch = tempDir()
     writeJsonFile(path.join(scratch.path, 'settings.json'), {
-      entries: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }],
+      entries: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true, persistent: true }],
     })
     expect(new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh').get().manageDsh).toBe(true)
   })
@@ -151,7 +154,7 @@ describe('upgrading the management flag', () => {
   it('does not invent management for an entry that is not the harness', () => {
     scratch = tempDir()
     writeJsonFile(path.join(scratch.path, 'settings.json'), {
-      entries: [{ id: 'other', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }],
+      entries: [{ id: 'other', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true, persistent: true }],
     })
     expect(new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh').get().manageDsh).toBe(false)
   })
@@ -161,7 +164,7 @@ describe('upgrading the management flag', () => {
     writeJsonFile(path.join(scratch.path, 'settings.json'), {
       version: 2,
       manageDsh: false,
-      entries: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }],
+      entries: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true, persistent: true }],
     })
     expect(new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh').get().manageDsh).toBe(false)
   })

@@ -12,6 +12,7 @@ import { Config } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { registerRpc } from './rpc.js'
 import { HomeHostedService } from './service.js'
+import { registerAuthNotice } from './home-hosted/web-notice.js'
 import { SettingsStore } from './settings.js'
 import { registerAgentTools } from './tools.js'
 import { ensureDir } from './util/fsx.js'
@@ -44,6 +45,8 @@ export function apply(ctx: Context, config?: ConfigShape): void {
 
   registerRpc(ctx, service)
   registerAgentTools(ctx, service, settings)
+  // Read per 401, so the setting takes effect without re-installing the wrapper.
+  registerAuthNotice(ctx, () => (settings.get().authNotice ? service.panelLogUrl() : null))
 
   // Re-assert an enabled boot entry shortly after startup: a node or CLI upgrade
   // moves the paths a unit was written with, and the fix is to rewrite it.

@@ -19,6 +19,8 @@ function normalizeIntent(value: Partial<EntryIntent> | null | undefined, fallbac
   return {
     id: base.id,
     autostart: typeof value?.autostart === 'boolean' ? value.autostart : base.autostart,
+    // Absent means a stored intent from before persistence existed: it wants it.
+    persistent: typeof value?.persistent === 'boolean' ? value.persistent : base.persistent,
     // Only a policy the panel's own schema parses may reach the config it boots from.
     onPortConflict: isOnPortConflict(value?.onPortConflict) ? value.onPortConflict : base.onPortConflict,
     stopKillPortHolders: typeof value?.stopKillPortHolders === 'boolean' ? value.stopKillPortHolders : base.stopKillPortHolders,
@@ -88,6 +90,8 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
         ? raw.panel.port
         : null,
     },
+    authNotice: raw?.authNotice === undefined ? DEFAULT_SETTINGS.authNotice : raw.authNotice === true,
+    uiStyle: raw?.uiStyle === 'compact' ? 'compact' : 'detailed',
     agentTools: {
       // Absent means the default (on), and so does the pair the previous
       // release wrote for it; any other explicit false stays false.
@@ -131,6 +135,8 @@ export class SettingsStore {
       manageDsh: patch.manageDsh ?? this.current.manageDsh,
       entries: patch.entries ?? this.current.entries,
       panel: { ...this.current.panel, ...(patch.panel ?? {}) },
+      authNotice: patch.authNotice ?? this.current.authNotice,
+      uiStyle: patch.uiStyle ?? this.current.uiStyle,
       agentTools: { ...this.current.agentTools, ...(patch.agentTools ?? {}) },
       cli: { ...this.current.cli, ...(patch.cli ?? {}) },
     }, this.fallbackEntryId)

@@ -1,5 +1,5 @@
 /** Shared section props: every section renders from the live status snapshot. */
-import type { Envelope, HomeHostedStatus, PluginSettings } from '../shared/contracts.js'
+import type { Envelope, HomeHostedStatus, PluginSettings, UiStyle } from '../shared/contracts.js'
 import type { TranslateFn } from './context.js'
 
 /** Run one mutation and resolve its envelope; `status` is refreshed either way. */
@@ -15,4 +15,6 @@ export interface SectionProps {
   updateSettings: SettingsUpdater
   /** Key of the mutation currently in flight, if any. */
   busy: string | null
+  /** The page's presentation: detailed unfolds and enriches, compact is the row list. */
+  uiStyle: UiStyle
 }

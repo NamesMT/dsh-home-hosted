@@ -41,7 +41,7 @@ function status(overrides: Partial<HomeHostedStatus> = {}): HomeHostedStatus {
 
 function entry(overrides: Partial<ManagedEntryStatus> = {}): ManagedEntryStatus {
   return {
-    intent: { id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: false },
+    intent: { id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: false, persistent: false },
     exists: true,
     managed: true,
     drift: [],

@@ -124,6 +124,7 @@ describe('home-hosted service', () => {
     const status = await service.status()
     expect(status.panel.reachable).toBe(true)
     expect(status.panel.writeVia).toBe('api')
+    // This panel predates the persistence support, so that key is not tracked here.
     expect(status.entries[0]?.drift).toEqual(['autostart', 'onPortConflict', 'stop.killPortHolders'])
 
     const entries = await service.call('entries.apply', {
@@ -132,8 +133,16 @@ describe('home-hosted service', () => {
     }) as Array<{ drift: string[] }>
 
     expect(entries[0]?.drift).toEqual([])
-    // The caller asked for `kill` explicitly, so that is what it keeps.
-    expect(settings.intentFor('dsh')).toEqual({ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true })
+    // The caller asked for `kill` explicitly, so that is what it keeps. The
+    // intent still asks for persistence, but this panel is older than the
+    // support, so the write carries no such key and no drift is reported.
+    expect(settings.intentFor('dsh')).toEqual({
+      id: 'dsh',
+      autostart: true,
+      onPortConflict: 'kill',
+      stopKillPortHolders: true,
+      persistent: true,
+    })
 
     // Only the owned keys were sent, and the person's own fields survived.
     const live = panel.servers[0]!.config
@@ -419,5 +428,32 @@ describe('config compatibility', () => {
       intents: [{ id: 'dsh', autostart: true, onPortConflict: 'reclaim', stopKillPortHolders: false }],
     })
     expect(panel.servers[0]?.config.onPortConflict).toBe('reclaim')
+  })
+})
+
+describe('persistence needs the release that has it', () => {
+  it('keeps the key when the panel is new enough', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, panelVersion: '0.6.3' })
+    panel.servers.push({ id: 'other', status: 'stopped', pid: null, config: { id: 'other', command: 'sleep' } })
+
+    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true }] })
+
+    expect(settings.intentFor('other').persistent).toBe(true)
+    expect(panel.servers[0]?.config.persistent).toBe(true)
+  })
+
+  it('drops the key instead of writing one an older panel cannot parse', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, panelVersion: '0.6.1' })
+    panel.servers.push({ id: 'other', status: 'stopped', pid: null, config: { id: 'other', command: 'sleep' } })
+
+    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true }] })
+
+    expect(settings.intentFor('other').persistent).toBe(true)
+    expect(panel.servers[0]?.config.persistent).toBeUndefined()
+    // Not writing the key is not drift, or every entry would report one here.
+    const reported = (await service.status()).entries.find(entry => entry.intent.id === 'other')
+    expect(reported?.drift).toEqual([])
   })
 })

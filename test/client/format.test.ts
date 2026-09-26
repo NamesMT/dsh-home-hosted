@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AGENT_TOOL_KEYS, BOOT_STATE_KEYS, CLI_SOURCE_KEYS, dash, effectiveCandidates, EMPTY, formatCandidate, formatDrift, humanizeKey, isMutatingTool, shortenPath, TOKEN_KEYS, WRITE_VIA_KEYS } from '../../src/client/format.js'
+import { AGENT_TOOL_DESC_KEYS, AGENT_TOOL_KEYS, BOOT_STATE_KEYS, CLI_SOURCE_KEYS, dash, effectiveCandidates, EMPTY, formatCandidate, formatDrift, humanizeKey, isMutatingTool, shortenPath, TOKEN_KEYS, WRITE_VIA_KEYS } from '../../src/client/format.js'
 import type { CliStatus } from '../../src/shared/contracts.js'
 import { AGENT_TOOL_NAMES, MUTATING_AGENT_TOOLS } from '../../src/shared/contracts.js'
 
@@ -57,7 +57,15 @@ describe('AGENT_TOOL_KEYS', () => {
       expect(AGENT_TOOL_KEYS[name].length).toBeGreaterThan(0)
     }
   })
+
+  it('has a description key for every tool', () => {
+    for (const name of AGENT_TOOL_NAMES) {
+      expect(AGENT_TOOL_DESC_KEYS[name]).toMatch(/^agentToolDesc/)
+    }
+  })
 })
+
+
 
 describe('locale key tables', () => {
   it('covers every write path', () => {

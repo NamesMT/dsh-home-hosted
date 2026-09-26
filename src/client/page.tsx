@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react'
-import type { Envelope, RpcError } from '../shared/contracts.js'
+import { useCallback, useEffect, useState } from 'react'
+import type { Envelope, RpcError, UiStyle } from '../shared/contracts.js'
 import { rpc, rpcSettingsUpdate, useStatus } from './api.js'
 import type { TranslateFn } from './context.js'
 import { IconRefresh } from './icons.js'
@@ -14,7 +14,7 @@ import { diffSettings } from './settings.js'
 import type { Signal } from './status.js'
 import { statusSignals } from './status.js'
 import { CSS } from './styles.js'
-import { Button, ErrorNote, Hint, Link } from './ui.js'
+import { Button, ErrorNote, Hint, Link, Select } from './ui.js'
 
 export interface HomeHostedPageProps {
   /** The registration's injected translator; the framework seat is only a fallback. */
@@ -88,6 +88,19 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
     void run('settings', () => rpcSettingsUpdate(patch))
   }, [data, run])
 
+  // The style flips locally first — the host answers on its own round trip, and
+  // a person should not watch a select sit still while it does.
+  const hostStyle: UiStyle = data?.settings.uiStyle ?? 'detailed'
+  const [uiStyle, setUiStyle] = useState<UiStyle>(hostStyle)
+  useEffect(() => {
+    setUiStyle(hostStyle)
+  }, [hostStyle])
+
+  const chooseStyle = (next: UiStyle): void => {
+    setUiStyle(next)
+    updateSettings(current => ({ ...current, uiStyle: next }))
+  }
+
   if (data === null) {
     return (
       <div className="hh-root">
@@ -109,7 +122,7 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
     )
   }
 
-  const sectionProps: SectionProps = { t, status: data, run, updateSettings, busy }
+  const sectionProps: SectionProps = { t, status: data, run, updateSettings, busy, uiStyle }
 
   return (
     <div className="hh-root">
@@ -117,6 +130,16 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
       <header className="hh-head">
         <h2 className="hh-title">{t('tab')}</h2>
         <span className="hh-head-spacer" />
+        <Select
+          value={uiStyle}
+          label={t('uiStyleLabel')}
+          disabled={busy === 'settings'}
+          options={[
+            { value: 'detailed', label: t('uiStyleDetailed') },
+            { value: 'compact', label: t('uiStyleCompact') },
+          ]}
+          onChange={value => chooseStyle(value as UiStyle)}
+        />
         <Button
           variant="ghost"
           icon={<IconRefresh size={13} />}

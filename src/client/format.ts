@@ -43,6 +43,16 @@ export const AGENT_TOOL_KEYS: Record<AgentToolName, string> = {
   ui_manage: 'agentToolUiManage',
 }
 
+/** Locale key for each agent tool's one-line description (the detailed cards). */
+export const AGENT_TOOL_DESC_KEYS: Record<AgentToolName, string> = {
+  status: 'agentToolDescStatus',
+  servers_list: 'agentToolDescServersList',
+  servers_lifecycle: 'agentToolDescServersLifecycle',
+  servers_edit: 'agentToolDescServersEdit',
+  autostart_manage: 'agentToolDescAutostartManage',
+  ui_manage: 'agentToolDescUiManage',
+}
+
 /** Locale key for a write path. */
 export const WRITE_VIA_KEYS: Record<'api' | 'file' | 'none', string> = {
   api: 'writeViaApi',

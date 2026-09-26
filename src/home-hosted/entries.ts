@@ -22,21 +22,33 @@ export function defaultIntent(id: string, platform: NodeJS.Platform = process.pl
     autostart: true,
     onPortConflict: defaultOnPortConflict(platform),
     stopKillPortHolders: true,
+    persistent: true,
   }
 }
 
-/** The owned keys as a patch, preserving any sibling keys inside `stop`. */
-export function ownedPatch(intent: EntryIntent, live?: ServerEntry | null): ServerEntryPatch {
+/**
+ * The owned keys as a patch, preserving any sibling keys inside `stop`.
+ *
+ * `persistent` is omitted unless the panel that would parse the write knows the
+ * key: an older schema drops it and warns, so writing one is noise at best.
+ */
+export function ownedPatch(intent: EntryIntent, live?: ServerEntry | null, options: { persistent?: boolean } = {}): ServerEntryPatch {
   const stop = (live?.stop ?? {}) as Record<string, unknown>
   return {
     autostart: intent.autostart,
     onPortConflict: intent.onPortConflict,
+    ...(options.persistent === false ? {} : { persistent: intent.persistent }),
     stop: { ...stop, killPortHolders: intent.stopKillPortHolders },
   }
 }
 
-/** Owned keys whose live value differs from the intent. */
-export function ownedDrift(live: ServerEntry | null, intent: EntryIntent): string[] {
+/**
+ * Owned keys whose live value differs from the intent.
+ *
+ * The intent keeps what the person asked for; a key the panel cannot parse is
+ * not drift, or every entry would report one on an older panel.
+ */
+export function ownedDrift(live: ServerEntry | null, intent: EntryIntent, options: { persistent?: boolean } = {}): string[] {
   if (live === null)
     return ['missing entry']
   const drift: string[] = []
@@ -44,6 +56,8 @@ export function ownedDrift(live: ServerEntry | null, intent: EntryIntent): strin
     drift.push('autostart')
   if (live.onPortConflict !== intent.onPortConflict)
     drift.push('onPortConflict')
+  if (options.persistent !== false && (live.persistent ?? false) !== intent.persistent)
+    drift.push('persistent')
   const killPortHolders = (live.stop as Record<string, unknown> | undefined)?.killPortHolders
   if (killPortHolders !== intent.stopKillPortHolders)
     drift.push('stop.killPortHolders')
@@ -64,6 +78,7 @@ export function snapshotOwned(live: ServerEntry): ServerEntry {
     id: live.id,
     autostart: typeof live.autostart === 'boolean' ? live.autostart : false,
     onPortConflict: isOnPortConflict(live.onPortConflict) ? live.onPortConflict : 'block',
+    persistent: live.persistent === true,
     stop: { killPortHolders: typeof killPortHolders === 'boolean' ? killPortHolders : false },
   }
 }
@@ -79,6 +94,7 @@ export function restorePatch(live: ServerEntry, snapshot: ServerEntry | null): S
   return {
     autostart: snapshot?.autostart ?? false,
     onPortConflict: snapshot?.onPortConflict ?? 'block',
+    persistent: snapshot?.persistent === true,
     stop: {
       ...stop,
       killPortHolders: typeof previous.killPortHolders === 'boolean' ? previous.killPortHolders : false,

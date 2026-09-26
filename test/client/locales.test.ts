@@ -92,8 +92,8 @@ describe('resolveTranslator', () => {
   })
 
   it('interpolates the fallback', () => {
-    expect(resolveTranslator(key => key)('panelReplace', { version: '0.6.2' }))
-      .toBe('Replace with 0.6.2')
+    expect(resolveTranslator(key => key)('panelReplace', { copy: 'global install' }))
+      .toBe('Replace with global install')
   })
 })
 

@@ -20,7 +20,7 @@ import { buildDshEntry, detectProfile, resolveDshLaunch } from './home-hosted/ds
 import { defaultIntent, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
 import { buildHomeHostedBootSpec, homeHostedEnv } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
-import { compareVersions, EXPECTED_RANGE, MIN_KILL_VERSION, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
+import { compareVersions, EXPECTED_RANGE, MIN_KILL_VERSION, MIN_PERSISTENT_VERSION, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
 import { installGlobal, spawnTakeover, startPanel as startPanelProcess } from './home-hosted/panel-control.js'
@@ -184,6 +184,14 @@ export class HomeHostedService extends Service {
   // Panel
   // -------------------------------------------------------------------------
 
+  /** The panel page showing this session's log, where its tokenised URL is. */
+  panelLogUrl(): string | null {
+    const url = this.runtime()?.url
+    if (url === undefined || url.length === 0)
+      return null
+    return `${url.replace(/\/+$/, '')}/logs?server=${encodeURIComponent(this.options.defaultEntryId)}`
+  }
+
   /** The port the panel's config holds, without touching a running panel. */
   private configuredPort(): number | null {
     const control = readConfig(this.options.home).raw?.control as { port?: unknown } | undefined
@@ -323,7 +331,7 @@ export class HomeHostedService extends Service {
       this.saveSnapshots(snapshots)
     }
 
-    const patch = ownedPatch(intent, live?.config ?? null)
+    const patch = ownedPatch(intent, live?.config ?? null, { persistent: await this.supportsPersistent() })
     const client = await this.tryClient()
     if (client !== null) {
       if (live !== null) {
@@ -386,6 +394,12 @@ export class HomeHostedService extends Service {
     return resolution.status.version
   }
 
+  /** Whether the panel whose schema parses our write knows `persistent`. */
+  private async supportsPersistent(): Promise<boolean> {
+    const version = await this.configVersion()
+    return version !== null && compareVersions(version, MIN_PERSISTENT_VERSION) >= 0
+  }
+
   private async assertPolicySupported(intent: EntryIntent): Promise<void> {
     if (intent.onPortConflict !== 'kill')
       return
@@ -417,6 +431,7 @@ export class HomeHostedService extends Service {
         autostart: raw.autostart === true,
         onPortConflict: isOnPortConflict(requested) ? requested : fallback.onPortConflict,
         stopKillPortHolders: raw.stopKillPortHolders ?? fallback.stopKillPortHolders,
+        persistent: raw.persistent ?? fallback.persistent,
       }
       await this.assertPolicySupported(intent)
       await this.writeOwned(intent)
@@ -575,6 +590,7 @@ export class HomeHostedService extends Service {
     const settings = this.options.settings.get()
     const live = await this.liveEntries()
     const snapshots = this.snapshots()
+    const persistent = await this.supportsPersistent()
     const ids = new Set<string>([this.options.defaultEntryId, ...settings.entries.map(entry => entry.id)])
     return [...ids].map((id) => {
       const intent = this.options.settings.intentFor(id)
@@ -583,7 +599,7 @@ export class HomeHostedService extends Service {
         intent,
         exists: entry !== null,
         managed: snapshots[id] !== undefined,
-        drift: entry === null ? ['missing entry'] : ownedDrift(entry.config, intent),
+        drift: entry === null ? ['missing entry'] : ownedDrift(entry.config, intent, { persistent }),
         live: entry?.view ?? null,
         snapshot: snapshots[id] ?? null,
       }

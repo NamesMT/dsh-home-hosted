@@ -597,6 +597,87 @@ export const CSS = `
   gap: 7px 16px;
 }
 
+/* -- tool cards (detailed style) ---------------------------------------- */
+
+.hh-tool-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.hh-tool-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--hh-line);
+  border-radius: var(--hh-radius);
+  cursor: pointer;
+  transition: background var(--hh-tap), border-color var(--hh-tap);
+}
+
+.hh-tool-card:hover { background: var(--hh-hover); }
+.hh-tool-card:has(input:disabled) { opacity: 0.5; cursor: default; }
+.hh-tool-card:has(input:disabled):hover { background: transparent; }
+.hh-tool-card:has(input:focus-visible) {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.hh-tool-card input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--dsw-alias-brand-primary, #1f2429);
+  cursor: inherit;
+}
+
+.hh-tool-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hh-tool-card-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hh-tool-card-name { font-weight: 500; }
+.hh-tool-card-desc {
+  color: var(--hh-dim);
+  font-size: var(--hh-fs-sm);
+  line-height: var(--hh-lh-sm);
+}
+
+/* -- server cards (detailed style) -------------------------------------- */
+
+.hh-cards { display: flex; flex-direction: column; gap: 8px; }
+
+.hh-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--hh-line);
+  border-radius: var(--hh-radius);
+}
+
+.hh-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+
+/* A card is already the affordance, so its actions never hide on hover. */
+.hh-card .hh-item-actions { opacity: 1; }
+
+.hh-card-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 3px 18px;
+}
+
+/* A card's label column carries two-word labels ("On port conflict") without
+   folding them onto a second line. */
+.hh-card-facts .hh-spec { grid-template-columns: minmax(104px, auto) minmax(0, 1fr); }
+
+.hh-nowrap {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* -- select ------------------------------------------------------------- */
 
 .hh-select {
@@ -678,5 +759,7 @@ export const CSS = `
   .hh-signal-meta { max-width: 100%; margin-left: 17px; padding-left: 0; }
   .hh-spec { grid-template-columns: minmax(0, 1fr); }
   .hh-tools { grid-template-columns: minmax(0, 1fr); }
+  .hh-tool-cards { grid-template-columns: minmax(0, 1fr); }
+  .hh-card-facts { grid-template-columns: minmax(0, 1fr); }
 }
 `

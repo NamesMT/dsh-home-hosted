@@ -71,10 +71,21 @@ export function Link({ href, children }: { href: string, children?: ReactNode })
   )
 }
 
-/** Collapsed facts. Nothing is dropped from the page, only folded. */
-export function Details({ label, children }: { label: string, children: ReactNode }) {
+/**
+ * Collapsed facts. Nothing is dropped from the page, only folded.
+ *
+ * `open` is a *default*, not a control: React only touches the attribute when
+ * the prop changes between renders, so a person's manual toggle survives the
+ * page's polling re-render, while switching the page style still folds and
+ * unfolds every disclosure at once.
+ */
+export function Details({ label, open = false, children }: {
+  label: string
+  open?: boolean
+  children: ReactNode
+}) {
   return (
-    <details className="hh-details">
+    <details className="hh-details" open={open || undefined}>
       <summary className="hh-summary">
         <span className="hh-chevron" aria-hidden="true"><IconChevron size={12} /></span>
         {label}

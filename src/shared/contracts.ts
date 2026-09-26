@@ -49,6 +49,8 @@ export interface SettingsPatch {
   manageDsh?: boolean
   entries?: PluginSettings['entries']
   panel?: Partial<PluginSettings['panel']>
+  authNotice?: boolean
+  uiStyle?: UiStyle
   agentTools?: Partial<PluginSettings['agentTools']>
   cli?: Partial<PluginSettings['cli']>
 }
@@ -127,6 +129,11 @@ export type ServerEntryPatch = Partial<ServerEntry>
 /** What the plugin decides about one entry, and the keys it therefore owns. */
 export interface EntryIntent {
   id: string
+  /**
+   * Run under home-hosted's nanny, so stopping or restarting the *panel* leaves
+   * this process alive. Needs home-hosted 0.6.3.
+   */
+  persistent: boolean
   autostart: boolean
   onPortConflict: OnPortConflict
   stopKillPortHolders: boolean
@@ -305,6 +312,8 @@ export const MUTATING_AGENT_TOOLS: readonly AgentToolName[] = [
 /** The shape this release writes; a file without it was written by 0.1.x. */
 export const SETTINGS_VERSION = 2
 
+export type UiStyle = 'detailed' | 'compact'
+
 export interface PluginSettings {
   version: number
   autostart: {
@@ -325,6 +334,10 @@ export interface PluginSettings {
   panel: {
     port: number | null
   }
+  /** Point dsh web's sign-in page at the panel log that holds the tokenised URL. */
+  authNotice: boolean
+  /** `detailed` shows cards and open disclosures; `compact` folds both away. */
+  uiStyle: UiStyle
   cli: {
     /** `pinned` runs the copy this plugin ships; `global` runs the one on PATH. */
     prefer: 'pinned' | 'global'
@@ -350,6 +363,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   // Every tool on by default; the session's own permission mode is what gates them.
   agentTools: { enabled: true, allow: [...AGENT_TOOL_NAMES] },
   panel: { port: null },
+  authNotice: true,
+  uiStyle: 'detailed',
   cli: { prefer: 'pinned' },
 }
 

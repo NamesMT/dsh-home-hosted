@@ -81,6 +81,14 @@ describe('Details', () => {
     expect(elementOf(summary).type).toBe('summary')
     expect(elementOf(body).props.children).toBe('x')
   })
+
+  it('carries the detailed style\'s default-open as the `open` attribute', () => {
+    expect(elementOf(Details({ label: 'Details', open: true, children: 'x' })).props.open).toBe(true)
+    // `false` must mean "absent", not the attribute `open="false"`: React only
+    // touches props that changed, so a manual toggle survives the re-renders
+    // the page's poll causes.
+    expect(elementOf(Details({ label: 'Details', open: false, children: 'x' })).props.open).toBeUndefined()
+  })
 })
 
 describe('Switch', () => {

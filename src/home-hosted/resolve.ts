@@ -19,13 +19,15 @@ import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
 
 /** The range the plugin ships and is tested against. */
-export const EXPECTED_RANGE = '^0.6.1'
+export const EXPECTED_RANGE = '^0.6.4'
 
 /** Oldest release whose API and config schema this plugin relies on. */
 export const MIN_SUPPORTED_VERSION = '0.4.1'
 
 /** Oldest release whose config schema accepts `onPortConflict: kill`. */
 export const MIN_KILL_VERSION = '0.6.0'
+/** `persistent` (the nanny that keeps an entry alive across panel restarts). */
+export const MIN_PERSISTENT_VERSION = '0.6.3'
 
 export type CliPreference = 'pinned' | 'global'
 
