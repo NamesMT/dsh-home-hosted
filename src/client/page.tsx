@@ -2,22 +2,51 @@ import { useCallback, useState } from 'react'
 import type { Envelope, RpcError } from '../shared/contracts.js'
 import { rpc, rpcSettingsUpdate, useStatus } from './api.js'
 import type { TranslateFn } from './context.js'
+import { IconRefresh } from './icons.js'
 import { resolveTranslator } from './locales.js'
 import type { Runner, SectionProps, SettingsUpdater } from './props.js'
 import { AgentsSection } from './section-agents.js'
 import { BootSection } from './section-boot.js'
 import { EntriesSection } from './section-entries.js'
 import { PanelSection } from './section-panel.js'
-import { OptionsSection } from './section-options.js'
 import { ServersSection } from './section-servers.js'
 import { diffSettings } from './settings.js'
-import { Button, ErrorNote, Hint } from './ui.js'
+import type { Signal } from './status.js'
+import { statusSignals } from './status.js'
+import { CSS } from './styles.js'
+import { Button, ErrorNote, Hint, Link } from './ui.js'
 
 export interface HomeHostedPageProps {
   /** The registration's injected translator; the framework seat is only a fallback. */
   t?: TranslateFn
   /** Settings shell's close affordance. */
   close?: () => void
+}
+
+/** One line of the readout: a state dot, its group, its state, its machine detail. */
+function SignalRow({ signal }: { signal: Signal }) {
+  return (
+    <div className="hh-signal" data-tone={signal.tone}>
+      <span className="hh-signal-dot" aria-hidden="true" />
+      <span className="hh-signal-name">{signal.name}</span>
+      <span className="hh-signal-state">{signal.state}</span>
+      {signal.meta.length === 0 && signal.href === null
+        ? null
+        : (
+            <span className="hh-signal-meta">
+              {signal.meta}
+              {signal.href === null
+                ? null
+                : (
+                    <>
+                      {signal.meta.length === 0 ? null : ' · '}
+                      <Link href={signal.href}>{signal.href}</Link>
+                    </>
+                  )}
+            </span>
+          )}
+    </div>
+  )
 }
 
 export function HomeHostedPage(props: HomeHostedPageProps) {
@@ -61,11 +90,21 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
 
   if (data === null) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="hh-root">
+        <style>{CSS}</style>
         {loading
           ? <Hint>{t('loading')}</Hint>
-          : <ErrorNote error={error ?? { code: 'status', message: t('statusUnavailable') }} title={t('errorTitle')} />}
-        {loading ? null : <div><Button onClick={() => { void refresh() }}>{t('retry')}</Button></div>}
+          : (
+              <>
+                <ErrorNote
+                  error={error ?? { code: 'status', message: t('statusUnavailable') }}
+                  title={t('errorTitle')}
+                />
+                <div className="hh-btn-row">
+                  <Button onClick={() => { void refresh() }}>{t('retry')}</Button>
+                </div>
+              </>
+            )}
       </div>
     )
   }
@@ -73,28 +112,29 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
   const sectionProps: SectionProps = { t, status: data, run, updateSettings, busy }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 16 }}>{t('tab')}</h2>
-          <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--dsw-alias-label-secondary, #8b8b8b)' }}>
-            {t('pageDesc')}
-          </p>
-        </div>
+    <div className="hh-root">
+      <style>{CSS}</style>
+      <header className="hh-head">
+        <h2 className="hh-title">{t('tab')}</h2>
+        <span className="hh-head-spacer" />
         <Button
+          variant="ghost"
+          icon={<IconRefresh size={13} />}
           busy={busy === 'status.refresh'}
-          onClick={() => run('status.refresh', () => rpc('status', { refresh: true }))}
+          onClick={() => { void run('status.refresh', () => rpc('status', { refresh: true })) }}
         >
           {t('refresh')}
         </Button>
       </header>
+      <div className="hh-signals" data-busy={busy !== null}>
+        {statusSignals(data, t).map(signal => <SignalRow key={signal.key} signal={signal} />)}
+      </div>
       {data.lastError === null
         ? null
         : <ErrorNote error={{ code: 'panel', message: data.lastError }} title={t('errorTitle')} />}
       <ErrorNote error={error} title={t('errorTitle')} />
       <ErrorNote error={actionError} title={t('errorTitle')} />
       <PanelSection {...sectionProps} />
-      <OptionsSection {...sectionProps} />
       <BootSection {...sectionProps} />
       <EntriesSection {...sectionProps} />
       <AgentsSection {...sectionProps} />

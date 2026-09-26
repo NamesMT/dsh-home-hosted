@@ -31,6 +31,22 @@ node_modules (flat or pnpm), then PATH — and forwards its argv, so the entry
 survives plugin upgrades and profile reinstalls. The plugin preflights the
 launcher the way the unit invokes it and shows the version it answers.
 
+## Agent tools are merged and on by default
+
+Six tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit`
+carries create/update/delete, `autostart_manage` carries install/uninstall, and
+`ui_manage` drives the panel's own UI (`ui-update` / `ui-revert` / `ui-switch`).
+They are registered on by default; what gates a mutating call is the session's
+own permission mode, not a plugin-level default.
+
+## The dsh entry is the only entry the page manages
+
+The page shows one toggle: manage `dsh` as a home-hosted entry, or not. Adding
+one sends a minimal intent (`{ id: 'dsh', autostart: true }`) and the host fills
+the rest from the platform default policy; removing one restores an entry this
+plugin merely adopted, and deletes one it created. Removing an entry the panel
+supervises stops that process — which may be the session asking for it.
+
 ## Approvals follow the session's sandbox
 
 A mutating agent tool asks the approval service only when the calling session is

@@ -45,7 +45,29 @@ describe('owned entry keys', () => {
     expect(unrestore).toEqual({ autostart: false, onPortConflict: 'block', stop: { killPortHolders: false } })
   })
 
-  it('defaults to kill plus killPortHolders, the two that make a reclaim reliable', () => {
-    expect(defaultIntent('dsh')).toEqual({ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true })
+  it('records an adopted entry that inherited every owned key, so removal cannot delete it', () => {
+    // The person's own entry, with autostart/onPortConflict/stop left to the
+    // panel's defaults. Absence is recorded as that default, because `{ id }`
+    // alone is already the marker for an entry this plugin created itself.
+    expect(snapshotOwned({ id: 'dsh', command: 'dsh' })).toEqual({
+      id: 'dsh',
+      autostart: false,
+      onPortConflict: 'block',
+      stop: { killPortHolders: false },
+    })
+  })
+
+  it('defaults to the platform policy plus killPortHolders', () => {
+    // POSIX can prove a detached restart is its own successor, so it follows;
+    // Windows cannot, so it kills.
+    expect(defaultIntent('dsh')).toEqual({
+      id: 'dsh',
+      autostart: true,
+      onPortConflict: process.platform === 'win32' ? 'kill' : 'follow',
+      stopKillPortHolders: true,
+    })
+    expect(defaultIntent('dsh', 'win32').onPortConflict).toBe('kill')
+    expect(defaultIntent('dsh', 'darwin').onPortConflict).toBe('follow')
+    expect(defaultIntent('dsh', 'linux').onPortConflict).toBe('follow')
   })
 })

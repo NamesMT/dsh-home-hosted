@@ -9,12 +9,14 @@ import type {
   EndpointPayloads,
   Envelope,
   HomeHostedStatus,
+  ManagedEntryStatus,
   PanelControlResult,
   RpcEndpoint,
   RpcError,
   RpcRequest,
   ServerEntryView,
   SettingsPatch,
+  UiResult,
 } from '../shared/contracts.js'
 import { RPC_PATH, RPC_VERSION } from '../shared/contracts.js'
 
@@ -37,11 +39,14 @@ export interface BootControlResult {
 export interface EndpointResults {
   'status': HomeHostedStatus
   'servers.list': ServerEntryView[]
+  'entries.apply': ManagedEntryStatus[]
+  'entries.remove': ManagedEntryStatus[]
   'panel.start': PanelControlResult
   'panel.takeover': PanelControlResult
   'cli.installGlobal': CliInstallResult
   'boot.install': BootControlResult
   'boot.uninstall': BootControlResult
+  'ui.manage': UiResult
 }
 
 export type RpcValue<E extends RpcEndpoint> = E extends keyof EndpointResults

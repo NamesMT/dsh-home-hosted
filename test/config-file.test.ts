@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { findEntry, patchEntry, readConfig, removeEntry, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
@@ -76,5 +77,26 @@ describe('config file fallback', () => {
     const written = readConfig(dir).raw!
     expect(written.meta).toEqual({ writtenBy: '0.6.1', schema: 1 })
     expect(path.basename(configFile(dir))).toBe('servers.config.json')
+  })
+})
+
+describe('meta stamp', () => {
+  it('records the writer without inventing a schema', () => {
+    const home = tempDir().path
+    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ servers: [] }), 'utf8')
+    const read = readConfig(home)
+    writeConfig(home, upsertEntry(read.raw ?? {}, { id: 'x', command: 'sleep' }))
+    const written = JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8'))
+    // An absent schema reads as the panel's current one; inventing `1` here
+    // would become wrong the day the panel bumps its schema.
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted' })
+  })
+
+  it('keeps the schema a file already declared', () => {
+    const home = tempDir().path
+    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ meta: { writtenBy: 'home-hosted', schema: 7 }, servers: [] }), 'utf8')
+    writeConfig(home, upsertEntry(readConfig(home).raw ?? {}, { id: 'x', command: 'sleep' }))
+    const written = JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8'))
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 7 })
   })
 })

@@ -33,6 +33,16 @@ export function isMutatingTool(name: AgentToolName): boolean {
   return MUTATING_AGENT_TOOLS.includes(name)
 }
 
+/** Locale key for each agent tool's display label. */
+export const AGENT_TOOL_KEYS: Record<AgentToolName, string> = {
+  status: 'agentToolStatus',
+  servers_list: 'agentToolServersList',
+  servers_lifecycle: 'agentToolServersLifecycle',
+  servers_edit: 'agentToolServersEdit',
+  autostart_manage: 'agentToolAutostartManage',
+  ui_manage: 'agentToolUiManage',
+}
+
 /** Locale key for a write path. */
 export const WRITE_VIA_KEYS: Record<'api' | 'file' | 'none', string> = {
   api: 'writeViaApi',
@@ -69,6 +79,25 @@ export const CLI_SOURCE_KEYS: Record<CliSource, string> = {
 export function formatCandidate(candidate: CliCandidate | null | undefined): string {
   if (candidate === null || candidate === undefined) return EMPTY
   return `${dash(candidate.version)} · ${dash(candidate.path)}`
+}
+
+/**
+ * A path too long for its column, shortened from the middle: the first two
+ * segments say where it lives, the last two name the file. A resolved pnpm path
+ * is ~140 characters of hashes, and an ellipsis at the end of one leaves the
+ * reader with nothing; the whole path stays in the row's title.
+ */
+export function shortenPath(full: string, max = 52): string {
+  if (full.length <= max) return full
+  const separator = full.includes('\\') ? '\\' : '/'
+  const segments = full.split(/[\\/]/).filter(part => part.length > 0)
+  if (segments.length < 4) return full
+  // A drive letter is a segment, but it is not a place.
+  const head = /^[A-Za-z]:$/.test(segments[0] ?? '') ? 3 : 2
+  if (segments.length <= head) return full
+  const root = /^[\\/]/.test(full) ? separator : ''
+  const short = `${root}${segments.slice(0, head).join(separator)}${separator}…${separator}${segments.slice(-2).join(separator)}`
+  return short.length < full.length ? short : full
 }
 
 /**

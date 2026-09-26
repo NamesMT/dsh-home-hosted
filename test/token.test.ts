@@ -82,6 +82,28 @@ describe('panel API token', () => {
     expect(apiTokenEnrolled(home)).toBe(true)
   })
 
+  it('mints one token when two calls race, so neither can invalidate the other', async () => {
+    const { home, state } = dirs()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const minted: string[] = []
+    const exec = async (_args: string[], env: Record<string, string | undefined>): Promise<RunResult> => {
+      minted.push(env.HHOSTED_TOKEN ?? '')
+      await gate
+      writeJsonFile(secretsFile(home), { version: 2, apiToken: { hint: 'abcd', hash: 'x' } })
+      return ok()
+    }
+
+    const first = ensureToken({ home, stateDir: state, exec })
+    const second = ensureToken({ home, stateDir: state, exec })
+    release()
+    const [a, b] = await Promise.all([first, second])
+
+    expect(minted).toHaveLength(1)
+    expect(a.token).toBe(b.token)
+    expect(readStoredToken(state)).toBe(a.token)
+  })
+
   it('reports a failing CLI instead of pretending it worked', async () => {
     const { home, state } = dirs()
     const result = await ensureToken({

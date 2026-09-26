@@ -3,7 +3,7 @@
  * *not* an RPC error: it answers a successful envelope whose payload carries
  * `result.ok === false`, so the UI has to look inside the value.
  */
-import type { BootAttempt } from '../shared/contracts.js'
+import type { BootAttempt, BootCandidate, BootMechanism, BootState } from '../shared/contracts.js'
 
 export interface BootFailure {
   detail: string
@@ -41,4 +41,42 @@ export function bootAttemptView(attempt: BootAttempt | undefined): BootAttemptVi
     detail: typeof attempt.detail === 'string' ? attempt.detail : '',
     commands: stringList(attempt.commands),
   }
+}
+
+/** Boot states in which a boot entry exists, whatever it is doing right now. */
+const INSTALLED_STATES: readonly BootState[] = ['enabled-running', 'enabled-failing', 'installed-disabled']
+
+/**
+ * Dropdown choices: `auto`, then every available mechanism. The `unsupported`
+ * placeholder is hidden unless it is the only thing this platform offers. The
+ * currently selected value always stays selectable.
+ */
+export function bootMechanisms(
+  candidates: readonly BootCandidate[],
+  selected: 'auto' | BootMechanism,
+): Array<'auto' | BootMechanism> {
+  const available = candidates.filter(candidate => candidate.available).map(candidate => candidate.mechanism)
+  const supported = available.filter(mechanism => mechanism !== 'unsupported')
+  const mechanisms: Array<'auto' | BootMechanism> = ['auto', ...(supported.length > 0 ? supported : available)]
+  if (!mechanisms.includes(selected)) mechanisms.push(selected)
+  return mechanisms
+}
+
+/** The installed mechanism differs from the selected one: the action is a switch. */
+export function isSwitchingMechanism(
+  installed: BootMechanism | null,
+  selected: 'auto' | BootMechanism,
+): boolean {
+  return installed !== null && installed !== selected
+}
+
+/**
+ * A persisted failure the live state contradicts is history, not news: a
+ * failed install once a boot entry exists, or a failed uninstall once none
+ * does.
+ */
+export function isStaleAttempt(view: BootAttemptView | null, state: BootState): boolean {
+  if (view === null || view.ok) return false
+  if (view.action === 'install') return INSTALLED_STATES.includes(state)
+  return state === 'not-installed'
 }

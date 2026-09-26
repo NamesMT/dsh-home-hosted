@@ -8,6 +8,7 @@
  * so the replacement is done by a detached helper that outlives this process.
  */
 import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -128,13 +129,29 @@ export function writeTakeoverHelper(deps: PanelControlDeps, oldPid: number | nul
   return file
 }
 
+/** Spawn a helper process; injected so a test can drive the failure paths. */
+export type SpawnDetached = (program: string, args: string[]) => ChildProcess
+
+function spawnDetached(program: string, args: string[]): ChildProcess {
+  return spawn(program, args, { detached: true, stdio: 'ignore' })
+}
+
 /**
  * Spawn the helper detached and return immediately: the old panel's shutdown is
  * about to stop this very process, so waiting for the result would lose it.
  */
-export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null): PanelControlResult {
+export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, spawnChild: SpawnDetached = spawnDetached): PanelControlResult {
   const helper = writeTakeoverHelper(deps, oldPid)
-  const child = spawn(process.execPath, [helper], { detached: true, stdio: 'ignore' })
+  let child: ChildProcess
+  try {
+    child = spawnChild(process.execPath, [helper])
+  }
+  catch (error) {
+    return { ok: false, detail: `could not start the panel-replacement helper: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  // A detached child reports a failed start asynchronously; an unhandled 'error'
+  // event is thrown, and that would end this process instead of the helper's.
+  child.on('error', () => {})
   child.unref()
   return {
     ok: true,

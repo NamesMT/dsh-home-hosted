@@ -1,52 +1,12 @@
 import { useState } from 'react'
-import type { CSSProperties } from 'react'
 import type { BootMechanism, Envelope } from '../shared/contracts.js'
-import { rpc, rpcSettingsUpdate } from './api.js'
+import { rpc } from './api.js'
 import type { BootAttemptView } from './boot.js'
-import { bootAttemptView, bootRefusal } from './boot.js'
-import { copyText } from './clipboard.js'
+import { bootAttemptView, bootMechanisms, bootRefusal, isStaleAttempt, isSwitchingMechanism } from './boot.js'
 import { BOOT_STATE_KEYS, dash } from './format.js'
+import { IconPower } from './icons.js'
 import type { SectionProps } from './props.js'
-import { diffSettings } from './settings.js'
-import { Button, FailureNote, Hint, Row, Section, Select, Toggle } from './ui.js'
-
-const commandsBox: CSSProperties = {
-  width: '100%',
-  minHeight: 60,
-  marginTop: 6,
-  padding: 8,
-  borderRadius: 6,
-  border: '1px solid var(--dsw-alias-border-secondary, rgba(128, 128, 128, 0.25))',
-  background: 'transparent',
-  color: 'inherit',
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  fontSize: 12,
-  resize: 'vertical',
-}
-
-/** Read-only command box with its own copy button. */
-function CommandBox({ text, copyLabel, copiedLabel }: {
-  text: string
-  copyLabel: string
-  copiedLabel: string
-}) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <div>
-      <textarea
-        readOnly
-        value={text}
-        rows={Math.min(text.split('\n').length, 6)}
-        style={commandsBox}
-      />
-      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-        <Button onClick={() => { void copyText(text).then(setCopied) }}>
-          {copied ? copiedLabel : copyLabel}
-        </Button>
-      </div>
-    </div>
-  )
-}
+import { Button, Code, CommandBox, Details, FailureNote, Hint, Note, Section, Select, Spec } from './ui.js'
 
 interface FreshFailure extends BootAttemptView {
   ok: false
@@ -59,38 +19,24 @@ export function BootSection({ t, status, run, updateSettings, busy }: SectionPro
   const commands = boot.commands ?? []
   const [freshFailure, setFreshFailure] = useState<FreshFailure | null>(null)
   const installing = busy === 'boot.install' || busy === 'boot.uninstall'
-  const running = busy === 'settings' || installing
 
-  const mechanisms: Array<'auto' | BootMechanism> = [
-    'auto',
-    ...candidates.filter(candidate => candidate.available).map(candidate => candidate.mechanism),
-  ]
-  if (!mechanisms.includes(autostart.mechanism)) mechanisms.push(autostart.mechanism)
+  // `unsupported` is only worth offering when it is the only thing on this platform.
+  const mechanisms = bootMechanisms(candidates, autostart.mechanism)
   const mechanismOptions = mechanisms.map(mechanism => ({
     value: mechanism,
     label: mechanism === 'auto' ? t('bootMechanismAuto') : mechanism,
   }))
 
+  const switching = isSwitchingMechanism(boot.mechanism, autostart.mechanism)
+  const installed = boot.mechanism !== null
+
   const actionLabel = (action: 'install' | 'uninstall'): string =>
     t(action === 'install' ? 'bootActionInstall' : 'bootActionUninstall')
 
-  const toggle = async (enabled: boolean): Promise<void> => {
-    const action = enabled ? 'install' : 'uninstall'
-    // Persist the intent first so the toggle answers immediately; the host
-    // leaves `enabled` alone when the action itself is refused.
-    const patch = diffSettings(status.settings, {
-      ...status.settings,
-      autostart: { ...autostart, enabled },
-    })
-    const envelope = await run(`boot.${action}`, async (): Promise<Envelope<unknown>> => {
-      if (Object.keys(patch).length > 0) {
-        const intent = await rpcSettingsUpdate(patch)
-        if (!intent.ok) return intent
-      }
-      return enabled
-        ? rpc('boot.install', autostart.mechanism === 'auto' ? {} : { mechanism: autostart.mechanism })
-        : rpc('boot.uninstall', {})
-    })
+  const attempt = async (action: 'install' | 'uninstall'): Promise<void> => {
+    const envelope = await run(`boot.${action}`, async (): Promise<Envelope<unknown>> => action === 'install'
+      ? rpc('boot.install', autostart.mechanism === 'auto' ? {} : { mechanism: autostart.mechanism })
+      : rpc('boot.uninstall', {}))
     if (!envelope.ok) {
       setFreshFailure(null)
       return
@@ -99,56 +45,74 @@ export function BootSection({ t, status, run, updateSettings, busy }: SectionPro
     setFreshFailure(refusal === null ? null : { ok: false, action, detail: refusal.detail, commands: refusal.commands })
   }
 
+  // A persisted failure the live state contradicts is history, not news.
   const persisted = bootAttemptView(autostart.lastAttempt)
-  const shown: BootAttemptView | null = freshFailure ?? persisted
+  const stale = isStaleAttempt(persisted, boot.state)
+  const shown: BootAttemptView | null = freshFailure ?? (stale ? null : persisted)
 
   return (
-    <Section title={t('bootTitle')} description={t('bootDesc')}>
-      <Toggle
-        label={t('bootEnabled')}
-        checked={autostart.enabled}
-        disabled={installing}
-        onChange={enabled => { void toggle(enabled) }}
-      />
-      <Row label={t('bootMechanism')}>
+    <Section
+      icon={<IconPower />}
+      title={t('bootTitle')}
+      action={(
         <Select
           value={autostart.mechanism}
           options={mechanismOptions}
-          disabled={running}
+          label={t('bootMechanism')}
+          disabled={busy === 'settings' || installing}
           onChange={mechanism => updateSettings(current => ({
             ...current,
             autostart: { ...current.autostart, mechanism: mechanism as 'auto' | BootMechanism },
           }))}
         />
-      </Row>
-      <Row label={t('bootState')}>{t(BOOT_STATE_KEYS[boot.state] ?? 'bootStateUnsupported')}</Row>
-      <Row label={t('bootBootCapable')}>{boot.bootCapable ? t('yes') : t('no')}</Row>
-      <Row label={t('bootPrivileged')}>{boot.privileged ? t('yes') : t('no')}</Row>
-      <Row label={t('bootUnitPath')}>{dash(boot.unitPath)}</Row>
-      {boot.bootCapable || boot.state === 'unsupported' ? null : <Hint>{t('bootLoginScope')}</Hint>}
-      <Hint>{boot.detail}</Hint>
+      )}
+    >
+      <div className="hh-btn-row">
+        <Button
+          variant={installed ? 'default' : 'primary'}
+          disabled={autostart.mechanism === 'unsupported'}
+          busy={busy === 'boot.install'}
+          onClick={() => { void attempt('install') }}
+        >
+          {switching ? t('bootSwitchMode') : t('bootEnabled')}
+        </Button>
+        <Button
+          disabled={!installed}
+          busy={busy === 'boot.uninstall'}
+          onClick={() => { void attempt('uninstall') }}
+        >
+          {t('bootUninstall')}
+        </Button>
+        <Button
+          variant="ghost"
+          busy={busy === 'boot.verify'}
+          onClick={() => { void run('boot.verify', () => rpc('boot.verify', {})) }}
+        >
+          {t('bootRecheck')}
+        </Button>
+      </div>
 
       {autostart.enabled && boot.state === 'not-installed'
-        ? <Hint>{t('bootRequestedNotInstalled')}</Hint>
+        ? <Note tone="warn">{t('bootRequestedNotInstalled')}</Note>
         : null}
 
       {shown !== null && !shown.ok
         ? (
-            <div>
+            <div className="hh-section-body">
               <FailureNote
                 title={t('bootAttemptFailed', { action: actionLabel(shown.action) })}
                 detail={shown.detail.length > 0 ? shown.detail : t('bootAttemptNoDetail')}
               />
               {shown.commands.length > 0
                 ? (
-                    <div>
+                    <>
                       <Hint>{t('bootAttemptCommands')}</Hint>
                       <CommandBox
                         text={shown.commands.join('\n')}
                         copyLabel={t('copy')}
                         copiedLabel={t('copied')}
                       />
-                    </div>
+                    </>
                   )
                 : null}
             </div>
@@ -161,17 +125,20 @@ export function BootSection({ t, status, run, updateSettings, busy }: SectionPro
 
       {commands.length > 0
         ? (
-            <div>
+            <Details label={t('bootCommandsLabel')}>
               <Hint>{t('bootCommandsExplain')}</Hint>
               <CommandBox text={commands.join('\n')} copyLabel={t('copy')} copiedLabel={t('copied')} />
-            </div>
+            </Details>
           )
         : null}
-      <div>
-        <Button busy={busy === 'boot.verify'} onClick={() => run('boot.verify', () => rpc('boot.verify', {}))}>
-          {t('bootRecheck')}
-        </Button>
-      </div>
+
+      <Details label={t('details')}>
+        <Spec label={t('bootState')}>{t(BOOT_STATE_KEYS[boot.state] ?? 'bootStateUnsupported')}</Spec>
+        <Spec label={t('bootBootCapable')}>{boot.bootCapable ? t('yes') : t('no')}</Spec>
+        <Spec label={t('bootPrivileged')}>{boot.privileged ? t('yes') : t('no')}</Spec>
+        <Spec label={t('bootUnitPath')}><Code>{dash(boot.unitPath)}</Code></Spec>
+        {boot.detail.length > 0 ? <Hint>{boot.detail}</Hint> : null}
+      </Details>
     </Section>
   )
 }

@@ -1,15 +1,17 @@
 /**
- * Agent tools, off by default and allowlisted by name.
+ * Agent tools, on by default and allowlisted by name.
  *
  * The list is read at registration time and re-read whenever the settings file
- * changes, so toggling a tool takes effect without a restart. Every tool that
- * changes something asks the approval service first and fails closed when it is
- * absent or refuses.
+ * changes, so toggling a tool takes effect without a restart. A tool that
+ * changes something asks the approval service only when the calling session is
+ * not already `danger-full-access` — the session has then granted exactly what
+ * the tool would be asking about, and asking anyway is what makes a
+ * Full-access run fail against an auto-rejecting approval channel.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { AgentToolName, RpcEndpoint } from './shared/contracts.js'
+import type { AgentToolName, RpcEndpoint, UiAction } from './shared/contracts.js'
 import { MUTATING_AGENT_TOOLS } from './shared/contracts.js'
 import type { HomeHostedService } from './service.js'
 import type { SettingsStore } from './settings.js'
@@ -22,13 +24,7 @@ interface SandboxPolicyLike {
   resolve?: (input: { session?: unknown }) => { mode?: string } | undefined
 }
 
-/**
- * The calling session's file-sandbox mode.
- *
- * A session already on `danger-full-access` has made the decision this tool
- * would otherwise ask about again — asking anyway is what makes a Full-access
- * run fail when the deployment's approvals are set to auto-reject.
- */
+/** The calling session's file-sandbox mode, or null when nothing can report it. */
 function sandboxMode(ctx: Context, exec: unknown): string | null {
   const policy = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
   if (policy?.resolve === undefined)
@@ -42,65 +38,111 @@ function sandboxMode(ctx: Context, exec: unknown): string | null {
   }
 }
 
+type Input = Record<string, unknown>
+
+function stringArg(input: Input, key: string): string | null {
+  const value = input[key]
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function jsonArg(input: Input, key: string): Record<string, unknown> | null {
+  const value = input[key]
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
 interface ToolSpec {
-  endpoint: RpcEndpoint
   description: string
   parameters: ParameterSchemaSpec
+  /** The endpoint call this tool performs, after its own argument handling. */
+  run: (input: Input) => { endpoint: RpcEndpoint, payload: unknown }
 }
 
 const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
   status: {
-    endpoint: 'status',
     description: 'Report the home-hosted panel state, its boot-autostart entry, and the entries this plugin manages.',
     parameters: {},
+    run: () => ({ endpoint: 'status', payload: {} }),
   },
   servers_list: {
-    endpoint: 'servers.list',
     description: 'List every server home-hosted supervises, with status, pid and url.',
     parameters: {},
+    run: () => ({ endpoint: 'servers.list', payload: {} }),
   },
-  servers_start: {
-    endpoint: 'servers.start',
-    description: 'Start a server supervised by home-hosted.',
-    parameters: { id: { type: 'string', required: true, description: 'Server entry id' } },
-  },
-  servers_stop: {
-    endpoint: 'servers.stop',
-    description: 'Stop a server supervised by home-hosted.',
-    parameters: { id: { type: 'string', required: true, description: 'Server entry id' } },
-  },
-  servers_restart: {
-    endpoint: 'servers.restart',
-    description: 'Restart a server supervised by home-hosted. Restarting the entry this session runs as will end the session.',
-    parameters: { id: { type: 'string', required: true, description: 'Server entry id' } },
-  },
-  servers_create: {
-    endpoint: 'servers.create',
-    description: 'Add a server entry to home-hosted. The entry runs a command on this machine under the panel\'s supervision.',
-    parameters: { entry: { type: 'json', required: true, description: 'A full home-hosted server entry, including its id and command' } },
-  },
-  servers_update: {
-    endpoint: 'servers.update',
-    description: 'Change fields of an existing home-hosted server entry.',
+  servers_lifecycle: {
+    description: 'Start, stop or restart a server supervised by home-hosted. Restarting the entry this session runs as ends the session.',
     parameters: {
+      action: { type: 'string', required: true, description: 'start, stop or restart' },
       id: { type: 'string', required: true, description: 'Server entry id' },
-      patch: { type: 'json', required: true, description: 'Fields to change' },
+    },
+    run: (input) => {
+      const action = stringArg(input, 'action')
+      if (action !== 'start' && action !== 'stop' && action !== 'restart')
+        throw new Error('action must be start, stop or restart')
+      const id = stringArg(input, 'id')
+      if (id === null)
+        throw new Error('id is required')
+      return { endpoint: `servers.${action}` as RpcEndpoint, payload: { id } }
     },
   },
-  servers_delete: {
-    endpoint: 'servers.delete',
-    description: 'Stop and remove a home-hosted server entry. Refused for the entry this session runs as.',
-    parameters: { id: { type: 'string', required: true, description: 'Server entry id' } },
+  servers_edit: {
+    description: 'Create, update or delete a home-hosted server entry. Delete is refused for the entry this session runs as.',
+    parameters: {
+      action: { type: 'string', required: true, description: 'create, update or delete' },
+      id: { type: 'string', description: 'Server entry id (update, delete)' },
+      entry: { type: 'json', description: 'A full home-hosted server entry, including its id and command (create)' },
+      patch: { type: 'json', description: 'Fields to change (update)' },
+    },
+    run: (input) => {
+      const action = stringArg(input, 'action')
+      if (action === 'create') {
+        const entry = jsonArg(input, 'entry')
+        if (entry === null)
+          throw new Error('entry is required to create a server')
+        return { endpoint: 'servers.create', payload: { entry } }
+      }
+      if (action === 'update') {
+        const id = stringArg(input, 'id')
+        const patch = jsonArg(input, 'patch')
+        if (id === null || patch === null)
+          throw new Error('id and patch are required to update a server')
+        return { endpoint: 'servers.update', payload: { id, patch } }
+      }
+      if (action === 'delete') {
+        const id = stringArg(input, 'id')
+        if (id === null)
+          throw new Error('id is required to delete a server')
+        return { endpoint: 'servers.delete', payload: { id } }
+      }
+      throw new Error('action must be create, update or delete')
+    },
   },
-  autostart_install: {
-    endpoint: 'boot.install',
-    description: 'Install the OS entry that starts home-hosted at boot or login.',
-    parameters: { mechanism: { type: 'string', description: 'Explicit mechanism, e.g. systemd-user; omit to pick the best available one' } },
+  autostart_manage: {
+    description: 'Install or remove the OS entry that starts home-hosted at boot or login.',
+    parameters: {
+      action: { type: 'string', required: true, description: 'install or uninstall' },
+      mechanism: { type: 'string', description: 'Explicit mechanism, e.g. launchd-daemon or systemd-system; omit to use the plugin setting' },
+    },
+    run: (input) => {
+      const action = stringArg(input, 'action')
+      if (action !== 'install' && action !== 'uninstall')
+        throw new Error('action must be install or uninstall')
+      const mechanism = stringArg(input, 'mechanism')
+      return { endpoint: `boot.${action}` as RpcEndpoint, payload: mechanism === null ? {} : { mechanism } }
+    },
   },
-  autostart_uninstall: {
-    endpoint: 'boot.uninstall',
-    description: 'Remove the OS entry that starts home-hosted at boot or login.',
-    parameters: { mechanism: { type: 'string', description: 'Explicit mechanism; omit to use the installed one' } },
+  ui_manage: {
+    description: 'Inspect or change the home-hosted panel\'s own web UI: status, update, revert to stock, or switch to a local zip.',
+    parameters: {
+      action: { type: 'string', required: true, description: 'status, update, revert or switch' },
+      file: { type: 'string', description: 'Absolute path to a UI zip (switch)' },
+    },
+    run: (input) => {
+      const action = stringArg(input, 'action')
+      if (action !== 'status' && action !== 'update' && action !== 'revert' && action !== 'switch')
+        throw new Error('action must be status, update, revert or switch')
+      const file = stringArg(input, 'file')
+      return { endpoint: 'ui.manage', payload: { action: action as UiAction, ...(file === null ? {} : { file }) } }
+    },
   },
 }
 
@@ -108,10 +150,18 @@ export function toolNameFor(name: AgentToolName): string {
   return `home_hosted_${name}`
 }
 
+/**
+ * Actions of an otherwise mutating tool that only read. `ui_manage` carries both,
+ * and a status call must not be blocked (or prompted for) as if it changed the UI.
+ */
+const READ_ONLY_ACTIONS: Partial<Record<AgentToolName, (input: Input) => boolean>> = {
+  ui_manage: input => stringArg(input, 'action') === 'status',
+}
+
 function registerOne(ctx: Context, service: HomeHostedService, name: AgentToolName): () => void {
   const spec = TOOL_SPECS[name]
   const toolName = toolNameFor(name)
-  const mutating = MUTATING_AGENT_TOOLS.includes(name)
+  const mutatingTool = MUTATING_AGENT_TOOLS.includes(name)
 
   return ctx.tools.register(defineTool({
     name: toolName,
@@ -122,13 +172,14 @@ function registerOne(ctx: Context, service: HomeHostedService, name: AgentToolNa
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     async execute(args, exec) {
-      const input = (args ?? {}) as Record<string, unknown>
-
+      const input = (args ?? {}) as Input
       const mode = sandboxMode(ctx, exec)
-      const fullAccess = mode === 'danger-full-access'
-      if (mutating && !fullAccess) {
-        const approval = ctx.get('approval') as ApprovalLike | undefined
+      // Fail closed: only a positively identified read-only action skips the gate,
+      // and an unknown action still asks.
+      const mutating = mutatingTool && !(READ_ONLY_ACTIONS[name]?.(input) ?? false)
+      if (mutating && mode !== 'danger-full-access') {
         const remedy = 'Set the session to Full access (danger-full-access), or use a session where approvals can be answered.'
+        const approval = ctx.get('approval') as ApprovalLike | undefined
         if (approval?.request === undefined)
           return `refused: this session runs in ${mode ?? 'an unknown'} sandbox and the deployment has no approval service. ${remedy}`
         const outcome = await approval.request({
@@ -141,15 +192,8 @@ function registerOne(ctx: Context, service: HomeHostedService, name: AgentToolNa
       }
 
       try {
-        const payload = name === 'servers_create'
-          ? { entry: input.entry }
-          : name === 'servers_update'
-            ? { id: input.id, patch: input.patch }
-            : name === 'status' || name === 'servers_list'
-              ? {}
-              : { id: input.id, mechanism: input.mechanism }
-        const value = await service.call(spec.endpoint, payload)
-        return JSON.stringify(value, null, 2)
+        const { endpoint, payload } = spec.run(input)
+        return JSON.stringify(await service.call(endpoint, payload), null, 2)
       }
       catch (error) {
         return `failed: ${error instanceof Error ? error.message : String(error)}`

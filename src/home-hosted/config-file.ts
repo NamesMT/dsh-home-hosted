@@ -39,12 +39,17 @@ export function readConfig(home: string): ConfigReadResult {
 }
 
 /**
- * Write the file back with home-hosted's own `meta` contract: a config records
- * the release that wrote it and the shape it wrote, so an unstamped file still
- * reads as the current schema.
+ * Write the file back with home-hosted's own `meta` contract, which records the
+ * release that wrote the file and the shape it wrote.
+ *
+ * `schema` is never invented here: a file that declared one keeps it, and one
+ * that did not stays without it — home-hosted reads an absent schema as "the
+ * current one", so stamping our own idea of the schema would one day fail its
+ * own guard ("this release understands schema N") and stop the panel booting
+ * from a file this plugin only patched.
  */
 export function writeConfig(home: string, raw: RawConfig, writtenBy = 'dsh-home-hosted'): void {
-  const meta = { schema: 1, ...(raw.meta ?? {}), writtenBy }
+  const meta = { ...(raw.meta ?? {}), writtenBy }
   const next: RawConfig = { ...raw, meta }
   writeFileAtomic(configFile(home), `${JSON.stringify(next, null, 2)}\n`)
 }
@@ -74,6 +79,11 @@ export function patchEntry(raw: RawConfig, id: string, patch: ServerEntryPatch):
     return merged
   })
   return { ...raw, servers }
+}
+
+/** Patch the panel's own `control` block (its port, its bind). */
+export function patchControl(raw: RawConfig, patch: Record<string, unknown>): RawConfig {
+  return { ...raw, control: { ...(raw.control ?? {}), ...patch } }
 }
 
 export function removeEntry(raw: RawConfig, id: string): RawConfig {

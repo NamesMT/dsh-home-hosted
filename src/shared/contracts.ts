@@ -32,6 +32,7 @@ export type RpcEndpoint =
   | 'servers.restart'
   | 'servers.freePort'
   | 'entries.apply'
+  | 'entries.remove'
   | 'entries.restore'
   | 'boot.install'
   | 'boot.uninstall'
@@ -39,17 +40,21 @@ export type RpcEndpoint =
   | 'panel.start'
   | 'panel.takeover'
   | 'cli.installGlobal'
+  | 'ui.manage'
   | 'settings.update'
 
 /** A settings write sends only the changed subtree; the host merges group by group. */
 export interface SettingsPatch {
   autostart?: Partial<PluginSettings['autostart']>
+  manageDsh?: boolean
   entries?: PluginSettings['entries']
+  panel?: Partial<PluginSettings['panel']>
   agentTools?: Partial<PluginSettings['agentTools']>
   cli?: Partial<PluginSettings['cli']>
 }
 
 export interface EndpointPayloads {
+  /** `refresh` is accepted and ignored: every status call re-reads live state. */
   'status': { refresh?: boolean }
   'servers.list': Record<string, never>
   'servers.get': { id: string }
@@ -61,6 +66,8 @@ export interface EndpointPayloads {
   'servers.restart': { id: string }
   'servers.freePort': { id: string }
   'entries.apply': { intents: EntryIntent[] }
+  /** Stop managing an entry: restore what it was, or remove it when we created it. */
+  'entries.remove': { id: string }
   'entries.restore': { id: string }
   'boot.install': { mechanism?: BootMechanism }
   'boot.uninstall': { mechanism?: BootMechanism }
@@ -71,6 +78,8 @@ export interface EndpointPayloads {
   'panel.takeover': { force?: boolean }
   /** Install the pinned range as a global CLI, so the `global` preference can use it. */
   'cli.installGlobal': Record<string, never>
+  /** Drive the panel's own UI: status, update, revert, or switch to a local build. */
+  'ui.manage': { action: UiAction, file?: string }
   'settings.update': { patch: SettingsPatch }
 }
 
@@ -85,6 +94,13 @@ export interface RpcRequest {
 // ---------------------------------------------------------------------------
 
 export type OnPortConflict = 'block' | 'warn' | 'follow' | 'reclaim' | 'kill'
+
+/** Every policy home-hosted's config schema accepts; anything else stops it booting. */
+export const ON_PORT_CONFLICT_POLICIES: readonly OnPortConflict[] = ['block', 'warn', 'follow', 'reclaim', 'kill']
+
+export function isOnPortConflict(value: unknown): value is OnPortConflict {
+  return typeof value === 'string' && (ON_PORT_CONFLICT_POLICIES as readonly string[]).includes(value)
+}
 
 /** Only the fields this plugin reads or writes are typed; the rest is preserved. */
 export interface ServerEntry {
@@ -148,6 +164,8 @@ export interface PanelStatus {
   /** `$HHOSTED_HOME` this plugin resolved, whether or not the panel answers. */
   home: string
   reachable: boolean
+  /** The port the panel's own config holds (what a restart would use). */
+  configPort?: number | null
   url: string | null
   version: string | null
   pid: number | null
@@ -165,6 +183,16 @@ export interface CliCandidate {
   source: 'config' | 'dependency' | 'path'
   path: string | null
   version: string | null
+}
+
+export type UiAction = 'status' | 'update' | 'revert' | 'switch'
+
+export interface UiResult {
+  ok: boolean
+  detail: string
+  /** The active UI, when the action reported or changed one. */
+  ui?: { name: string | null, version: string | null, repo?: string | null, tag?: string | null } | null
+  output?: string
 }
 
 export interface PanelControlResult {
@@ -249,41 +277,36 @@ export interface BootStatus {
 export type AgentToolName =
   | 'status'
   | 'servers_list'
-  | 'servers_start'
-  | 'servers_stop'
-  | 'servers_restart'
-  | 'servers_create'
-  | 'servers_update'
-  | 'servers_delete'
-  | 'autostart_install'
-  | 'autostart_uninstall'
+  | 'servers_lifecycle'
+  | 'servers_edit'
+  | 'autostart_manage'
+  | 'ui_manage'
 
 export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   'status',
   'servers_list',
-  'servers_start',
-  'servers_stop',
-  'servers_restart',
-  'servers_create',
-  'servers_update',
-  'servers_delete',
-  'autostart_install',
-  'autostart_uninstall',
+  'servers_lifecycle',
+  'servers_edit',
+  'autostart_manage',
+  'ui_manage',
 ]
 
-/** Tools that change something; every one of them asks for approval first. */
+/**
+ * Tools that change something. They ask for approval only when the calling
+ * session is not already `danger-full-access`.
+ */
 export const MUTATING_AGENT_TOOLS: readonly AgentToolName[] = [
-  'servers_start',
-  'servers_stop',
-  'servers_restart',
-  'servers_create',
-  'servers_update',
-  'servers_delete',
-  'autostart_install',
-  'autostart_uninstall',
+  'servers_lifecycle',
+  'servers_edit',
+  'autostart_manage',
+  'ui_manage',
 ]
+
+/** The shape this release writes; a file without it was written by 0.1.x. */
+export const SETTINGS_VERSION = 2
 
 export interface PluginSettings {
+  version: number
   autostart: {
     enabled: boolean
     /** `auto` picks the best available mechanism; an explicit one is honoured only when available. */
@@ -291,10 +314,16 @@ export interface PluginSettings {
     /** The last install/uninstall attempt, kept so a failure survives a reload. */
     lastAttempt?: BootAttempt
   }
+  /** Manage the running harness as a home-hosted entry. */
+  manageDsh: boolean
   entries: EntryIntent[]
   agentTools: {
     enabled: boolean
     allow: AgentToolName[]
+  }
+  /** Port the panel should listen on; `null` keeps whatever the config holds. */
+  panel: {
+    port: number | null
   }
   cli: {
     /** `pinned` runs the copy this plugin ships; `global` runs the one on PATH. */
@@ -314,13 +343,19 @@ export interface BootAttempt {
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
+  version: SETTINGS_VERSION,
   autostart: { enabled: false, mechanism: 'auto' },
+  manageDsh: false,
   entries: [],
-  agentTools: { enabled: false, allow: ['status', 'servers_list'] },
+  // Every tool on by default; the session's own permission mode is what gates them.
+  agentTools: { enabled: true, allow: [...AGENT_TOOL_NAMES] },
+  panel: { port: null },
   cli: { prefer: 'pinned' },
 }
 
 export interface HomeHostedStatus {
+  /** The entry id this plugin manages; the page must not assume "dsh". */
+  defaultEntryId: string
   panel: PanelStatus
   boot: BootStatus
   entries: ManagedEntryStatus[]

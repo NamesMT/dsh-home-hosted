@@ -51,7 +51,33 @@ export function apiTokenEnrolled(home: string): boolean {
   return secrets !== null && secrets.apiToken !== null && secrets.apiToken !== undefined
 }
 
+/** One in-flight enrolment per state directory, so two callers cannot race. */
+const inFlight = new Map<string, Promise<EnsureTokenResult>>()
+
 export async function ensureToken(options: EnsureTokenOptions): Promise<EnsureTokenResult> {
+  const key = path.resolve(options.stateDir)
+  const pending = inFlight.get(key)
+  if (pending !== undefined)
+    return await pending
+  const attempt = enrollToken(options)
+  inFlight.set(key, attempt)
+  try {
+    return await attempt
+  }
+  finally {
+    inFlight.delete(key)
+  }
+}
+
+/**
+ * Mint a token when none is enrolled.
+ *
+ * Two concurrent callers used to mint two tokens: both `set-token` calls land, and
+ * the loser's token is the one stored on disk while the panel keeps the winner's
+ * hash — after which the plugin can never authenticate, and never re-enrols,
+ * because home-hosted already holds an API token. `ensureToken` serialises them.
+ */
+async function enrollToken(options: EnsureTokenOptions): Promise<EnsureTokenResult> {
   const stored = readStoredToken(options.stateDir)
   if (stored !== null)
     return { token: stored, enrolled: false, detail: 'using the stored panel token' }

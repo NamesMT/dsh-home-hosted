@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BOOT_STATE_KEYS, CLI_SOURCE_KEYS, dash, effectiveCandidates, EMPTY, formatCandidate, formatDrift, humanizeKey, isMutatingTool, TOKEN_KEYS, WRITE_VIA_KEYS } from '../../src/client/format.js'
+import { AGENT_TOOL_KEYS, BOOT_STATE_KEYS, CLI_SOURCE_KEYS, dash, effectiveCandidates, EMPTY, formatCandidate, formatDrift, humanizeKey, isMutatingTool, shortenPath, TOKEN_KEYS, WRITE_VIA_KEYS } from '../../src/client/format.js'
 import type { CliStatus } from '../../src/shared/contracts.js'
 import { AGENT_TOOL_NAMES, MUTATING_AGENT_TOOLS } from '../../src/shared/contracts.js'
 
@@ -50,6 +50,15 @@ describe('isMutatingTool', () => {
   })
 })
 
+describe('AGENT_TOOL_KEYS', () => {
+  it('has a label key for every tool', () => {
+    for (const name of AGENT_TOOL_NAMES) {
+      expect(typeof AGENT_TOOL_KEYS[name]).toBe('string')
+      expect(AGENT_TOOL_KEYS[name].length).toBeGreaterThan(0)
+    }
+  })
+})
+
 describe('locale key tables', () => {
   it('covers every write path', () => {
     expect(Object.keys(WRITE_VIA_KEYS).sort()).toEqual(['api', 'file', 'none'])
@@ -88,6 +97,28 @@ describe('formatCandidate', () => {
   it('renders the placeholder for an absent candidate', () => {
     expect(formatCandidate(null)).toBe(EMPTY)
     expect(formatCandidate(undefined)).toBe(EMPTY)
+  })
+})
+
+describe('shortenPath', () => {
+  const long = '/home/mt/mine/dsh-home-hosted/node_modules/.pnpm/home-hosted@0.6.1_zod@4.6.5/node_modules/home-hosted/bin/home-hosted.mjs'
+
+  it('leaves a path that already fits alone', () => {
+    expect(shortenPath('/usr/local/bin/home-hosted')).toBe('/usr/local/bin/home-hosted')
+  })
+
+  it('keeps where it lives and the file it names', () => {
+    expect(shortenPath(long)).toBe('/home/mt/…/bin/home-hosted.mjs')
+  })
+
+  it('applies the same rule to a Windows path', () => {
+    expect(shortenPath('C:\\Users\\mt\\AppData\\Local\\pnpm\\home-hosted@0.6.1\\bin\\home-hosted.cmd'))
+      .toBe('C:\\Users\\mt\\…\\bin\\home-hosted.cmd')
+  })
+
+  it('gives up rather than mangle a path with too few segments', () => {
+    const single = '/a-very-long-single-segment-name-that-does-not-fit-anywhere'
+    expect(shortenPath(single)).toBe(single)
   })
 })
 

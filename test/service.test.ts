@@ -1,5 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BootStatus } from '../src/shared/contracts.js'
@@ -56,7 +57,7 @@ interface Harness {
   cliCalls: Array<{ args: string[], env: Record<string, string | undefined> }>
 }
 
-async function harness(options: { panel?: StubPanel, panelVersion?: string } = {}): Promise<Harness> {
+async function harness(options: { panel?: StubPanel, panelVersion?: string, cli?: string } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -64,8 +65,9 @@ async function harness(options: { panel?: StubPanel, panelVersion?: string } = {
   fs.mkdirSync(state, { recursive: true })
 
   // A deterministic CLI path: a .mjs file is run through node, so no `which` probe.
-  const fakeCli = path.join(scratch.path, 'home-hosted.mjs')
-  fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
+  const fakeCli = options.cli ?? path.join(scratch.path, 'home-hosted.mjs')
+  if (options.cli === undefined)
+    fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
 
   if (options.panel !== undefined)
     writeJsonFile(runtimeFile(home), { version: options.panelVersion ?? '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
@@ -130,6 +132,7 @@ describe('home-hosted service', () => {
     }) as Array<{ drift: string[] }>
 
     expect(entries[0]?.drift).toEqual([])
+    // The caller asked for `kill` explicitly, so that is what it keeps.
     expect(settings.intentFor('dsh')).toEqual({ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true })
 
     // Only the owned keys were sent, and the person's own fields survived.
@@ -161,8 +164,9 @@ describe('home-hosted service', () => {
     const { service, settings } = await harness({ panel })
     panel.servers.push({ id: 'dsh', config: { id: 'dsh', command: 'dsh', autostart: false, onPortConflict: 'warn' } })
 
-    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }], adopt: true })
-    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: false, onPortConflict: 'kill', stopKillPortHolders: true }] })
+    const policy = process.platform === 'win32' ? 'kill' : 'follow'
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: policy, stopKillPortHolders: true }], adopt: true })
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: false, onPortConflict: policy, stopKillPortHolders: true }] })
     expect(panel.servers[0]!.config.autostart).toBe(false)
     // A pause never issues a start/stop action.
     expect(panel.requests.some(entry => entry.path.endsWith('/stop') || entry.path.endsWith('/start'))).toBe(false)
@@ -170,7 +174,7 @@ describe('home-hosted service', () => {
     await service.call('entries.restore', { id: 'dsh' })
     expect(panel.servers[0]!.config.onPortConflict).toBe('warn')
     expect(settings.get().entries).toEqual([])
-    expect(settings.intentFor('dsh').onPortConflict).toBe('kill')
+    expect(settings.intentFor('dsh').onPortConflict).toBe(process.platform === 'win32' ? 'kill' : 'follow')
   })
 
   it('refuses to restore an entry it never adopted, instead of writing schema defaults over it', async () => {
@@ -240,9 +244,129 @@ describe('home-hosted service', () => {
     await expect(service.call('nope' as never, {})).rejects.toMatchObject({ code: 'UNKNOWN_ENDPOINT' })
     await expect(service.call('entries.apply', { intents: [{ id: 'BAD ID', autostart: true }] })).rejects.toMatchObject({ code: 'INVALID_ID' })
   })
+
+  it('refuses a conflict policy the panel could not parse, before writing anything', async () => {
+    const { service, home } = await harness()
+    await expect(service.call('entries.apply', {
+      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'explode' }],
+    })).rejects.toMatchObject({ code: 'INVALID_POLICY' })
+    expect(readConfig(home).raw).toBeNull()
+  })
+
+  it('records that the harness is managed, and clears it only for the harness entry', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel })
+    // This test removes the harness entry, which is refused while this process is
+    // the one it names.
+    delete process.env.HHOSTED_SERVER_ID
+    panel.servers.push({ id: 'other', config: { id: 'other', command: 'sleep' } })
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true }] })
+    expect(settings.get().manageDsh).toBe(true)
+
+    // Another entry's lifecycle must not clear the harness flag.
+    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true }] })
+    await service.call('entries.remove', { id: 'other' })
+    expect(settings.get().manageDsh).toBe(true)
+
+    await service.call('entries.remove', { id: 'dsh' })
+    expect(settings.get().manageDsh).toBe(false)
+  })
+
+  it('restores an adopted entry that inherited the owned keys, instead of deleting it', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    // The person's own entry: no explicit autostart/onPortConflict/stop at all.
+    panel.servers.push({ id: 'other', config: { id: 'other', command: 'sleep' } })
+
+    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true }] })
+    await service.call('entries.remove', { id: 'other' })
+
+    expect(panel.servers.some(entry => entry.id === 'other')).toBe(true)
+    expect(panel.requests.some(entry => entry.method === 'DELETE')).toBe(false)
+    expect(panel.servers[0]!.config).toMatchObject({ autostart: false, onPortConflict: 'block' })
+  })
+
+  it('pauses the entry this process runs as when this plugin created it', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    // No pre-existing entry: the plugin creates it, so there is nothing of the
+    // person's to restore and deleting it would end this very session.
+    process.env.HHOSTED_SERVER_ID = 'dsh'
+    try {
+      await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true }] })
+      expect(panel.servers.map(entry => entry.id)).toEqual(['dsh'])
+
+      await service.call('entries.remove', { id: 'dsh' })
+
+      expect(panel.requests.some(request => request.method === 'DELETE')).toBe(false)
+      expect(panel.servers[0]?.config.autostart).toBe(false)
+    }
+    finally {
+      delete process.env.HHOSTED_SERVER_ID
+    }
+  })
+
+  it('restores an entry this plugin merely adopted instead of removing it', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    panel.servers.push({
+      id: 'other',
+      status: 'stopped',
+      pid: null,
+      config: { id: 'other', command: 'sleep', args: ['1'], autostart: false, onPortConflict: 'block' },
+    })
+    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }] })
+    expect(panel.servers[0]?.config.onPortConflict).toBe('follow')
+
+    await service.call('entries.remove', { id: 'other' })
+
+    expect(panel.requests.some(request => request.method === 'DELETE')).toBe(false)
+    expect(panel.servers[0]?.config.autostart).toBe(false)
+    expect(panel.servers[0]?.config.onPortConflict).toBe('block')
+  })
 })
 
 describe('panel lifecycle from the page', () => {
+  it('writes the chosen panel port into the state before starting it', async () => {
+    const { home, service, settings } = await harness()
+    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ meta: { writtenBy: 'x', schema: 1 }, control: { port: 3999, host: '127.0.0.1' }, servers: [] }), 'utf8')
+    settings.update({ panel: { port: 6311 } })
+
+    await service.startPanelNow()
+
+    const written = JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8'))
+    expect(written.control.port).toBe(6311)
+    // Everything else in the file survives the write.
+    expect(written.control.host).toBe('127.0.0.1')
+    // The plugin records that it wrote the file, and keeps the schema the file
+    // already declared.
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 1 })
+  })
+
+  it('leaves the port alone when the setting is empty', async () => {
+    const { home, service } = await harness()
+    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ control: { port: 3999 }, servers: [] }), 'utf8')
+    await service.startPanelNow()
+    expect(JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8')).control.port).toBe(3999)
+  })
+
+  it('never writes a port the panel itself could not parse', async () => {
+    const { home, service, settings } = await harness()
+    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ control: { port: 3999 }, servers: [] }), 'utf8')
+    settings.update({ panel: { port: 3999.5 } })
+    await service.startPanelNow()
+    expect(JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8')).control.port).toBe(3999)
+  })
+
+  it('says why a panel CLI could not be run instead of only that it failed', async () => {
+    // A directory exists but cannot be executed, which is how a broken CLI looks.
+    const { service } = await harness({ cli: os.tmpdir() })
+    const result = await service.uiManage('update')
+    expect(result.ok).toBe(false)
+    expect(result.output ?? '').not.toBe('')
+  })
+
   it('starts nothing when a panel already answers', async () => {
     const panel = await withPanel()
     const { service } = await harness({ panel })

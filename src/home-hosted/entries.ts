@@ -4,14 +4,23 @@
  * own command, args, env, health block and everything else survive untouched.
  */
 import type { EntryIntent, OnPortConflict, ServerEntry, ServerEntryPatch } from '../shared/contracts.js'
+import { isOnPortConflict } from '../shared/contracts.js'
 
-export const DEFAULT_ON_PORT_CONFLICT: OnPortConflict = 'kill'
+/**
+ * A detached restart of dsh is recognisable by its own marker/argv on POSIX, so
+ * `follow` adopts it without killing anything. Windows cannot read another
+ * process's environment and a `.cmd` shim hides the argv, so only `kill`
+ * reliably reclaims the port there.
+ */
+export function defaultOnPortConflict(platform: NodeJS.Platform = process.platform): OnPortConflict {
+  return platform === 'win32' ? 'kill' : 'follow'
+}
 
-export function defaultIntent(id: string): EntryIntent {
+export function defaultIntent(id: string, platform: NodeJS.Platform = process.platform): EntryIntent {
   return {
     id,
     autostart: true,
-    onPortConflict: DEFAULT_ON_PORT_CONFLICT,
+    onPortConflict: defaultOnPortConflict(platform),
     stopKillPortHolders: true,
   }
 }
@@ -41,19 +50,22 @@ export function ownedDrift(live: ServerEntry | null, intent: EntryIntent): strin
   return drift
 }
 
-/** Only the owned keys, as they were before this plugin touched the entry. */
+/**
+ * Only the owned keys, as they were before this plugin touched the entry.
+ *
+ * A key the entry left out is recorded as the panel's schema default rather than
+ * omitted: `{ id }` alone is what marks an entry this plugin created, so an
+ * adopted entry with nothing explicit has to be distinguishable from it — or
+ * "stop managing" deletes a server the person wrote.
+ */
 export function snapshotOwned(live: ServerEntry): ServerEntry {
-  const snapshot: ServerEntry = { id: live.id }
-  if (live.autostart !== undefined)
-    snapshot.autostart = live.autostart
-  if (live.onPortConflict !== undefined)
-    snapshot.onPortConflict = live.onPortConflict
-  if (typeof live.stop === 'object' && live.stop !== null) {
-    const killPortHolders = (live.stop as Record<string, unknown>).killPortHolders
-    if (typeof killPortHolders === 'boolean')
-      snapshot.stop = { killPortHolders }
+  const killPortHolders = (live.stop as Record<string, unknown> | undefined)?.killPortHolders
+  return {
+    id: live.id,
+    autostart: typeof live.autostart === 'boolean' ? live.autostart : false,
+    onPortConflict: isOnPortConflict(live.onPortConflict) ? live.onPortConflict : 'block',
+    stop: { killPortHolders: typeof killPortHolders === 'boolean' ? killPortHolders : false },
   }
-  return snapshot
 }
 
 /**

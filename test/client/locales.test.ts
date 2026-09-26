@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   createTranslator,
@@ -75,7 +76,7 @@ describe('resolveTranslator', () => {
     const rawSeat = (key: string) => key
     const t = resolveTranslator(rawSeat)
     expect(t('panelTitle')).toBe(en.panelTitle)
-    expect(t('entriesAdopt')).toBe(en.entriesAdopt)
+    expect(t('entriesManage', { id: 'dsh' })).toBe('Manage dsh')
   })
 
   it('keeps a real translation, including a non-English one', () => {
@@ -91,7 +92,19 @@ describe('resolveTranslator', () => {
   })
 
   it('interpolates the fallback', () => {
-    expect(resolveTranslator(key => key)('agentToolMutating', { name: 'servers_start' }))
-      .toBe('servers_start · asks approval')
+    expect(resolveTranslator(key => key)('panelReplace', { version: '0.6.2' }))
+      .toBe('Replace with 0.6.2')
+  })
+})
+
+describe('locale key coverage', () => {
+  it('defines every literal key the client tree renders', () => {
+    const dir = 'src/client'
+    const used = new Set<string>()
+    for (const file of readdirSync(dir).filter(name => !name.startsWith('locales.'))) {
+      const text = readFileSync(`${dir}/${file}`, 'utf8')
+      for (const match of text.matchAll(/\bt\(\s*'([A-Za-z0-9_]+)'/g)) used.add(match[1]!)
+    }
+    expect([...used].filter(key => !(key in en))).toEqual([])
   })
 })

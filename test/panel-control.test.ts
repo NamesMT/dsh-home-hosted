@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CliLaunch } from '../src/home-hosted/launch.js'
 import {
@@ -99,6 +100,25 @@ describe('panel control', () => {
     for (let attempt = 0; attempt < 60 && !contains(helperLog, 'started with exit'); attempt += 1)
       await new Promise(resolve => setTimeout(resolve, 100))
     expect(fs.readFileSync(helperLog, 'utf8')).toContain('started with exit')
+  })
+
+  it('never turns a helper that could not start into an uncaught exception', () => {
+    const { deps: d } = deps()
+    const fake = new EventEmitter()
+    ;(fake as unknown as { unref: () => void }).unref = () => {}
+
+    const result = spawnTakeover(d, null, (() => fake as never))
+    expect(result.ok).toBe(true)
+    // A detached child reports a failed start asynchronously; without a listener
+    // that 'error' event is thrown and ends the host process.
+    expect(() => fake.emit('error', new Error('EAGAIN'))).not.toThrow()
+  })
+
+  it('reports a helper that could not be spawned at all', () => {
+    const { deps: d } = deps()
+    const result = spawnTakeover(d, null, (() => { throw new Error('EPERM') }))
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('EPERM')
   })
 
   it('installs globally through the chosen package manager', async () => {

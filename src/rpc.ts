@@ -89,7 +89,9 @@ export function registerRpc(ctx: Context, service: HomeHostedService): void {
       }
 
       return () => {
-        void dispose()
+        // A disposer that rejects would otherwise surface as an unhandled
+        // rejection, which ends the process on Node 24.
+        void Promise.resolve(dispose()).catch(() => {})
       }
     }, 'dsh-home-hosted: rpc route')
   })

@@ -11,19 +11,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { BootMechanism, BootStatus, EntryIntent, HomeHostedStatus, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView } from './shared/contracts.js'
+import type { BootMechanism, BootStatus, EntryIntent, HomeHostedStatus, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult } from './shared/contracts.js'
+import { isOnPortConflict, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootSpec } from './boot/types.js'
 import { createBootLadder } from './boot/index.js'
-import { findEntry, patchEntry, readConfig, upsertEntry, writeConfig } from './home-hosted/config-file.js'
+import { findEntry, patchControl, patchEntry, readConfig, removeEntry as removeConfigEntry, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, resolveDshLaunch } from './home-hosted/dsh-entry.js'
-import { ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
+import { defaultIntent, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
 import { buildHomeHostedBootSpec, homeHostedEnv } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
 import { compareVersions, EXPECTED_RANGE, MIN_KILL_VERSION, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
 import { installGlobal, spawnTakeover, startPanel as startPanelProcess } from './home-hosted/panel-control.js'
-import { PanelClient, verifyToken } from './home-hosted/panel.js'
+import { PanelClient, PanelError, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
@@ -183,6 +184,23 @@ export class HomeHostedService extends Service {
   // Panel
   // -------------------------------------------------------------------------
 
+  /** The port the panel's config holds, without touching a running panel. */
+  private configuredPort(): number | null {
+    const control = readConfig(this.options.home).raw?.control as { port?: unknown } | undefined
+    return typeof control?.port === 'number' ? control.port : null
+  }
+
+  /** Write the chosen panel port into the state the panel boots from. */
+  private applyPanelPort(): void {
+    const port = this.options.settings.get().panel.port
+    if (port === null || port === this.configuredPort())
+      return
+    const read = readConfig(this.options.home)
+    if (read.error !== null)
+      throw new HomeHostedError(read.error, 'CONFIG_UNREADABLE')
+    writeConfig(this.options.home, patchControl(read.raw ?? {}, { port }), this.writtenBy())
+  }
+
   async panelStatus(): Promise<PanelStatus> {
     const runtime = this.runtime()
     const stored = readStoredToken(this.options.stateDir)
@@ -196,6 +214,7 @@ export class HomeHostedService extends Service {
     return {
       home: this.options.home,
       reachable: answered,
+      configPort: this.configuredPort(),
       url: runtime?.url ?? null,
       version: runtime?.version ?? null,
       pid: runtime?.pid ?? null,
@@ -386,20 +405,141 @@ export class HomeHostedService extends Service {
     for (const raw of intents) {
       if (!ENTRY_ID_PATTERN.test(raw.id))
         throw new HomeHostedError(`"${raw.id}" is not a valid server id`, 'INVALID_ID')
+      const requested: unknown = raw.onPortConflict
+      if (requested !== undefined && requested !== null && !isOnPortConflict(requested))
+        throw new HomeHostedError(
+          `"${String(requested)}" is not a port-conflict policy; use one of ${ON_PORT_CONFLICT_POLICIES.join(', ')}`,
+          'INVALID_POLICY',
+        )
+      const fallback = defaultIntent(raw.id)
       const intent: EntryIntent = {
         id: raw.id,
         autostart: raw.autostart === true,
-        onPortConflict: raw.onPortConflict ?? 'kill',
-        stopKillPortHolders: raw.stopKillPortHolders !== false,
+        onPortConflict: isOnPortConflict(requested) ? requested : fallback.onPortConflict,
+        stopKillPortHolders: raw.stopKillPortHolders ?? fallback.stopKillPortHolders,
       }
       await this.assertPolicySupported(intent)
       await this.writeOwned(intent)
       const current = this.options.settings.get()
       const entries = current.entries.filter(entry => entry.id !== intent.id)
       entries.push(intent)
-      this.options.settings.update({ entries })
+      this.options.settings.update({
+        // The page's toggle reads this flag, so managing the harness has to record
+        // itself; restoring or removing that entry clears it again.
+        ...(intent.id === this.options.defaultEntryId ? { manageDsh: true } : {}),
+        entries,
+      })
     }
     return await this.entriesStatus()
+  }
+
+  /**
+   * Stop managing an entry: restore what it was when we only adopted it, or
+   * remove it when this plugin created it. Removing an entry the panel
+   * supervises stops that process — which may be this session.
+   */
+  private async removeManagedEntry(id: string): Promise<ManagedEntryStatus[]> {
+    const snapshots = this.snapshots()
+    const snapshot = snapshots[id]
+    const adopted = snapshot !== undefined && Object.keys(snapshot).some(key => key !== 'id')
+    if (adopted)
+      return await this.restoreEntry(id)
+
+    // Deleting this entry stops the process running this session, and nothing
+    // would start it again — so "stop managing" pauses it instead: the entry
+    // stays, it is simply no longer started for us.
+    if (id === this.selfEntryId())
+      return await this.pauseManagedEntry(id)
+
+    const client = await this.tryClient()
+    if (client !== null) {
+      try {
+        await client.deleteServer(id)
+      }
+      catch (error) {
+        // Already gone is the outcome we wanted.
+        const missing = error instanceof PanelError && (error.status === 404 || error.code === 'UNKNOWN_SERVER')
+        if (!missing)
+          throw error
+      }
+    }
+    else {
+      const read = readConfig(this.options.home)
+      if (read.error !== null || read.raw === null)
+        throw new HomeHostedError(read.error ?? 'the config file is unreadable', 'CONFIG_UNREADABLE')
+      writeConfig(this.options.home, removeConfigEntry(read.raw, id), this.writtenBy())
+    }
+    delete snapshots[id]
+    this.saveSnapshots(snapshots)
+    const current = this.options.settings.get()
+    this.options.settings.update({
+      // Only the harness entry drives the page's manage toggle.
+      ...(id === this.options.defaultEntryId ? { manageDsh: false } : {}),
+      entries: current.entries.filter(entry => entry.id !== id),
+    })
+    return await this.entriesStatus()
+  }
+
+  /** Turn off the autostart intent for one entry, keeping the entry itself. */
+  private async pauseManagedEntry(id: string): Promise<ManagedEntryStatus[]> {
+    const intent = this.options.settings.intentFor(id)
+    await this.applyIntents([{ ...intent, autostart: false }])
+    const current = this.options.settings.get()
+    this.options.settings.update({
+      ...(id === this.options.defaultEntryId ? { manageDsh: false } : {}),
+      entries: current.entries,
+    })
+    return await this.entriesStatus()
+  }
+
+  /** Drive the panel's own UI through its CLI, and report what is installed. */
+  async uiManage(action: UiAction, file?: string): Promise<UiResult> {
+    const cli = action === 'status' ? null : await this.cli()
+
+    const runUi = async (args: string[]): Promise<{ code: number | null, output: string }> => {
+      const launch = cli?.resolution.launch ?? null
+      if (launch === null)
+        throw new HomeHostedError(cli?.resolution.status.detail ?? 'no home-hosted CLI could be resolved', 'CLI_NOT_FOUND')
+      const result = await run(launch.program, [...launch.args, ...args, '--home', this.options.home], {
+        env: { ...process.env, HHOSTED_HOME: this.options.home },
+        timeoutMs: 300_000,
+      })
+      // A CLI that never started has no stdout to show, so its spawn error is the
+      // only thing that explains the failure.
+      const output = [result.error, result.stdout, result.stderr].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
+      return { code: result.code, output }
+    }
+
+    interface ActiveUi { name: string | null, version: string | null, repo: string | null, tag: string | null }
+    const active = (): ActiveUi | null => {
+      const meta = readJson<{ name?: string, version?: string | null, repo?: string, tag?: string }>(path.join(this.options.home, '.ui', 'ui.json'))
+      return meta === null ? null : { name: meta.name ?? null, version: meta.version ?? null, repo: meta.repo ?? null, tag: meta.tag ?? null }
+    }
+
+    switch (action) {
+      case 'status': {
+        const ui = active()
+        return { ok: true, ui, detail: ui === null ? 'the panel is using its stock UI' : `${ui.name ?? 'a custom UI'}${ui.version === null ? '' : ` ${ui.version}`}` }
+      }
+      case 'update': {
+        const result = await runUi(['ui-update', '--yes'])
+        return { ok: result.code === 0, detail: result.code === 0 ? 'the panel UI is up to date' : 'the update did not run', ui: active(), output: result.output }
+      }
+      case 'revert': {
+        const result = await runUi(['ui-revert'])
+        return { ok: result.code === 0, detail: result.code === 0 ? 'back to the stock UI' : 'the revert did not run', ui: active(), output: result.output }
+      }
+      case 'switch': {
+        if (file === undefined || file.trim().length === 0)
+          throw new HomeHostedError('switching the UI needs the zip to install', 'UI_FILE_REQUIRED')
+        if (!fs.existsSync(file))
+          throw new HomeHostedError(`no file at ${file}`, 'UI_FILE_MISSING')
+        const result = await runUi(['ui-switch', '--file', file, '--yes'])
+        return { ok: result.code === 0, detail: result.code === 0 ? 'the UI was replaced' : 'the switch did not run', ui: active(), output: result.output }
+      }
+      default:
+        throw new HomeHostedError(`unknown ui action "${String(action)}"`, 'UNKNOWN_UI_ACTION')
+    }
   }
 
   private async restoreEntry(id: string): Promise<ManagedEntryStatus[]> {
@@ -424,7 +564,10 @@ export class HomeHostedService extends Service {
     delete snapshots[id]
     this.saveSnapshots(snapshots)
     const current = this.options.settings.get()
-    this.options.settings.update({ entries: current.entries.filter(entry => entry.id !== id) })
+    this.options.settings.update({
+      ...(id === this.options.defaultEntryId ? { manageDsh: false } : {}),
+      entries: current.entries.filter(entry => entry.id !== id),
+    })
     return await this.entriesStatus()
   }
 
@@ -577,6 +720,7 @@ export class HomeHostedService extends Service {
     if (runtime !== null && await probePanel(runtime.url)) {
       return { ok: true, detail: 'a panel is already answering', url: runtime.url, version: runtime.version }
     }
+    this.applyPanelPort()
     const result = await startPanelProcess(deps)
     this.clientCache = null
     return result
@@ -692,6 +836,7 @@ export class HomeHostedService extends Service {
     }
 
     return {
+      defaultEntryId: this.options.defaultEntryId,
       panel,
       boot: await this.bootStatus(),
       entries: await this.entriesStatus(),
@@ -767,8 +912,14 @@ export class HomeHostedService extends Service {
         return await this.applyIntents(intents)
       }
 
+      case 'entries.remove':
+        return await this.removeManagedEntry(String(input.id))
+
       case 'entries.restore':
         return await this.restoreEntry(String(input.id))
+
+      case 'ui.manage':
+        return await this.uiManage(input.action as UiAction, typeof input.file === 'string' ? input.file : undefined)
 
       case 'boot.install':
         return await this.installBoot(input.mechanism as BootMechanism | undefined)

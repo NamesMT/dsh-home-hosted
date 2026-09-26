@@ -57,9 +57,9 @@ describe('diffSettings', () => {
 
   it('replaces the whole allow array when one tool changes', () => {
     const base = settings({ agentTools: { enabled: true, allow: ['status', 'servers_list'] } })
-    const next = settings({ agentTools: { enabled: true, allow: ['status', 'servers_list', 'servers_start'] } })
+    const next = settings({ agentTools: { enabled: true, allow: ['status', 'servers_list', 'servers_lifecycle'] } })
     expect(diffSettings(base, next)).toEqual({
-      agentTools: { allow: ['status', 'servers_list', 'servers_start'] },
+      agentTools: { allow: ['status', 'servers_list', 'servers_lifecycle'] },
     })
   })
 
@@ -79,12 +79,25 @@ describe('diffSettings', () => {
     expect(diffSettings(settings({ cli: { prefer: 'global' } }), settings({ cli: { prefer: 'global' } })))
       .toEqual({})
   })
+
+  it('sends the manage-dsh toggle on its own', () => {
+    expect(diffSettings(settings(), settings({ manageDsh: true }))).toEqual({ manageDsh: true })
+  })
+
+  it('sends the panel port on its own', () => {
+    expect(diffSettings(settings(), settings({ panel: { port: 3999 } }))).toEqual({ panel: { port: 3999 } })
+  })
+
+  it('sends an explicit null port when the field is cleared', () => {
+    expect(diffSettings(settings({ panel: { port: 3999 } }), settings({ panel: { port: null } })))
+      .toEqual({ panel: { port: null } })
+  })
 })
 
 describe('toggleAllowed', () => {
   it('adds a tool and keeps AGENT_TOOL_NAMES order', () => {
-    expect(toggleAllowed(['servers_list', 'status'], 'servers_start', true))
-      .toEqual(['status', 'servers_list', 'servers_start'])
+    expect(toggleAllowed(['servers_list', 'status'], 'servers_lifecycle', true))
+      .toEqual(['status', 'servers_list', 'servers_lifecycle'])
   })
 
   it('removes a tool', () => {

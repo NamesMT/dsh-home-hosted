@@ -99,7 +99,8 @@ export function buildDshEntry(facts: DshFacts): ServerEntry {
     health: {
       enabled: true,
       mode: 'http',
-      http: { path: '/', method: 'GET', expectStatusBelow: 400, expectBody: '' },
+      // 401 is normal here: the panel answers the login route when auth is on.
+      http: { path: '/', method: 'GET', expectStatusBelow: 500, expectBody: '' },
     },
   }
 }
