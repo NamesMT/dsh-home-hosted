@@ -47,6 +47,26 @@ the rest from the platform default policy; removing one restores an entry this
 plugin merely adopted, and deletes one it created. Removing an entry the panel
 supervises stops that process — which may be the session asking for it.
 
+## The sign-in page points at the log
+
+dsh web's unauthenticated 401 is a plain-text line written by the in-box
+connection plugin; it has no config and no event. The plugin wraps that one
+internal writer (`connection.browserAuth.writeUnauthorized`) and appends where
+the tokenised URL is — `<panel url>/logs?server=<entry>`. It rewrites **only** the
+exact stock body, guards every assignment, and replaces the response's `end` for
+the single call, so an authentication plugin's own page (or an exotic response)
+is passed through untouched rather than fought over. `authNotice` turns it off;
+`{url}` is read per 401.
+
+## Persistence keeps dsh alive across a panel restart
+
+A managed entry asks for `persistent: true`: home-hosted then runs it under its
+nanny, which owns the child and outlives `stopAll()`/`dispose()` — so restarting
+or stopping the *panel* no longer ends a prompt mid-flight. The key arrived in
+home-hosted 0.6.3, so the write and the drift check both consult the panel's
+version: an older panel gets no such key (it would only be dropped and warned),
+while the stored intent keeps what the person asked for.
+
 ## Approvals follow the session's sandbox
 
 A mutating agent tool asks the approval service only when the calling session is

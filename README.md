@@ -8,7 +8,7 @@
 [![node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![dsh](https://img.shields.io/badge/dsh-%3E%3D0.1.7--rc.2-5b21b6)](https://github.com/deepseek-ai/dsh)
 
-![The plugin's page, under Settings → Home Hosted](https://raw.githubusercontent.com/NamesMT/dsh-home-hosted/main/assets/settings.png)
+![The plugin's page: Detailed and Compact styles, under Settings → Home Hosted](https://raw.githubusercontent.com/NamesMT/dsh-home-hosted/main/assets/settings.gif)
 
 ## Install
 
@@ -16,13 +16,15 @@
 dsh plugin --profile web add dsh-home-hosted
 ```
 
-Then open **Settings → Home Hosted**. Nothing is installed or started until you say so.
+Then open **Settings → Home Hosted**. Nothing is installed or started until you say so; the page defaults to a **Detailed** style, with a Compact one beside the title.
 
 | | |
 |---|---|
 | 🚀 **Boot autostart** | Installs, verifies and removes the OS entry that starts the panel. Opt in per machine. |
+| 🛡️ **Survives a panel restart** | The managed `dsh` entry runs under home-hosted's nanny, so restarting the panel never cuts a prompt mid-flight. |
 | 📦 **Ships its own panel** | The pinned `home-hosted` is a dependency, so boot runs the version this plugin is tested against. |
 | 🖥️ **Server control** | Add, edit, start, stop and restart entries — written through the panel's API, so nothing restarts behind your back. |
+| 🧭 **A sign-in page that helps** | dsh's 401 points at the panel log holding the tokenised URL, instead of leaving you to find it. |
 | 🤖 **Agent tools** | On by default: the agent can inspect state, manage servers, install autostart and switch the panel's UI. |
 
 ## Agent tools
