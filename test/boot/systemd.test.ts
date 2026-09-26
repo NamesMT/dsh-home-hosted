@@ -85,7 +85,7 @@ describe('systemd --user', () => {
     const status = await provider.status(spec())
     expect(status.state).toBe('not-installed')
     expect(status.detail).toContain('UnitFileState=(none)')
-    expect(status.commands).toEqual(['sudo loginctl enable-linger mt'])
+    expect(status.commands).toEqual(['sudo loginctl enable-linger tester'])
   })
 
   it('maps is-enabled exit 1 with the file present to installed-disabled', async () => {
@@ -101,7 +101,7 @@ describe('systemd --user', () => {
     const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
     const status = await provider.status(spec())
     expect(status.state).toBe('installed-disabled')
-    expect(status.commands).toEqual([`sudo loginctl enable-linger mt`])
+    expect(status.commands).toEqual([`sudo loginctl enable-linger tester`])
   })
 
   it('reports enabled-failing when the last run failed', async () => {
@@ -170,7 +170,7 @@ describe('systemd --user', () => {
     const result = await provider.install(spec())
     expect(result.ok).toBe(true)
     expect(result.needsPrivilege).toBe(true)
-    expect(result.commands).toEqual(['sudo loginctl enable-linger mt'])
+    expect(result.commands).toEqual(['sudo loginctl enable-linger tester'])
     expect(result.detail).toMatch(/linger is off/)
   })
 
@@ -283,7 +283,7 @@ describe('systemd system', () => {
       run: runner.run,
       exists: file => file === '/run/systemd/system',
       sudo: async () => false,
-      env: { USER: 'mt', TMPDIR: home },
+      env: { USER: 'tester', TMPDIR: home },
     }))
     const result = await provider.install(spec())
     expect(result.ok).toBe(false)
@@ -315,7 +315,7 @@ describe('systemd system', () => {
       run: runner.run,
       exists: file => file === '/run/systemd/system',
       sudo: async () => true,
-      env: { USER: 'mt', TMPDIR: home },
+      env: { USER: 'tester', TMPDIR: home },
     }))
     const result = await provider.install(spec())
     expect(result.ok).toBe(true)

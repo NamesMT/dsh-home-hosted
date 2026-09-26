@@ -59,7 +59,7 @@ describe('windows run key', () => {
         home,
         run: runner.run,
         platform: 'win32',
-        env: { USER: 'mt', LOCALAPPDATA: path.join(home, 'AppData', 'Local'), TEMP: home },
+        env: { USER: 'tester', LOCALAPPDATA: path.join(home, 'AppData', 'Local'), TEMP: home },
       })),
     }
   }
@@ -102,7 +102,7 @@ describe('windows run key', () => {
   })
 
   it('writes a .cmd wrapper when the command line exceeds the Run value limit', async () => {
-    const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', `C:\\Users\\mt\\${'x'.repeat(260)}`] })
+    const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', `C:\\Users\\tester\\${'x'.repeat(260)}`] })
     const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)
     expect(payload.wrapperPath).not.toBeNull()
     expect(payload.data).toContain('cmd.exe /c ')
@@ -204,7 +204,7 @@ describe('windows scheduled task', () => {
         home,
         run: runner.run,
         platform: 'win32',
-        env: { USER: 'mt', TEMP: home },
+        env: { USER: 'tester', TEMP: home },
       })),
     }
   }

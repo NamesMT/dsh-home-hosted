@@ -2,7 +2,7 @@
 
 A DeepSeek Harness plugin for [home-hosted](https://github.com/NamesMT/home-hosted): start the panel at boot, and manage its servers from inside dsh.
 
-![The plugin's page under Settings → Home Hosted](assets/settings.png)
+![The plugin's page under Settings → Home Hosted](https://raw.githubusercontent.com/NamesMT/dsh-home-hosted/main/assets/settings.png)
 
 ## What it does
 

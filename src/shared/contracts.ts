@@ -60,7 +60,7 @@ export interface EndpointPayloads {
   'servers.stop': { id: string }
   'servers.restart': { id: string }
   'servers.freePort': { id: string }
-  'entries.apply': { intents: EntryIntent[], adopt?: boolean }
+  'entries.apply': { intents: EntryIntent[] }
   'entries.restore': { id: string }
   'boot.install': { mechanism?: BootMechanism }
   'boot.uninstall': { mechanism?: BootMechanism }

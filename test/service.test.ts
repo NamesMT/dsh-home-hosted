@@ -173,6 +173,17 @@ describe('home-hosted service', () => {
     expect(settings.intentFor('dsh').onPortConflict).toBe('kill')
   })
 
+  it('refuses to restore an entry it never adopted, instead of writing schema defaults over it', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    panel.servers.push({ id: 'dsh', config: { id: 'dsh', command: 'dsh', autostart: true, onPortConflict: 'follow', stop: { killPortHolders: true } } })
+
+    await expect(service.call('entries.restore', { id: 'dsh' })).rejects.toMatchObject({ code: 'NOT_ADOPTED' })
+    // Nothing was written: the person's own policy is still exactly as it was.
+    expect(panel.servers[0]!.config).toMatchObject({ autostart: true, onPortConflict: 'follow', stop: { killPortHolders: true } })
+    expect(panel.requests.some(entry => entry.method === 'PATCH')).toBe(false)
+  })
+
   it('refuses to delete the entry this process runs as, and allows any other', async () => {
     const panel = await withPanel()
     const { service } = await harness({ panel })

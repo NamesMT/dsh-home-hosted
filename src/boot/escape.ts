@@ -19,6 +19,8 @@ export function assertNoControl(value: string, what: string): string {
 export function assertUnitName(name: string): string {
   if (!/^[A-Za-z0-9._@-]+$/.test(name))
     throw new Error(`unit name ${JSON.stringify(name)} must match ^[A-Za-z0-9._@-]+$`)
+  if (name.startsWith('-') || name.startsWith('.') || name.includes('..'))
+    throw new Error(`unit name ${JSON.stringify(name)} must not be option-like or traverse paths`)
   return name
 }
 
@@ -80,18 +82,34 @@ export function shellCommand(program: string, args: string[]): string {
 
 /**
  * A word in `ExecStart=`/`ExecStop=`. systemd expands `%` specifiers and `$`
- * variables there before it splits the line, so both are pinned.
+ * variables there before it splits the line, so both are pinned, and `;` — the
+ * multi-command separator — is quoted rather than left bare.
  */
 export function systemdExecWord(value: string): string {
   assertNoControl(value, 'ExecStart word')
   const escaped = replaceAll(value, [['\\', '\\\\'], ['"', '\\"'], ['$', '$$'], ['%', '%%']])
-  return escaped !== value || /[\s"']/.test(value) ? `"${escaped}"` : value
+  return escaped !== value || /[\s"';]/.test(value) ? `"${escaped}"` : value
 }
 
-/** A single-line free-text setting such as `Description=` (specifiers only). */
+/**
+ * A single-line free-text setting such as `Description=` (specifiers only).
+ */
 export function systemdText(value: string): string {
   assertNoControl(value, 'unit setting')
-  return replaceAll(value, [['%', '%%']])
+  // A trailing backslash would continue the directive onto the next line.
+  return replaceAll(value, [['\\', '\\\\'], ['%', '%%']])
+}
+
+/**
+ * A path setting (`WorkingDirectory=`). systemd takes these verbatim — it does
+ * not unquote, and does not unescape `\%` or `\$` — so the only correct
+ * encoding is the raw value; anything that would break the line is refused.
+ */
+export function systemdPath(value: string, what = 'path'): string {
+  assertAbsolute(value, what)
+  if (value.includes('"'))
+    throw new Error(`${what} must not contain a double quote: ${JSON.stringify(value)}`)
+  return value
 }
 
 /** `Environment=KEY=value`, quoted as one assignment when the value needs it. */
@@ -181,7 +199,25 @@ export function windowsCommandLine(program: string, args: string[]): string {
 
 /** A line for a `.cmd` wrapper: `%` is a batch metacharacter and is doubled. */
 export function batchCommandLine(program: string, args: string[]): string {
-  return replaceAll(windowsCommandLine(program, args), [['%', '%%']])
+  return batchEscape(windowsCommandLine(program, args))
+}
+
+/**
+ * Make one already-quoted command line safe inside a batch file. `%` is doubled
+ * last: the `^` inserted for a metacharacter must not itself gain a caret.
+ */
+function batchEscape(line: string): string {
+  assertNoControl(line, 'batch command line')
+  return replaceAll(line, [
+    ['^', '^^'],
+    ['&', '^&'],
+    ['|', '^|'],
+    ['<', '^<'],
+    ['>', '^>'],
+    ['(', '^('],
+    [')', '^)'],
+    ['%', '%%'],
+  ])
 }
 
 /** A single-quoted PowerShell literal. */
@@ -204,10 +240,6 @@ export function windowsDisplayCommand(program: string, args: string[]): string {
 // ---------------------------------------------------------------------------
 // launchd / registry value names
 // ---------------------------------------------------------------------------
-
-export function launchdLabel(prefix: string, unitName: string): string {
-  return `${prefix}${assertUnitName(unitName)}`
-}
 
 export function assertRegistryValueName(name: string): string {
   if (name.trim() === '')

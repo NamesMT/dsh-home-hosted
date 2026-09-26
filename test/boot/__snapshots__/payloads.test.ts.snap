@@ -14,7 +14,7 @@ exports[`launchd payload > writes a plist with argv, KeepAlive, ThrottleInterval
 		<string>up</string>
 		<string>--foreground</string>
 		<string>--home</string>
-		<string>/home/mt/.home-hosted</string>
+		<string>/home/tester/.home-hosted</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -26,20 +26,20 @@ exports[`launchd payload > writes a plist with argv, KeepAlive, ThrottleInterval
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
 	<key>WorkingDirectory</key>
-	<string>/home/mt</string>
+	<string>/home/tester</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
 		<string>/usr/bin:/bin</string>
 		<key>HOME</key>
-		<string>/home/mt</string>
+		<string>/home/tester</string>
 		<key>HHOSTED_HOME</key>
-		<string>/home/mt/.home-hosted</string>
+		<string>/home/tester/.home-hosted</string>
 	</dict>
 	<key>StandardOutPath</key>
-	<string>/home/mt/.home-hosted/.logs/dev.home-hosted.home-hosted.out.log</string>
+	<string>/home/tester/.home-hosted/.logs/dev.home-hosted.home-hosted.out.log</string>
 	<key>StandardErrorPath</key>
-	<string>/home/mt/.home-hosted/.logs/dev.home-hosted.home-hosted.err.log</string>
+	<string>/home/tester/.home-hosted/.logs/dev.home-hosted.home-hosted.err.log</string>
 	<!-- Managed by managed-by:dsh-home-hosted -->
 </dict>
 </plist>
@@ -55,15 +55,15 @@ StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
-User=mt
+User=tester
 Type=exec
-ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted
-WorkingDirectory=/home/mt
+ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/tester/.home-hosted
+WorkingDirectory=/home/tester
 Restart=always
 RestartSec=5
 Environment=PATH=/usr/bin:/bin
-Environment=HOME=/home/mt
-Environment=HHOSTED_HOME=/home/mt/.home-hosted
+Environment=HOME=/home/tester
+Environment=HHOSTED_HOME=/home/tester/.home-hosted
 
 [Install]
 WantedBy=multi-user.target
@@ -78,20 +78,20 @@ After=network-online.target
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted
-WorkingDirectory=/home/mt
+ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/tester/.home-hosted
+WorkingDirectory=/home/tester
 Restart=always
 RestartSec=5
 Environment=PATH=/usr/bin:/bin
-Environment=HOME=/home/mt
-Environment=HHOSTED_HOME=/home/mt/.home-hosted
+Environment=HOME=/home/tester
+Environment=HHOSTED_HOME=/home/tester/.home-hosted
 
 [Install]
 WantedBy=default.target
 "
 `;
 
-exports[`windows payloads > builds the Register-ScheduledTask script from cmdlets 1`] = `"$action = New-ScheduledTaskAction -Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument 'C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\mt\\.home-hosted' -WorkingDirectory 'C:\\Users\\mt'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Register-ScheduledTask -TaskName 'home-hosted' -Action $action -Trigger $trigger -Settings $settings -Description 'managed-by:dsh-home-hosted' -Force | Out-Null"`;
+exports[`windows payloads > builds the Register-ScheduledTask script from cmdlets 1`] = `"$action = New-ScheduledTaskAction -Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument 'C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\tester\\.home-hosted' -WorkingDirectory 'C:\\Users\\tester'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Register-ScheduledTask -TaskName 'home-hosted' -Action $action -Trigger $trigger -Settings $settings -Description 'managed-by:dsh-home-hosted' -Force | Out-Null"`;
 
 exports[`windows payloads > writes task XML with the marker, a logon trigger and restart settings 1`] = `
 "<?xml version="1.0" encoding="UTF-16"?>
@@ -124,8 +124,8 @@ exports[`windows payloads > writes task XML with the marker, a logon trigger and
 <Actions Context="Author">
 <Exec>
 <Command>C:\\Program Files\\nodejs\\node.exe</Command>
-<Arguments>C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\mt\\.home-hosted</Arguments>
-<WorkingDirectory>C:\\Users\\mt</WorkingDirectory>
+<Arguments>C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\tester\\.home-hosted</Arguments>
+<WorkingDirectory>C:\\Users\\tester</WorkingDirectory>
 </Exec>
 </Actions>
 </Task>
@@ -137,8 +137,8 @@ exports[`xdg payload > writes a login-scope desktop entry with a non-shell Exec 
 Type=Application
 Name=home-hosted panel
 Comment=home-hosted daemon, managed by managed-by:dsh-home-hosted
-Exec=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted
-Path=/home/mt
+Exec=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/tester/.home-hosted
+Path=/home/tester
 Terminal=false
 X-GNOME-Autostart-enabled=true
 X-HomeHosted-Marker=managed-by:dsh-home-hosted

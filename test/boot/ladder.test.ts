@@ -59,7 +59,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
-      env: { USER: 'mt', UID: '1000' },
+      env: { USER: 'tester', UID: '1000' },
       run: runner.run,
       sudo: async () => false,
       exists: file => file === '/run/systemd/system',
@@ -81,7 +81,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
-      env: { USER: 'mt', UID: '1000' },
+      env: { USER: 'tester', UID: '1000' },
       run: runner.run,
       sudo: async () => false,
       exists: () => false,
@@ -109,7 +109,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
-      env: { USER: 'mt', UID: '1000' },
+      env: { USER: 'tester', UID: '1000' },
       run: runner.run,
       sudo: async () => true,
       exists: file => file === '/run/systemd/system',
@@ -132,7 +132,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
-      env: { USER: 'mt', UID: '1000' },
+      env: { USER: 'tester', UID: '1000' },
       run: runner.run,
       sudo: async () => false,
       exists: file => file === '/.dockerenv',
@@ -157,7 +157,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'darwin',
       home,
-      env: { USER: 'mt', UID: '1000' },
+      env: { USER: 'tester', UID: '1000' },
       run: runner.run,
       sudo: async () => false,
       exists: () => false,
@@ -173,7 +173,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'win32',
       home,
-      env: { USER: 'mt', LOCALAPPDATA: path.join(home, 'AppData', 'Local') },
+      env: { USER: 'tester', LOCALAPPDATA: path.join(home, 'AppData', 'Local') },
       run: runner.run,
       sudo: async () => false,
       exists: () => false,
@@ -209,7 +209,7 @@ describe('ladder install and uninstall', () => {
       ladder: createBootLadder({
         platform: 'linux',
         home,
-        env: { USER: 'mt', UID: '1000' },
+        env: { USER: 'tester', UID: '1000' },
         run: runner.run,
         sudo: async () => false,
         exists: () => false,

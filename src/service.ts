@@ -382,7 +382,7 @@ export class HomeHostedService extends Service {
     )
   }
 
-  private async applyIntents(intents: EntryIntent[], adopt = false): Promise<ManagedEntryStatus[]> {
+  private async applyIntents(intents: EntryIntent[]): Promise<ManagedEntryStatus[]> {
     for (const raw of intents) {
       if (!ENTRY_ID_PATTERN.test(raw.id))
         throw new HomeHostedError(`"${raw.id}" is not a valid server id`, 'INVALID_ID')
@@ -407,6 +407,10 @@ export class HomeHostedService extends Service {
     if (live === null)
       throw new HomeHostedError(`no server "${id}" exists`, 'ENTRY_MISSING')
     const snapshots = this.snapshots()
+    // A restore without a snapshot would write schema defaults over the person's
+    // own autostart and conflict policy, silently and irreversibly.
+    if (snapshots[id] === undefined)
+      throw new HomeHostedError(`"${id}" was never adopted by this plugin, so there is nothing to restore; adopt it first`, 'NOT_ADOPTED')
     const patch = restorePatch(live.config, snapshots[id] ?? null)
     const client = await this.tryClient()
     if (client !== null)
@@ -736,7 +740,7 @@ export class HomeHostedService extends Service {
 
       case 'entries.apply': {
         const intents = Array.isArray(input.intents) ? input.intents as EntryIntent[] : []
-        return await this.applyIntents(intents, input.adopt === true)
+        return await this.applyIntents(intents)
       }
 
       case 'entries.restore':

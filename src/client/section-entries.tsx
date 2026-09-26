@@ -58,7 +58,6 @@ export function EntriesSection({ t, status, run, busy }: SectionProps) {
                     busy={busy === `entries.adopt:${id}`}
                     onClick={() => run(`entries.adopt:${id}`, () => rpc('entries.apply', {
                       intents: [entry.intent],
-                      adopt: true,
                     }))}
                   >
                     {t('entriesAdopt')}
@@ -73,6 +72,7 @@ export function EntriesSection({ t, status, run, busy }: SectionProps) {
                   </Button>
                   <Button
                     busy={busy === `entries.restore:${id}`}
+                    disabled={!entry.managed}
                     onClick={() => run(`entries.restore:${id}`, () => rpc('entries.restore', { id }))}
                   >
                     {t('entriesRestore')}

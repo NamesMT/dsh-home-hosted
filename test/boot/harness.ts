@@ -59,13 +59,13 @@ export function cleanup(dir: string): void {
 export function spec(overrides: Partial<BootSpec> = {}): BootSpec {
   return {
     command: '/usr/bin/node',
-    args: ['/opt/home-hosted/dist/cli.js', 'up', '--foreground', '--home', '/home/mt/.home-hosted'],
-    cwd: '/home/mt',
-    env: { PATH: '/usr/bin:/bin', HOME: '/home/mt', HHOSTED_HOME: '/home/mt/.home-hosted' },
+    args: ['/opt/home-hosted/dist/cli.js', 'up', '--foreground', '--home', '/home/tester/.home-hosted'],
+    cwd: '/home/tester',
+    env: { PATH: '/usr/bin:/bin', HOME: '/home/tester', HHOSTED_HOME: '/home/tester/.home-hosted' },
     marker: 'managed-by:dsh-home-hosted',
     unitName: 'home-hosted',
     label: 'home-hosted panel',
-    logDir: '/home/mt/.home-hosted/.logs',
+    logDir: '/home/tester/.home-hosted/.logs',
     ...overrides,
   }
 }
@@ -73,13 +73,13 @@ export function spec(overrides: Partial<BootSpec> = {}): BootSpec {
 export function winSpec(overrides: Partial<BootSpec> = {}): BootSpec {
   return {
     command: 'C:\\Program Files\\nodejs\\node.exe',
-    args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', 'C:\\Users\\mt\\.home-hosted'],
-    cwd: 'C:\\Users\\mt',
-    env: { PATH: 'C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\mt' },
+    args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', 'C:\\Users\\tester\\.home-hosted'],
+    cwd: 'C:\\Users\\tester',
+    env: { PATH: 'C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\tester' },
     marker: 'managed-by:dsh-home-hosted',
     unitName: 'home-hosted',
     label: 'home-hosted panel',
-    logDir: 'C:\\Users\\mt\\.home-hosted\\.logs',
+    logDir: 'C:\\Users\\tester\\.home-hosted\\.logs',
     ...overrides,
   }
 }
@@ -87,7 +87,7 @@ export function winSpec(overrides: Partial<BootSpec> = {}): BootSpec {
 export function ctxFor(overrides: Partial<BootProviderContext> & { home: string, run: BootProviderContext['run'] }): BootProviderContext {
   return {
     platform: 'linux',
-    env: { USER: 'mt', UID: '1000' },
+    env: { USER: 'tester', UID: '1000' },
     sudo: async () => false,
     isRoot: false,
     ...overrides,

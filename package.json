@@ -1,13 +1,19 @@
 {
   "name": "dsh-home-hosted",
   "version": "0.1.0",
-  "private": true,
   "description": "Boot autostart for home-hosted and home-hosted server management from DeepSeek Harness.",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NamesMT/dsh-home-hosted.git"
+  },
+  "homepage": "https://github.com/NamesMT/dsh-home-hosted#readme",
+  "bugs": {
+    "url": "https://github.com/NamesMT/dsh-home-hosted/issues"
   },
   "keywords": [
     "deepseek-harness",
@@ -43,8 +49,10 @@
     "build": "node scripts/build.mjs && node scripts/build-client.mjs && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "build:host": "node scripts/build.mjs",
     "build:client": "node scripts/build-client.mjs",
+    "prepack": "pnpm run build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "pnpm run typecheck && pnpm run test"
   },
   "dsh": {
     "manifestVersion": 1,

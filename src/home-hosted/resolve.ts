@@ -106,11 +106,13 @@ export function compareVersions(a: string, b: string): number {
   return left.pre < right.pre ? -1 : 1
 }
 
-function detailFor(source: CliSource, version: string | null, supported: boolean, prefer: CliPreference): string {
+function detailFor(source: CliSource, version: string | null, supported: boolean, prefer: CliPreference, unusableOverride: string | null = null): string {
   const shown = version ?? 'unknown version'
   switch (source) {
     case 'config':
-      return `from the configured command (${shown})`
+      return unusableOverride === null
+        ? `from the configured command (${shown})`
+        : `the configured command could not be used: ${unusableOverride} does not exist (or is not a file this plugin can run); fix homeHostedCommand, or clear it to let the plugin choose`
     case 'dependency':
       return supported
         ? `the pinned dependency (${shown})`
@@ -137,11 +139,17 @@ export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliRe
   const readVersion = options.readVersion ?? (launch => defaultReadVersion(launch, timeoutMs))
   const locate = options.findOnPath ?? which
 
-  // 1. An explicit override is not a preference: it is an instruction.
+  // 1. An explicit override is not a preference: it is an instruction. An
+  //    instruction that cannot be carried out is reported, never silently
+  //    replaced by a copy the operator did not ask for.
   const override = options.override?.trim()
+  let unusableOverride: string | null = null
   if (override !== undefined && override.length > 0) {
     const launch = resolveShimmedCli(path.resolve(override))
-    if (launch !== null) {
+    if (launch === null) {
+      unusableOverride = override
+    }
+    else {
       const version = await readVersion(launch)
       const supported = version === null || compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
       return {
@@ -195,6 +203,23 @@ export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliRe
   const chosen = order.find(item => item !== null) ?? null
   const dependencySummary = dependency?.candidate ?? null
   const globalSummary = global?.candidate ?? null
+
+  if (unusableOverride !== null) {
+    return {
+      launch: null,
+      status: {
+        source: 'config',
+        path: unusableOverride,
+        version: null,
+        expectedRange: EXPECTED_RANGE,
+        supported: false,
+        prefer,
+        dependency: dependencySummary,
+        global: globalSummary,
+        detail: detailFor('config', null, false, prefer, unusableOverride),
+      },
+    }
+  }
 
   if (chosen === null) {
     return {

@@ -17,6 +17,7 @@ import {
   shellCommand,
   systemdEnvLine,
   systemdExecWord,
+  systemdPath,
   systemdText,
 } from './escape.js'
 import {
@@ -69,7 +70,7 @@ export function systemdUserUnit(spec: BootSpec): string {
     '[Service]',
     'Type=exec',
     `ExecStart=${[spec.command, ...spec.args].map(systemdExecWord).join(' ')}`,
-    `WorkingDirectory=${systemdExecWord(spec.cwd)}`,
+    `WorkingDirectory=${systemdPath(spec.cwd, 'spec.cwd')}`,
     'Restart=always',
     'RestartSec=5',
     ...envLines(spec),
@@ -98,7 +99,7 @@ export function systemdSystemUnit(spec: BootSpec, user: string | null = null): s
     ...(user ? [`User=${user}`] : []),
     'Type=exec',
     `ExecStart=${[spec.command, ...spec.args].map(systemdExecWord).join(' ')}`,
-    `WorkingDirectory=${systemdExecWord(spec.cwd)}`,
+    `WorkingDirectory=${systemdPath(spec.cwd, 'spec.cwd')}`,
     'Restart=always',
     'RestartSec=5',
     ...envLines(spec),
@@ -303,15 +304,19 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
           return failed(own.reason ?? 'foreign file')
 
         const before = await readUnit(ctx, unit, 'user')
-        if (before.reachable) {
+        if (!before.reachable && !own.exists) {
+          return { ok: true, changed: false, detail: `no unit file at ${file} and systemctl is unavailable; nothing to remove`, commands: [], needsPrivilege: false }
+        }
+        // A unit of the same name can come from anywhere on the search path; with
+        // no file of ours, disabling by name would stop somebody else's unit.
+        if (!own.owned && !own.exists && before.installed)
+          return failed(`a unit named ${unit} exists but no unit file of ours is at ${file}; refusing to disable a unit this plugin did not install`)
+        if (own.owned && before.reachable) {
           const disableCommand = shellCommand('systemctl', ['--user', 'disable', '--now', unit])
           const disable = await ctx.run('systemctl', ['--user', 'disable', '--now', unit])
           const disableCode = codeOf(disable)
           if (disableCode !== 0 && disableCode !== 1 && disableCode !== 4)
             return failed(problem(disable, disableCommand) ?? 'disable failed', { commands: [disableCommand] })
-        }
-        else if (!own.exists) {
-          return { ok: true, changed: false, detail: `no unit file at ${file} and systemctl is unavailable; nothing to remove`, commands: [], needsPrivilege: false }
         }
 
         const remove = removeOwned(file, spec.marker)
@@ -504,6 +509,10 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
         }
 
         const prefix = ctx.isRoot ? [] : ['-n']
+        // With no file of ours at the path we write, a same-named unit belongs to
+        // somebody else (a vendor unit in /usr/lib/systemd/system): leave it alone.
+        if (!own.exists && !own.owned)
+          return failed(`no unit file of ours at ${file}; refusing to disable a unit this plugin did not install`)
         const disableCommand = shellCommand('sudo', ['systemctl', 'disable', '--now', unit])
         const disable = await ctx.run('sudo', [...prefix, 'systemctl', 'disable', '--now', unit])
         const disableCode = codeOf(disable)
@@ -517,6 +526,10 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
               return failed(remove.refusal)
           }
           else {
+            // The check above ran as the invoking user, which cannot read a
+            // root-only file; re-prove ownership before the privileged delete.
+            if (!own.owned)
+              return failed(own.reason ?? 'foreign file')
             const rmCommand = shellCommand('sudo', ['rm', '-f', file])
             const rm = await ctx.run('sudo', ['-n', 'rm', '-f', file])
             const rmProblem = problem(rm, rmCommand)

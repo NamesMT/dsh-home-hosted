@@ -14,15 +14,15 @@ describe('systemd payloads', () => {
     expect(unit).toContain('Restart=always')
     expect(unit).toContain('RestartSec=5')
     expect(unit).toContain('WantedBy=default.target')
-    expect(unit).toContain('Environment=HHOSTED_HOME=/home/mt/.home-hosted')
+    expect(unit).toContain('Environment=HHOSTED_HOME=/home/tester/.home-hosted')
     expect(unit).not.toContain('StartLimitIntervalSec')
   })
 
   it('writes a system unit with StartLimit* in [Unit] and User= only when known', () => {
-    const unit = systemdSystemUnit(spec(), 'mt')
+    const unit = systemdSystemUnit(spec(), 'tester')
     expect(unit).toMatchSnapshot()
     expect(unit).toContain('WantedBy=multi-user.target')
-    expect(unit).toContain('User=mt')
+    expect(unit).toContain('User=tester')
     const unitIndex = unit.indexOf('[Unit]')
     const limitIndex = unit.indexOf('StartLimitIntervalSec=60')
     const serviceIndex = unit.indexOf('[Service]')
@@ -51,14 +51,14 @@ describe('xdg payload', () => {
     expect(entry).toContain('Terminal=false')
     expect(entry).toContain('X-GNOME-Autostart-enabled=true')
     expect(entry).toContain('X-HomeHosted-Marker=managed-by:dsh-home-hosted')
-    expect(entry).toContain(`Exec=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/mt/.home-hosted`)
+    expect(entry).toContain(`Exec=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/tester/.home-hosted`)
     expect(entry).not.toContain('~')
   })
 })
 
 describe('launchd payload', () => {
   it('writes a plist with argv, KeepAlive, ThrottleInterval and log paths', () => {
-    const plist = launchdPlist(spec({ logDir: '/home/mt/.home-hosted/.logs' }))
+    const plist = launchdPlist(spec({ logDir: '/home/tester/.home-hosted/.logs' }))
     expect(plist).toMatchSnapshot()
     expect(plist).toContain('<key>Label</key>')
     expect(plist).toContain('<string>dev.home-hosted.home-hosted</string>')
@@ -66,7 +66,7 @@ describe('launchd payload', () => {
     expect(plist).toContain('<key>SuccessfulExit</key>')
     expect(plist).toContain('<integer>10</integer>')
     expect(plist).toContain('<key>WorkingDirectory</key>')
-    expect(plist).toContain('<string>/home/mt/.home-hosted/.logs/dev.home-hosted.home-hosted.err.log</string>')
+    expect(plist).toContain('<string>/home/tester/.home-hosted/.logs/dev.home-hosted.home-hosted.err.log</string>')
     expect(plist).toContain('<!-- Managed by managed-by:dsh-home-hosted -->')
   })
 })
@@ -80,7 +80,7 @@ describe('windows payloads', () => {
     expect(xml).toContain('<RestartOnFailure>')
     expect(xml).toContain('<Count>3</Count>')
     expect(xml).toContain('<Command>C:\\Program Files\\nodejs\\node.exe</Command>')
-    expect(xml).toContain('<WorkingDirectory>C:\\Users\\mt</WorkingDirectory>')
+    expect(xml).toContain('<WorkingDirectory>C:\\Users\\tester</WorkingDirectory>')
   })
 
   it('builds the Register-ScheduledTask script from cmdlets', () => {

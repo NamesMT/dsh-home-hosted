@@ -88,11 +88,17 @@ describe('panel control', () => {
     expect(result.ok).toBe(true)
     expect(result.detail).toContain('disconnect')
 
-    // The helper waits for a pid that is already gone, starts the CLI, and logs.
-    for (let attempt = 0; attempt < 40 && !fs.existsSync(log); attempt += 1)
+    // The helper stops the old panel first, then starts the CLI; poll for the
+    // last line rather than for the file, which exists after the first write.
+    const helperLog = path.join(d.stateDir, 'bin', 'panel-takeover.log')
+    const contains = (file: string, needle: string): boolean =>
+      fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes(needle)
+    for (let attempt = 0; attempt < 60 && !contains(log, 'up --home'); attempt += 1)
       await new Promise(resolve => setTimeout(resolve, 100))
     expect(fs.readFileSync(log, 'utf8')).toContain('up')
-    expect(fs.readFileSync(path.join(d.stateDir, 'bin', 'panel-takeover.log'), 'utf8')).toContain('started with exit')
+    for (let attempt = 0; attempt < 60 && !contains(helperLog, 'started with exit'); attempt += 1)
+      await new Promise(resolve => setTimeout(resolve, 100))
+    expect(fs.readFileSync(helperLog, 'utf8')).toContain('started with exit')
   })
 
   it('installs globally through the chosen package manager', async () => {

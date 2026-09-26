@@ -234,15 +234,20 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         const own = inspectOwned(file, spec.marker)
         if (own.exists && !own.owned)
           return failed(own.reason ?? 'foreign file')
-        if (!(await privileged()))
+        const staged = posixJoin(tempDir(ctx), `${label}.plist`)
+        if (!(await privileged())) {
+          // The command below installs this exact file, so it has to exist.
+          ensureDirQuiet(path.posix.dirname(staged))
+          fs.writeFileSync(staged, content, { mode: 0o644 })
           return failed('writing /Library/LaunchDaemons needs root; the plist is staged for you to install', {
             needsPrivilege: true,
             commands: [
-              shellCommand('sudo', ['install', '-m', '0644', posixJoin(tempDir(ctx), `${label}.plist`), file]),
+              shellCommand('sudo', ['install', '-m', '0644', staged, file]),
               shellCommand('sudo', ['launchctl', 'bootstrap', 'system', file]),
               shellCommand('sudo', ['launchctl', 'enable', `system/${label}`]),
             ],
           })
+        }
 
         const domain = await domainOf()
         if (domain === null)
@@ -262,7 +267,6 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
           changed = write.changed
         }
         else {
-          const staged = posixJoin(tempDir(ctx), `${label}.plist`)
           ensureDirQuiet(path.dirname(staged))
           fs.writeFileSync(staged, content, { mode: 0o644 })
           changed = !before.exists || before.text !== content
@@ -338,6 +342,10 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         }
 
         const domain = await domainOf()
+        // A job under this label may belong to a plist we did not write; never
+        // boot out a job whose own file is not ours.
+        if (!own.exists && !own.owned)
+          return failed(`no plist of ours at ${file}; refusing to unload a job this plugin did not install`)
         let changed = false
         if (domain !== null) {
           const bootout = await runPrivileged('launchctl', ['bootout', `${domain}/${label}`])
@@ -357,6 +365,10 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
               changed = true
           }
           else {
+            // Re-prove ownership before the privileged delete: the check above
+            // ran as the invoking user, which may not be able to read the file.
+            if (!own.owned)
+              return failed(own.reason ?? 'foreign file')
             const rmCommand = shellCommand('sudo', ['rm', '-f', file])
             const rm = await runPrivileged('rm', ['-f', file])
             if (codeOf(rm) !== 0)

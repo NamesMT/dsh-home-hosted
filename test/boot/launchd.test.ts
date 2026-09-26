@@ -218,7 +218,7 @@ describe('launchd daemon', () => {
       run: runner.run,
       platform: 'darwin',
       sudo: async () => false,
-      env: { USER: 'mt', UID: '1000', TMPDIR: home },
+      env: { USER: 'tester', UID: '1000', TMPDIR: home },
     }))
     const result = await provider.install(daemonSpec)
     expect(result.ok).toBe(false)
@@ -251,7 +251,7 @@ describe('launchd daemon', () => {
       run: runner.run,
       platform: 'darwin',
       sudo: async () => true,
-      env: { USER: 'mt', UID: '1000', TMPDIR: home },
+      env: { USER: 'tester', UID: '1000', TMPDIR: home },
     }))
     const result = await provider.install(daemonSpec)
     expect(result.ok).toBe(true)

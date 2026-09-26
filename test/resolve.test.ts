@@ -68,6 +68,24 @@ describe('CLI resolution order', () => {
     expect(resolution.launch?.program).toBe(process.execPath)
   })
 
+  it('reports an override that does not exist instead of silently running another copy', async () => {
+    scratch = tempDir()
+    const manifest = fakePackage(scratch.path)
+    const missing = path.join(scratch.path, 'nowhere', 'home-hosted')
+    const resolution = await resolveCli({
+      override: missing,
+      packageManifest: () => manifest,
+    })
+    // Never substituted: the operator asked for this exact command.
+    expect(resolution.launch).toBeNull()
+    expect(resolution.status.source).toBe('config')
+    expect(resolution.status.path).toBe(missing)
+    expect(resolution.status.supported).toBe(false)
+    expect(resolution.status.detail).toContain('could not be used')
+    // The alternatives are still reported, so the page can offer them.
+    expect(resolution.status.dependency).toMatchObject({ source: 'dependency' })
+  })
+
   it('prefers the plugin\'s own pinned dependency over PATH', async () => {
     scratch = tempDir()
     const manifest = fakePackage(scratch.path)

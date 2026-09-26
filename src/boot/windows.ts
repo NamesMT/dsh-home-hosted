@@ -151,7 +151,9 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         const markerValue = await queryReg(ctx, MARKER_KEY, name)
         const owned = markerValue.data?.includes(marker) === true
         const current = await queryReg(ctx, RUN_KEY, name)
-        if (current.exists && !owned && current.data !== payload.data)
+        // A value the marker does not prove is ours is never touched and never
+        // claimed, even when it already equals what we would write.
+        if (current.exists && !owned)
           return failed(`${RUN_KEY}\\${name} already exists and was not written by this plugin; refusing to overwrite it`)
 
         const commands: string[] = [
@@ -166,7 +168,7 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
           changed = write.changed || changed
         }
 
-        if (current.data !== payload.data) {
+        if (!current.exists || current.data !== payload.data) {
           const add = await addValue(RUN_KEY, name, payload.data)
           const addProblem = problem(add, commands[0] ?? 'reg.exe add')
           if (addProblem)
