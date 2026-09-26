@@ -53,6 +53,19 @@ export function currentUser(ctx: BootProviderContext): string | null {
   }
 }
 
+/** The invoking user's name, so a root-level entry can drop to it. */
+export function userNameOf(ctx: BootProviderContext): string | null {
+  const configured = ctx.env.USER?.trim() ?? ctx.env.USERNAME?.trim()
+  if (configured !== undefined && configured.length > 0)
+    return configured
+  try {
+    return os.userInfo().username
+  }
+  catch {
+    return null
+  }
+}
+
 export function uidOf(ctx: BootProviderContext): string | null {
   const configured = ctx.env.UID?.trim()
   if (configured)

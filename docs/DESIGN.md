@@ -41,6 +41,16 @@ CLI that will parse it next. Below 0.6.0 the write is refused with
 `KILL_UNSUPPORTED` and the page offers the fix it already has — replace the panel
 with the preferred copy, or choose another policy.
 
+## macOS: agent or daemon
+
+A `LaunchAgent` starts at login; starting before login means a `LaunchDaemon` in
+`/Library/LaunchDaemons`, which is root-owned and needs a one-time `sudo`
+install. The daemon is therefore offered even when this process cannot elevate:
+install stages the plist and returns the three commands to run. The daemon plist
+names the invoking user in `UserName`, Apple's sanctioned way to avoid running
+the panel as root, and the recommendation still prefers a mechanism this process
+can install on its own so "Automatic" stays a single click.
+
 ## macOS: reachable launchd is not a requirement
 
 A plist in `~/Library/LaunchAgents` is loaded by launchd at the next login whether

@@ -28,6 +28,7 @@ import {
   removeOwned,
   tempDir,
   uidOf,
+  userNameOf,
   writeOwned,
 } from './common.js'
 
@@ -58,9 +59,15 @@ export function launchdLabel(spec: BootSpec): string {
 }
 
 /** The full property list. The marker rides in an XML comment, which launchd ignores. */
-export function launchdPlist(spec: BootSpec): string {
+export interface LaunchdPlistOptions {
+  /** Set for a LaunchDaemon: launchd would otherwise run the panel as root. */
+  userName?: string | null
+}
+
+export function launchdPlist(spec: BootSpec, options: LaunchdPlistOptions = {}): string {
   validate(spec)
   const label = launchdLabel(spec)
+  const userName = options.userName?.trim()
   const out = path.posix.join(spec.logDir, `${label}.out.log`)
   const err = path.posix.join(spec.logDir, `${label}.err.log`)
   const envKeys = Object.keys(spec.env)
@@ -71,6 +78,9 @@ export function launchdPlist(spec: BootSpec): string {
     '<dict>',
     '\t<key>Label</key>',
     `\t<string>${xmlEscape(label)}</string>`,
+    ...(userName === undefined || userName.length === 0
+      ? []
+      : ['\t<key>UserName</key>', `\t<string>${xmlEscape(userName)}</string>`]),
     '\t<key>ProgramArguments</key>',
     '\t<array>',
     ...[spec.command, ...spec.args].map(arg => `\t\t<string>${xmlEscape(arg)}</string>`),
@@ -192,12 +202,15 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
       const canElevate = ctx.isRoot || (await ctx.sudo())
       return {
         mechanism,
-        available: canElevate,
-        bootCapable: canElevate,
+        // Always selectable: without root the plugin stages the plist and hands
+        // over the three sudo commands, which is the only way to start before
+        // login on a Mac that has no passwordless sudo.
+        available: true,
+        bootCapable: true,
         privileged: canElevate,
         reason: canElevate
           ? 'this process can write /Library/LaunchDaemons, so a LaunchDaemon starts at boot'
-          : 'a LaunchDaemon needs root or passwordless sudo',
+          : 'a LaunchDaemon starts at boot but needs root here, so the plugin stages the plist and shows the sudo commands',
       }
     },
 
@@ -233,7 +246,7 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         validate(spec)
         const file = pathOf(spec)
         const label = launchdLabel(spec)
-        const content = launchdPlist(spec)
+        const content = launchdPlist(spec, mode === 'daemon' ? { userName: userNameOf(ctx) } : {})
         const own = inspectOwned(file, spec.marker)
         if (own.exists && !own.owned)
           return failed(own.reason ?? 'foreign file')

@@ -39,7 +39,7 @@ Everything a person toggles lives in `<stateDir>/settings.json`, including **Opt
 
 - A plugin cannot act at boot: it installs and re-syncs the OS entry while dsh runs, and the OS starts home-hosted from then on.
 - The plugin ships its own `home-hosted` (pinned range) and runs that copy by default; Options in the page can switch to a global install instead. Boot entries run a small stable launcher it writes, so a `node_modules` path that moves never breaks boot.
-- Boot (pre-login) scope needs privilege somewhere — a system unit, or `loginctl enable-linger` on Linux. When the process cannot elevate, the page shows the exact commands to run by hand.
+- Boot (pre-login) needs privilege somewhere, and the page shows the exact commands when it cannot elevate: on macOS pick the boot-scope **launchd-daemon** (a one-time `sudo` install), on Linux **systemd-system** or `loginctl enable-linger`. A `LaunchAgent` and an XDG entry start at login only.
 - The panel API token this plugin uses is minted on first write and kept 0600 under the plugin state directory; it is never rendered or logged.
 - `onPortConflict: kill` needs home-hosted 0.6.0 or newer; against an older panel the plugin refuses that write and says so, because that panel cannot parse the config it would produce.
 

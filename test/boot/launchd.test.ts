@@ -228,12 +228,16 @@ describe('launchd daemon', () => {
   })
   afterEach(() => cleanup(home))
 
-  it('needs root', async () => {
+  it('is selectable without root, but says it needs the sudo commands', async () => {
     const runner = fakeRun()
     const provider = createLaunchdDaemonProvider(ctxFor({ home, run: runner.run, platform: 'darwin', sudo: async () => false }))
     const candidate = await provider.detect()
-    expect(candidate.available).toBe(false)
-    expect(candidate.reason).toMatch(/root/)
+    // Starting before login is the reason to choose it, so it must be offered
+    // even when this process cannot elevate; install then stages the plist.
+    expect(candidate.available).toBe(true)
+    expect(candidate.bootCapable).toBe(true)
+    expect(candidate.privileged).toBe(false)
+    expect(candidate.reason).toMatch(/sudo/)
   })
 
   it('reports the sudo install command when privilege is missing', async () => {
@@ -302,7 +306,17 @@ describe('launchd daemon', () => {
     const staged = path.join(home, `${LABEL}.plist`)
     expect(result.commands[0]).toContain(staged)
     expect(fs.existsSync(staged)).toBe(true)
-    expect(fs.readFileSync(staged, 'utf8')).toBe(launchdPlist(daemonSpec))
+    // The staged daemon names the invoking user, so it does not run the panel as root.
+    expect(fs.readFileSync(staged, 'utf8')).toBe(launchdPlist(daemonSpec, { userName: 'tester' }))
+    expect(fs.readFileSync(staged, 'utf8')).toContain('<key>UserName</key>')
     expect(runner.calls.some(call => call.command === 'sudo')).toBe(false)
+  })
+})
+
+describe('launchd plist scope', () => {
+  it('names a user only for a daemon, never for an agent', () => {
+    const template = spec({ logDir: '/tmp/logs' })
+    expect(launchdPlist(template, { userName: 'tester' })).toContain('<key>UserName</key>')
+    expect(launchdPlist(template)).not.toContain('<key>UserName</key>')
   })
 })

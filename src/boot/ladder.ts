@@ -96,12 +96,24 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     const available = providers
       .map(provider => provider.mechanism)
       .filter(mechanism => byMechanism.get(mechanism)?.available === true)
-    const bootCapable = available.find(mechanism => mechanism !== 'container' && byMechanism.get(mechanism)?.bootCapable === true)
-    if (bootCapable)
-      return bootCapable
-    // Inside a container no OS entry starts anything, so the honest advice is the restart policy.
+    const usable = (mechanism: string): boolean => mechanism !== 'container' && mechanism !== 'unsupported'
+    // Inside a container no OS entry starts anything, so the honest advice is the
+    // restart policy — ahead of anything else that merely looks available.
     if (available.includes('container'))
       return 'container'
+    // A boot-capable mechanism that needs a password prompt is offered, but it is
+    // not the *recommendation*: automatic should mean zero manual steps.
+    const readyBoot = available.find(mechanism => usable(mechanism)
+      && byMechanism.get(mechanism)?.bootCapable === true
+      && byMechanism.get(mechanism)?.privileged === true)
+    if (readyBoot)
+      return readyBoot
+    const ready = available.find(mechanism => usable(mechanism) && byMechanism.get(mechanism)?.privileged === true)
+    if (ready)
+      return ready
+    const bootCapable = available.find(mechanism => usable(mechanism) && byMechanism.get(mechanism)?.bootCapable === true)
+    if (bootCapable)
+      return bootCapable
     return available.find(mechanism => mechanism !== 'unsupported')
       ?? available[0]
       ?? null

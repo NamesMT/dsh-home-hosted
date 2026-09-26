@@ -85,6 +85,7 @@ export const en = {
   bootPrivileged: 'This process can install it',
   bootUnitPath: 'Unit path',
   bootCommands: 'Manual commands',
+  bootLoginScope: 'This entry starts at login. To start before login, choose a boot-scope mechanism: launchd-daemon on macOS (needs sudo once), or systemd-system / linger on Linux.',
   bootCommandsExplain:
     'This process could not elevate. Run these commands yourself to install autostart:',
   bootRecheck: 'Re-check',
@@ -207,6 +208,7 @@ export const zh: Record<keyof typeof en, string> = {
   bootPrivileged: '本进程可安装',
   bootUnitPath: '单元文件路径',
   bootCommands: '手动命令',
+  bootLoginScope: '此条目在登录后启动。若要在登录前启动，请选择开机级机制：macOS 用 launchd-daemon（需一次 sudo），Linux 用 systemd-system 或 linger。',
   bootCommandsExplain: '本进程无法提权。请自行执行以下命令来安装自启：',
   bootRecheck: '重新检查',
   bootActionInstall: '安装',

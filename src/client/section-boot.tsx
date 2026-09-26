@@ -125,6 +125,7 @@ export function BootSection({ t, status, run, updateSettings, busy }: SectionPro
       <Row label={t('bootBootCapable')}>{boot.bootCapable ? t('yes') : t('no')}</Row>
       <Row label={t('bootPrivileged')}>{boot.privileged ? t('yes') : t('no')}</Row>
       <Row label={t('bootUnitPath')}>{dash(boot.unitPath)}</Row>
+      {boot.bootCapable || boot.state === 'unsupported' ? null : <Hint>{t('bootLoginScope')}</Hint>}
       <Hint>{boot.detail}</Hint>
 
       {autostart.enabled && boot.state === 'not-installed'
