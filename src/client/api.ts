@@ -9,22 +9,28 @@ import type {
   EndpointPayloads,
   Envelope,
   HomeHostedStatus,
-  PluginSettings,
+  PanelControlResult,
   RpcEndpoint,
   RpcError,
   RpcRequest,
   ServerEntryView,
+  SettingsPatch,
 } from '../shared/contracts.js'
 import { RPC_PATH, RPC_VERSION } from '../shared/contracts.js'
-import type { SettingsPatch } from './settings.js'
 
 /** Authenticated harness channel prefix. */
 export const API_BASE = '/api'
+
+/** `cli.installGlobal` adds the command output to the panel-control result. */
+export type CliInstallResult = PanelControlResult & { output?: string }
 
 /** Result payload of each endpoint this page calls. */
 export interface EndpointResults {
   'status': HomeHostedStatus
   'servers.list': ServerEntryView[]
+  'panel.start': PanelControlResult
+  'panel.takeover': PanelControlResult
+  'cli.installGlobal': CliInstallResult
 }
 
 export type RpcValue<E extends RpcEndpoint> = E extends keyof EndpointResults
@@ -115,7 +121,7 @@ export async function rpc<E extends RpcEndpoint>(
 
 /** `settings.update` with a deep partial; the host merges key by key. */
 export function rpcSettingsUpdate(patch: SettingsPatch, options: RpcOptions = {}): Promise<Envelope<unknown>> {
-  return rpc('settings.update', { patch: patch as unknown as Partial<PluginSettings> }, options)
+  return rpc('settings.update', { patch }, options)
 }
 
 /** Refresh cadence while the settings page is mounted. */

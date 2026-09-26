@@ -68,6 +68,17 @@ describe('diffSettings', () => {
     const next = settings({ entries: [{ ...intent, autostart: false }] })
     expect(diffSettings(base, next)).toEqual({ entries: [{ ...intent, autostart: false }] })
   })
+
+  it('sends only the changed CLI preference', () => {
+    const base = settings()
+    const next = settings({ cli: { prefer: 'global' } })
+    expect(diffSettings(base, next)).toEqual({ cli: { prefer: 'global' } })
+  })
+
+  it('sends nothing when the CLI preference is unchanged', () => {
+    expect(diffSettings(settings({ cli: { prefer: 'global' } }), settings({ cli: { prefer: 'global' } })))
+      .toEqual({})
+  })
 })
 
 describe('toggleAllowed', () => {

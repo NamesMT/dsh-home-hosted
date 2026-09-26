@@ -149,7 +149,58 @@ describe('rpcSettingsUpdate', () => {
     })
   })
 
+  it('sends a CLI preference patch on its own', async () => {
+    const fetchMock = fetchReturning(jsonResponse({ v: RPC_VERSION, result: { ok: true, value: null } }))
+    await rpcSettingsUpdate({ cli: { prefer: 'global' } }, {
+      fetch: fetchMock as unknown as typeof fetch,
+    })
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({
+      v: RPC_VERSION,
+      endpoint: 'settings.update',
+      payload: { patch: { cli: { prefer: 'global' } } },
+    })
+  })
+
   it('exposes a 5s poll cadence', () => {
     expect(STATUS_POLL_MS).toBe(5000)
+  })
+})
+
+describe('panel control endpoints', () => {
+  it('decodes a panel.start result', async () => {
+    const fetchMock = fetchReturning(jsonResponse({
+      v: RPC_VERSION,
+      endpoint: 'panel.start',
+      result: { ok: true, value: { ok: true, detail: 'started', url: 'http://127.0.0.1:5555', version: '0.6.1' } },
+    }))
+    const result = await rpc('panel.start', {}, { fetch: fetchMock as unknown as typeof fetch })
+    expect(result).toEqual({
+      ok: true,
+      value: { ok: true, detail: 'started', url: 'http://127.0.0.1:5555', version: '0.6.1' },
+    })
+  })
+
+  it('decodes a cli.installGlobal result with its output', async () => {
+    const fetchMock = fetchReturning(jsonResponse({
+      v: RPC_VERSION,
+      endpoint: 'cli.installGlobal',
+      result: { ok: true, value: { ok: true, detail: 'installed', output: 'added 1 package' } },
+    }))
+    const result = await rpc('cli.installGlobal', {}, { fetch: fetchMock as unknown as typeof fetch })
+    expect(result.ok && result.value).toEqual({ ok: true, detail: 'installed', output: 'added 1 package' })
+  })
+
+  it('surfaces an in-band takeover refusal', async () => {
+    const fetchMock = fetchReturning(jsonResponse({
+      v: RPC_VERSION,
+      endpoint: 'panel.takeover',
+      result: { ok: false, error: { code: 'TAKEOVER_UNSAFE', message: 'adopt the dsh entry first' } },
+    }))
+    const result = await rpc('panel.takeover', {}, { fetch: fetchMock as unknown as typeof fetch })
+    expect(result).toEqual({
+      ok: false,
+      error: { code: 'TAKEOVER_UNSAFE', message: 'adopt the dsh entry first' },
+    })
   })
 })

@@ -1,5 +1,5 @@
 /** Pure display helpers: no React, no locale state, easy to unit test. */
-import type { AgentToolName, BootState, TokenState } from '../shared/contracts.js'
+import type { AgentToolName, BootState, CliCandidate, CliSource, CliStatus, TokenState } from '../shared/contracts.js'
 import { MUTATING_AGENT_TOOLS } from '../shared/contracts.js'
 
 /** Placeholder for an absent value. */
@@ -55,4 +55,38 @@ export const BOOT_STATE_KEYS: Record<BootState, string> = {
   'enabled-running': 'bootStateEnabledRunning',
   'enabled-failing': 'bootStateEnabledFailing',
   'unsupported': 'bootStateUnsupported',
+}
+
+/** Locale key for where the CLI in use came from (shared with the panel rows). */
+export const CLI_SOURCE_KEYS: Record<CliSource, string> = {
+  config: 'panelCliConfig',
+  dependency: 'panelCliDependency',
+  path: 'panelCliPathSource',
+  none: 'panelCliMissing',
+}
+
+/** `0.6.1 · /usr/local/bin/home-hosted`, with a placeholder for either half. */
+export function formatCandidate(candidate: CliCandidate | null | undefined): string {
+  if (candidate === null || candidate === undefined) return EMPTY
+  return `${dash(candidate.version)} · ${dash(candidate.path)}`
+}
+
+/**
+ * Candidate summaries for the two preferences. A host older than the
+ * `dependency`/`global` fields still reports which copy it resolved, so the
+ * in-use candidate is reconstructed from `source`/`path`/`version` instead of
+ * leaving both choices disabled.
+ */
+export function effectiveCandidates(cli: CliStatus): {
+  dependency: CliCandidate | null
+  global: CliCandidate | null
+} {
+  const fromSource = (source: CliCandidate['source']): CliCandidate | null =>
+    cli.source === source && cli.path !== null
+      ? { source, path: cli.path, version: cli.version }
+      : null
+  return {
+    dependency: cli.dependency ?? fromSource('dependency'),
+    global: cli.global ?? fromSource('path'),
+  }
 }

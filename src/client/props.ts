@@ -2,8 +2,8 @@
 import type { Envelope, HomeHostedStatus, PluginSettings } from '../shared/contracts.js'
 import type { TranslateFn } from './context.js'
 
-/** Run one mutation; the caller refreshes `status` afterwards. */
-export type Runner = (key: string, call: () => Promise<Envelope<unknown>>) => void
+/** Run one mutation and resolve its envelope; `status` is refreshed either way. */
+export type Runner = (key: string, call: () => Promise<Envelope<unknown>>) => Promise<Envelope<unknown>>
 
 /** Apply a settings edit; only the changed subtree is sent. */
 export type SettingsUpdater = (mutate: (settings: PluginSettings) => PluginSettings) => void

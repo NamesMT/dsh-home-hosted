@@ -3,15 +3,10 @@
  * actually changed, so a save never round-trips untouched live state back to
  * the host (which would freeze values that are still inheriting defaults).
  */
-import type { AgentToolName, EntryIntent, PluginSettings } from '../shared/contracts.js'
+import type { AgentToolName, PluginSettings, SettingsPatch } from '../shared/contracts.js'
 import { AGENT_TOOL_NAMES } from '../shared/contracts.js'
 
-/** Deep partial of the plugin settings; only changed subtrees may appear. */
-export interface SettingsPatch {
-  autostart?: Partial<PluginSettings['autostart']>
-  entries?: EntryIntent[]
-  agentTools?: Partial<PluginSettings['agentTools']>
-}
+export type { SettingsPatch } from '../shared/contracts.js'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

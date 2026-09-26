@@ -11,16 +11,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { BootMechanism, BootStatus, EntryIntent, HomeHostedStatus, ManagedEntryStatus, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView } from './shared/contracts.js'
+import type { BootMechanism, BootStatus, EntryIntent, HomeHostedStatus, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView } from './shared/contracts.js'
 import type { BootSpec } from './boot/types.js'
 import { createBootLadder } from './boot/index.js'
 import { findEntry, patchEntry, readConfig, upsertEntry, writeConfig } from './home-hosted/config-file.js'
-import { buildDshEntry, resolveDshLaunch } from './home-hosted/dsh-entry.js'
+import { buildDshEntry, detectProfile, resolveDshLaunch } from './home-hosted/dsh-entry.js'
 import { ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
-import { buildHomeHostedBootSpec } from './home-hosted/launch.js'
+import { buildHomeHostedBootSpec, homeHostedEnv } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
-import { MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
+import { compareVersions, EXPECTED_RANGE, MIN_KILL_VERSION, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
+import type { PanelControlDeps } from './home-hosted/panel-control.js'
+import { installGlobal, spawnTakeover, startPanel as startPanelProcess } from './home-hosted/panel-control.js'
 import { PanelClient, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken } from './home-hosted/token.js'
@@ -126,16 +128,17 @@ export class HomeHostedService extends Service {
     return { port, host }
   }
 
-  private cliCache: { resolution: CliResolution, launcher: string | null, launcherVersion: string | null, until: number } | null = null
+  private cliCache: { prefer: 'pinned' | 'global', resolution: CliResolution, launcher: string | null, launcherVersion: string | null, until: number } | null = null
 
   /**
-   * Resolve the pinned CLI, refresh the stable launcher a boot entry runs, and
+   * Resolve the preferred CLI, refresh the stable launcher a boot entry runs, and
    * preflight that launcher the same way the entry will invoke it.
    */
   private async cli(): Promise<{ resolution: CliResolution, launcher: string | null, launcherVersion: string | null }> {
-    if (this.cliCache !== null && this.cliCache.until > Date.now())
+    const prefer = this.options.settings.get().cli.prefer
+    if (this.cliCache !== null && this.cliCache.until > Date.now() && this.cliCache.prefer === prefer)
       return this.cliCache
-    const resolution = await resolveCli({ override: this.options.homeHostedCommand })
+    const resolution = await resolveCli({ override: this.options.homeHostedCommand, prefer })
     let launcher: string | null = null
     let launcherVersion: string | null = null
     if (resolution.launch !== null) {
@@ -149,8 +152,21 @@ export class HomeHostedService extends Service {
       }).path
       launcherVersion = await preflightLauncher(this.options.stateDir)
     }
-    this.cliCache = { resolution, launcher, launcherVersion, until: Date.now() + 60_000 }
+    this.cliCache = { prefer, resolution, launcher, launcherVersion, until: Date.now() + 60_000 }
     return this.cliCache
+  }
+
+  private async panelControlDeps(): Promise<PanelControlDeps> {
+    const { resolution } = await this.cli()
+    const launch = resolution.launch
+    const projectDir = process.env.HHOSTED_PROJECT ?? this.runtime()?.projectDir ?? null
+    return {
+      launch,
+      home: this.options.home,
+      projectDir,
+      stateDir: this.options.stateDir,
+      env: launch === null ? {} : homeHostedEnv({ home: this.options.home, projectDir }, launch),
+    }
   }
 
   private async cliExec(args: string[], env: Record<string, string | undefined>) {
@@ -273,7 +289,7 @@ export class HomeHostedService extends Service {
       id: intent.id,
       port,
       host,
-      profile: process.env.DSH_PROFILE ?? 'web',
+      profile: detectProfile(process.argv, process.env),
       dshHome: process.env.DSH_HOME ?? dshHome(),
       launch: dsh,
     })
@@ -338,6 +354,34 @@ export class HomeHostedService extends Service {
     return runtime !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url))
   }
 
+  /**
+   * The version whose schema will parse what we write: the answering panel, or
+   * the CLI that will parse it next. `kill` did not exist before 0.6.0, and an
+   * older panel refuses to *boot* with it — so this is checked before any write.
+   */
+  private async configVersion(): Promise<string | null> {
+    const runtime = this.runtime()
+    if (runtime !== null && runtime.version !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url)))
+      return runtime.version
+    const { resolution } = await this.cli()
+    return resolution.status.version
+  }
+
+  private async assertPolicySupported(intent: EntryIntent): Promise<void> {
+    if (intent.onPortConflict !== 'kill')
+      return
+    const version = await this.configVersion()
+    if (version === null || compareVersions(version, MIN_KILL_VERSION) >= 0)
+      return
+    const { resolution } = await this.cli()
+    throw new HomeHostedError(
+      `the home-hosted that would parse this config is ${version}, which has no "kill" policy `
+      + `(added in ${MIN_KILL_VERSION}); replace it with ${resolution.status.version ?? 'the pinned copy'} from this page, `
+      + 'or set the entry\'s on-port-conflict policy to block',
+      'KILL_UNSUPPORTED',
+    )
+  }
+
   private async applyIntents(intents: EntryIntent[], adopt = false): Promise<ManagedEntryStatus[]> {
     for (const raw of intents) {
       if (!ENTRY_ID_PATTERN.test(raw.id))
@@ -348,6 +392,7 @@ export class HomeHostedService extends Service {
         onPortConflict: raw.onPortConflict ?? 'kill',
         stopKillPortHolders: raw.stopKillPortHolders !== false,
       }
+      await this.assertPolicySupported(intent)
       await this.writeOwned(intent)
       const current = this.options.settings.get()
       const entries = current.entries.filter(entry => entry.id !== intent.id)
@@ -490,8 +535,69 @@ export class HomeHostedService extends Service {
     return { result, status: await this.bootStatus(mechanism) }
   }
 
+  // -------------------------------------------------------------------------
+  // Panel lifecycle
+  // -------------------------------------------------------------------------
+
+  /** Out-of-the-box start: run the preferred CLI's `up`, which detaches itself. */
+  async startPanelNow(): Promise<PanelControlResult> {
+    const { resolution } = await this.cli()
+    const deps = await this.panelControlDeps()
+    if (deps.launch === null)
+      throw new HomeHostedError(resolution.status.detail, 'CLI_NOT_FOUND')
+    const runtime = this.runtime()
+    if (runtime !== null && await probePanel(runtime.url)) {
+      return { ok: true, detail: 'a panel is already answering', url: runtime.url, version: runtime.version }
+    }
+    const result = await startPanelProcess(deps)
+    this.clientCache = null
+    return result
+  }
+
   /**
-   * Re-assert an entry that is already installed: a node or CLI upgrade moves the
+   * Replace an answering panel with the preferred copy.
+   *
+   * That stops the servers the old panel supervises — this process included — so
+   * the work is handed to a detached helper and the guard demands that this
+   * session is an adopted, autostarting entry the new panel will bring back.
+   */
+  async takeoverPanel(force = false): Promise<PanelControlResult> {
+    const { resolution } = await this.cli()
+    const deps = await this.panelControlDeps()
+    if (deps.launch === null)
+      throw new HomeHostedError(resolution.status.detail, 'CLI_NOT_FOUND')
+
+    const runtime = this.runtime()
+    if (runtime === null || !(await probePanel(runtime.url)))
+      return await this.startPanelNow()
+
+    if (runtime.version !== null && resolution.status.version !== null && runtime.version === resolution.status.version) {
+      return { ok: true, detail: `the answering panel is already ${runtime.version}`, url: runtime.url, version: runtime.version }
+    }
+
+    if (!force) {
+      const id = this.selfEntryId()
+      const live = id === null ? null : (await this.liveEntries()).get(id) ?? null
+      if (id === null || live === null || live.config.autostart !== true) {
+        throw new HomeHostedError(
+          'replacing the panel stops every server it supervises, including this session, and nothing would start it again: '
+          + 'adopt this entry with autostart first, or pass force',
+          'TAKEOVER_UNSAFE',
+        )
+      }
+    }
+
+    return spawnTakeover(deps, runtime.pid)
+  }
+
+  /** Install the pinned range globally, so the `global` preference has a copy to run. */
+  async installGlobalCli(): Promise<PanelControlResult & { output?: string }> {
+    const result = await installGlobal(EXPECTED_RANGE)
+    this.cliCache = null
+    return { ok: result.ok, detail: result.detail, output: result.output }
+  }
+
+  /** Re-assert an entry that is already installed: a node or CLI upgrade moves the
    * paths a unit was written with, and the fix is to rewrite it.
    *
    * Never installs one that is not there. Installing is a deliberate act — it can
@@ -644,6 +750,15 @@ export class HomeHostedService extends Service {
 
       case 'boot.verify':
         return await this.bootStatus()
+
+      case 'panel.start':
+        return await this.startPanelNow()
+
+      case 'panel.takeover':
+        return await this.takeoverPanel(input.force === true)
+
+      case 'cli.installGlobal':
+        return await this.installGlobalCli()
 
       default:
         throw new HomeHostedError(`unknown endpoint "${String(endpoint)}"`, 'UNKNOWN_ENDPOINT')

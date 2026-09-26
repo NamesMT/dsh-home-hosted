@@ -36,6 +36,9 @@ export type RpcEndpoint =
   | 'boot.install'
   | 'boot.uninstall'
   | 'boot.verify'
+  | 'panel.start'
+  | 'panel.takeover'
+  | 'cli.installGlobal'
   | 'settings.update'
 
 /** A settings write sends only the changed subtree; the host merges group by group. */
@@ -43,6 +46,7 @@ export interface SettingsPatch {
   autostart?: Partial<PluginSettings['autostart']>
   entries?: PluginSettings['entries']
   agentTools?: Partial<PluginSettings['agentTools']>
+  cli?: Partial<PluginSettings['cli']>
 }
 
 export interface EndpointPayloads {
@@ -61,6 +65,12 @@ export interface EndpointPayloads {
   'boot.install': { mechanism?: BootMechanism }
   'boot.uninstall': { mechanism?: BootMechanism }
   'boot.verify': Record<string, never>
+  /** Start the preferred CLI as a detached panel; refused while one already answers. */
+  'panel.start': Record<string, never>
+  /** Stop the answering panel and start the preferred copy instead. */
+  'panel.takeover': { force?: boolean }
+  /** Install the pinned range as a global CLI, so the `global` preference can use it. */
+  'cli.installGlobal': Record<string, never>
   'settings.update': { patch: SettingsPatch }
 }
 
@@ -150,6 +160,20 @@ export interface PanelStatus {
 /** Which home-hosted CLI the plugin drives, and where it came from. */
 export type CliSource = 'config' | 'dependency' | 'path' | 'none'
 
+/** One place a CLI could come from, with the version found there. */
+export interface CliCandidate {
+  source: 'config' | 'dependency' | 'path'
+  path: string | null
+  version: string | null
+}
+
+export interface PanelControlResult {
+  ok: boolean
+  detail: string
+  url?: string | null
+  version?: string | null
+}
+
 export interface CliStatus {
   /** `config` (operator override), `dependency` (the pinned copy), `path`, or none. */
   source: CliSource
@@ -163,6 +187,12 @@ export interface CliStatus {
   launcherPath?: string | null
   /** What the launcher answers right now, as the boot entry would invoke it. */
   launcherVersion?: string | null
+  /** Which copy the plugin prefers. */
+  prefer?: 'pinned' | 'global'
+  /** The plugin's own copy, when it resolves. */
+  dependency?: CliCandidate | null
+  /** The global install on PATH, when there is one. */
+  global?: CliCandidate | null
   detail: string
 }
 
@@ -264,12 +294,17 @@ export interface PluginSettings {
     enabled: boolean
     allow: AgentToolName[]
   }
+  cli: {
+    /** `pinned` runs the copy this plugin ships; `global` runs the one on PATH. */
+    prefer: 'pinned' | 'global'
+  }
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
   autostart: { enabled: false, mechanism: 'auto' },
   entries: [],
   agentTools: { enabled: false, allow: ['status', 'servers_list'] },
+  cli: { prefer: 'pinned' },
 }
 
 export interface HomeHostedStatus {

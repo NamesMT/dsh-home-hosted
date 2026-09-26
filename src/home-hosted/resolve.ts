@@ -1,19 +1,19 @@
 /**
  * Which home-hosted CLI this plugin drives.
  *
- * The plugin ships its own pinned copy as a dependency, so the version that runs
- * the panel at boot is the version this plugin was built against — not whatever
- * `home-hosted` happens to be on PATH. Resolution order:
+ * The plugin ships its own pinned copy as a dependency and prefers it, so the
+ * version that runs the panel at boot is the version this plugin was built
+ * against — not whatever `home-hosted` happens to be on PATH. Preferring a
+ * global install is a supported setting, not an accident.
  *
- * 1. the operator's `homeHostedCommand` override (explicit wins),
- * 2. the pinned dependency,
- * 3. PATH, as a fallback for a checkout whose dependencies are not installed.
+ * Resolution order: the operator's `homeHostedCommand` override always wins,
+ * then the preferred copy, then the other one as a fallback.
  */
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import type { CliSource, CliStatus } from '../shared/contracts.js'
+import type { CliCandidate, CliSource, CliStatus } from '../shared/contracts.js'
 import { run } from '../util/exec.js'
 import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
@@ -24,6 +24,11 @@ export const EXPECTED_RANGE = '^0.6.1'
 /** Oldest release whose API and config schema this plugin relies on. */
 export const MIN_SUPPORTED_VERSION = '0.4.1'
 
+/** Oldest release whose config schema accepts `onPortConflict: kill`. */
+export const MIN_KILL_VERSION = '0.6.0'
+
+export type CliPreference = 'pinned' | 'global'
+
 export interface CliResolution {
   launch: CliLaunch | null
   status: CliStatus
@@ -31,13 +36,20 @@ export interface CliResolution {
 
 export interface ResolveCliOptions {
   override?: string | null
+  /** Which copy to run when both exist. */
+  prefer?: CliPreference
   /** Test seam: the pinned package's manifest path, or null when it is not installed. */
   packageManifest?: () => string | null
-  /** Test seam: ask the CLI for its own version. */
+  /** Test seam: ask a CLI for its own version. */
   readVersion?: (launch: CliLaunch) => Promise<string | null>
   /** Test seam: locate a command on PATH. */
   findOnPath?: (command: string) => Promise<string | null>
   timeoutMs?: number
+}
+
+interface Candidate {
+  candidate: CliCandidate
+  launch: CliLaunch
 }
 
 /** Where the pinned `home-hosted` manifest is, resolved from this module. */
@@ -94,12 +106,7 @@ export function compareVersions(a: string, b: string): number {
   return left.pre < right.pre ? -1 : 1
 }
 
-async function defaultReadVersion(launch: CliLaunch, timeoutMs: number): Promise<string | null> {
-  const result = await run(launch.program, [...launch.args, '--version'], { timeoutMs })
-  return parseVersion(result.stdout) ?? parseVersion(result.stderr)
-}
-
-function detailFor(source: CliSource, version: string | null, supported: boolean): string {
+function detailFor(source: CliSource, version: string | null, supported: boolean, prefer: CliPreference): string {
   const shown = version ?? 'unknown version'
   switch (source) {
     case 'config':
@@ -109,63 +116,117 @@ function detailFor(source: CliSource, version: string | null, supported: boolean
         ? `the pinned dependency (${shown})`
         : `the pinned dependency is below the oldest supported release (${MIN_SUPPORTED_VERSION})`
     case 'path':
-      return supported
-        ? `a global install on PATH (${shown}), not the pinned dependency ${EXPECTED_RANGE}`
-        : `a global install on PATH (${shown}) is below the oldest supported release (${MIN_SUPPORTED_VERSION})`
+      if (!supported)
+        return `the global install on PATH (${shown}) is below the oldest supported release (${MIN_SUPPORTED_VERSION})`
+      return prefer === 'global'
+        ? `the global install on PATH (${shown})`
+        : `a global install on PATH (${shown}), not the pinned dependency ${EXPECTED_RANGE}`
     default:
       return 'no home-hosted CLI found: install the plugin with its dependencies, or put home-hosted on PATH'
   }
 }
 
+async function defaultReadVersion(launch: CliLaunch, timeoutMs: number): Promise<string | null> {
+  const result = await run(launch.program, [...launch.args, '--version'], { timeoutMs })
+  return parseVersion(result.stdout) ?? parseVersion(result.stderr)
+}
+
 export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliResolution> {
   const timeoutMs = options.timeoutMs ?? 5000
-  let launch: CliLaunch | null = null
-  let source: CliSource = 'none'
+  const prefer = options.prefer ?? 'pinned'
+  const readVersion = options.readVersion ?? (launch => defaultReadVersion(launch, timeoutMs))
+  const locate = options.findOnPath ?? which
 
+  // 1. An explicit override is not a preference: it is an instruction.
   const override = options.override?.trim()
   if (override !== undefined && override.length > 0) {
-    launch = resolveShimmedCli(path.resolve(override))
-    if (launch !== null)
-      source = 'config'
-  }
-
-  if (launch === null) {
-    const manifest = (options.packageManifest ?? pinnedManifestPath)()
-    const entry = manifest === null ? null : binEntryFromManifest(manifest)
-    if (entry !== null && fs.existsSync(entry)) {
-      launch = { program: process.execPath, args: [entry], cliEntry: entry, shimPath: null, source: 'entry' }
-      source = 'dependency'
+    const launch = resolveShimmedCli(path.resolve(override))
+    if (launch !== null) {
+      const version = await readVersion(launch)
+      const supported = version === null || compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
+      return {
+        launch,
+        status: {
+          source: 'config',
+          path: launch.cliEntry ?? launch.shimPath ?? launch.program,
+          version,
+          expectedRange: EXPECTED_RANGE,
+          supported,
+          prefer,
+          dependency: null,
+          global: null,
+          detail: detailFor('config', version, supported, prefer),
+        },
+      }
     }
   }
 
-  if (launch === null) {
-    const locate = options.findOnPath ?? which
-    const found = (await locate('home-hosted')) ?? (await locate('hh'))
-    if (found !== null) {
-      launch = resolveShimmedCli(path.resolve(found))
-      if (launch !== null)
-        source = 'path'
+  // 2. The two copies this plugin knows about.
+  const manifest = (options.packageManifest ?? pinnedManifestPath)()
+  const dependencyEntry = manifest === null ? null : binEntryFromManifest(manifest)
+  let dependency: Candidate | null = null
+  if (dependencyEntry !== null && fs.existsSync(dependencyEntry)) {
+    let version: string | null = null
+    try {
+      version = (JSON.parse(fs.readFileSync(manifest as string, 'utf8')) as { version?: string }).version ?? null
+    }
+    catch {
+      version = null
+    }
+    dependency = {
+      candidate: { source: 'dependency', path: dependencyEntry, version },
+      launch: { program: process.execPath, args: [dependencyEntry], cliEntry: dependencyEntry, shimPath: null, source: 'entry' },
     }
   }
 
-  if (launch === null) {
+  let global: Candidate | null = null
+  const found = (await locate('home-hosted')) ?? (await locate('hh'))
+  if (found !== null) {
+    const launch = resolveShimmedCli(path.resolve(found))
+    if (launch !== null) {
+      global = {
+        candidate: { source: 'path', path: launch.cliEntry ?? launch.shimPath ?? launch.program, version: await readVersion(launch) },
+        launch,
+      }
+    }
+  }
+
+  const order = prefer === 'global' ? [global, dependency] : [dependency, global]
+  const chosen = order.find(item => item !== null) ?? null
+  const dependencySummary = dependency?.candidate ?? null
+  const globalSummary = global?.candidate ?? null
+
+  if (chosen === null) {
     return {
       launch: null,
-      status: { source: 'none', path: null, version: null, expectedRange: EXPECTED_RANGE, supported: false, detail: detailFor('none', null, false) },
+      status: {
+        source: 'none',
+        path: null,
+        version: null,
+        expectedRange: EXPECTED_RANGE,
+        supported: false,
+        prefer,
+        dependency: dependencySummary,
+        global: globalSummary,
+        detail: detailFor('none', null, false, prefer),
+      },
     }
   }
 
-  const version = await (options.readVersion ?? (target => defaultReadVersion(target, timeoutMs)))(launch)
+  const version = chosen.candidate.version
   const supported = version === null || compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
   return {
-    launch,
+    launch: chosen.launch,
     status: {
-      source,
-      path: launch.cliEntry ?? launch.shimPath ?? launch.program,
+      source: chosen.candidate.source,
+      path: chosen.candidate.path,
       version,
       expectedRange: EXPECTED_RANGE,
       supported,
-      detail: detailFor(source, version, supported),
+      prefer,
+      dependency: dependencySummary,
+      global: globalSummary,
+      detail: detailFor(chosen.candidate.source, version, supported, prefer),
     },
   }
 }

@@ -121,3 +121,57 @@ describe('CLI resolution order', () => {
     expect(pinnedManifestPath()).not.toBeNull()
   })
 })
+
+describe('CLI preference', () => {
+  /** Both copies exist: the plugin's own, and one on PATH. */
+  async function both(prefer: 'pinned' | 'global') {
+    scratch = tempDir()
+    const manifest = fakePackage(scratch.path)
+    return await resolveCli({
+      prefer,
+      packageManifest: () => manifest,
+      readVersion: async () => '0.5.0',
+      findOnPath: async command => (command === 'home-hosted' ? manifest.replace('package.json', 'bin/home-hosted.mjs') : null),
+    })
+  }
+
+  it('prefers the pinned dependency by default', async () => {
+    const resolution = await both('pinned')
+    expect(resolution.status.source).toBe('dependency')
+    expect(resolution.status.prefer).toBe('pinned')
+    expect(resolution.status.dependency).toMatchObject({ source: 'dependency', version: '0.6.1' })
+    expect(resolution.status.global).toMatchObject({ source: 'path', version: '0.5.0' })
+  })
+
+  it('uses the global install when that is the chosen preference', async () => {
+    const resolution = await both('global')
+    expect(resolution.status.source).toBe('path')
+    expect(resolution.status.prefer).toBe('global')
+    expect(resolution.status.detail).toBe('the global install on PATH (0.5.0)')
+  })
+
+  it('falls back to the pinned copy when the chosen global install is missing', async () => {
+    scratch = tempDir()
+    const manifest = fakePackage(scratch.path)
+    const resolution = await resolveCli({
+      prefer: 'global',
+      packageManifest: () => manifest,
+      findOnPath: async () => null,
+    })
+    expect(resolution.status.source).toBe('dependency')
+    expect(resolution.status.global).toBeNull()
+  })
+
+  it('falls back to PATH when the pinned copy is missing, whatever the preference', async () => {
+    scratch = tempDir()
+    const manifest = fakePackage(scratch.path)
+    const resolution = await resolveCli({
+      prefer: 'pinned',
+      packageManifest: () => null,
+      findOnPath: async command => (command === 'home-hosted' ? manifest.replace('package.json', 'bin/home-hosted.mjs') : null),
+      readVersion: async () => '0.5.0',
+    })
+    expect(resolution.status.source).toBe('path')
+    expect(resolution.status.dependency).toBeNull()
+  })
+})

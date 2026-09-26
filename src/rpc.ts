@@ -74,7 +74,8 @@ export function registerRpc(ctx: Context, service: HomeHostedService): void {
             catch (error) {
               const code = error instanceof HomeHostedError ? error.code : 'INTERNAL'
               const message = error instanceof Error ? error.message : String(error)
-              return answer(body.endpoint, { ok: false, error: { code, message } })
+              const detail = (error as { detail?: unknown } | null)?.detail
+              return answer(body.endpoint, { ok: false, error: { code, message, ...(detail === undefined ? {} : { detail }) } })
             }
           },
         })

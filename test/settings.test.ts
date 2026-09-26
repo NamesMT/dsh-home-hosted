@@ -24,6 +24,7 @@ describe('settings store', () => {
       autostart: { enabled: false, mechanism: 'auto' },
       entries: [],
       agentTools: { enabled: false, allow: ['status', 'servers_list'] },
+      cli: { prefer: 'pinned' },
     })
   })
 
@@ -52,6 +53,17 @@ describe('settings store', () => {
     expect(reloaded.get().agentTools.allow).toEqual(['status', 'servers_start'])
     expect(reloaded.intentFor('dsh')).toEqual({ id: 'dsh', autostart: false, onPortConflict: 'block', stopKillPortHolders: false })
     expect(reloaded.intentFor('other')).toEqual({ id: 'other', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true })
+  })
+
+  it('defaults to the pinned CLI and keeps a chosen preference', () => {
+    const s = store()
+    expect(s.get().cli).toEqual({ prefer: 'pinned' })
+    s.update({ cli: { prefer: 'global' } })
+    expect(s.get().cli).toEqual({ prefer: 'global' })
+    // A settings write that leaves cli out keeps the choice.
+    s.update({ autostart: { enabled: true } })
+    expect(s.get().cli).toEqual({ prefer: 'global' })
+    expect(new SettingsStore(s.file, 'dsh').get().cli).toEqual({ prefer: 'global' })
   })
 
   it('drops unknown tool names and notifies listeners', () => {

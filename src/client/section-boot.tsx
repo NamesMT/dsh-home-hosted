@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { BootMechanism } from '../shared/contracts.js'
 import { rpc } from './api.js'
+import { copyText } from './clipboard.js'
 import { BOOT_STATE_KEYS, dash } from './format.js'
 import type { SectionProps } from './props.js'
 import { Button, Hint, Row, Section, Select, Toggle } from './ui.js'
@@ -38,18 +39,7 @@ export function BootSection({ t, status, run, updateSettings, busy }: SectionPro
   }))
 
   const copy = async (): Promise<void> => {
-    const text = commands.join('\n')
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard !== undefined) {
-        await navigator.clipboard.writeText(text)
-        setCopied(true)
-        return
-      }
-    }
-    catch {
-      // Clipboard blocked; leave the box selected-by-hand instead.
-    }
-    setCopied(false)
+    setCopied(await copyText(commands.join('\n')))
   }
 
   return (

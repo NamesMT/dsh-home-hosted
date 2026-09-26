@@ -38,6 +38,9 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
       enabled: raw?.agentTools?.enabled === true,
       allow: allow.length > 0 ? allow : [...DEFAULT_SETTINGS.agentTools.allow],
     },
+    cli: {
+      prefer: raw?.cli?.prefer === 'global' ? 'global' : 'pinned',
+    },
   }
 }
 
@@ -66,6 +69,7 @@ export class SettingsStore {
       autostart: { ...this.current.autostart, ...(patch.autostart ?? {}) },
       entries: patch.entries ?? this.current.entries,
       agentTools: { ...this.current.agentTools, ...(patch.agentTools ?? {}) },
+      cli: { ...this.current.cli, ...(patch.cli ?? {}) },
     }, this.fallbackEntryId)
     this.current = next
     writeJsonAtomic(this.file, next, 0o600)

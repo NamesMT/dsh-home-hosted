@@ -131,6 +131,40 @@ export function Select({ value, options, disabled, onChange }: {
   )
 }
 
+export function Radio({ label, description, checked, disabled, onChange }: {
+  label: string
+  description?: string
+  checked: boolean
+  disabled?: boolean
+  onChange: () => void
+}) {
+  return (
+    <label style={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 8,
+      fontSize: 13,
+      opacity: disabled === true ? 0.6 : 1,
+      cursor: disabled === true ? 'default' : 'pointer',
+    }}
+    >
+      <input
+        type="radio"
+        checked={checked}
+        disabled={disabled}
+        onChange={() => onChange()}
+        style={{ marginTop: 2 }}
+      />
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span>{label}</span>
+        {description !== undefined && description.length > 0
+          ? <span style={{ fontSize: 12, color: muted }}>{description}</span>
+          : null}
+      </span>
+    </label>
+  )
+}
+
 export function ErrorNote({ error, title }: { error: RpcError | null, title: string }) {
   if (error === null) return null
   return (

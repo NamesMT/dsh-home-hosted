@@ -12,9 +12,12 @@ upgrade.
 
 ## Which home-hosted runs
 
-The plugin depends on `home-hosted` at a pinned range and drives its own copy —
-a global install is only a fallback. Resolution order: an operator override in
-the plugin row, then the pinned dependency, then PATH.
+The plugin depends on `home-hosted` at a pinned range and prefers it by default,
+so the panel is the version the plugin was built against. The preference is a
+setting (Options → which home-hosted to run); a global install is a supported
+choice, and the page shows both candidates with their versions and can install
+the pinned range globally. An operator's `homeHostedCommand` in the plugin row
+always wins — that is an instruction, not a preference.
 
 That copy resolves to a pnpm path carrying a version and a peer hash
 (`…/.pnpm/home-hosted@0.6.1_zod@4.6.5/node_modules/home-hosted/…`), which moves
@@ -27,6 +30,28 @@ finds the pinned copy again — recorded path, then `$DSH_HOME/profiles/*`
 node_modules (flat or pnpm), then PATH — and forwards its argv, so the entry
 survives plugin upgrades and profile reinstalls. The plugin preflights the
 launcher the way the unit invokes it and shows the version it answers.
+
+## Config compatibility
+
+`onPortConflict: kill` did not exist before home-hosted 0.6.0, and an older panel
+that is handed it refuses to *boot* (its config schema rejects the value) — a
+plugin must never brick the panel it manages. So the policy is checked before any
+write against the version whose schema will parse it: the answering panel, or the
+CLI that will parse it next. Below 0.6.0 the write is refused with
+`KILL_UNSUPPORTED` and the page offers the fix it already has — replace the panel
+with the preferred copy, or choose another policy.
+
+## Starting and replacing the panel
+
+`panel.start` runs the preferred CLI's `up`, which detaches itself and returns
+once the panel answers — that is the whole out-of-the-box path when nothing is
+running.
+
+`panel.takeover` replaces an answering panel with the preferred copy. Stopping
+the old panel also stops every server it supervises, this dsh included, so a
+detached helper does the work and the guard refuses unless this session is an
+adopted entry with `autostart: true` (something must bring it back). The response
+says the page will disconnect; the helper logs to `bin/panel-takeover.log`.
 
 ## Two writes, and why the API comes first
 

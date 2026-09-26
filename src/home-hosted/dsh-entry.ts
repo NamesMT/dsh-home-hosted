@@ -12,6 +12,38 @@ import type { ServerEntry } from '../shared/contracts.js'
 import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
 
+/**
+ * Which profile this process is running.
+ *
+ * `DSH_PROFILE` alone is not trustworthy: it can be inherited from a parent
+ * shell that ran a different profile (that is how an entry once ended up booting
+ * `web` under another profile's home). The process's own argv is authoritative,
+ * then the profile directory the launcher pointed at, then the env var.
+ */
+export function detectProfile(argv: readonly string[], env: Record<string, string | undefined> = {}): string {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === '--profile' && typeof argv[index + 1] === 'string' && !argv[index + 1]!.startsWith('-'))
+      return argv[index + 1]!
+    if (arg?.startsWith('--profile='))
+      return arg.slice('--profile='.length)
+  }
+
+  const dir = env.DSH_PROFILE_DIR
+  if (typeof dir === 'string' && dir.length > 0) {
+    const base = path.basename(dir)
+    if (base.length > 0 && base !== '.' && base !== path.sep)
+      return base
+  }
+
+  const app = argv.slice(2).find(candidate => candidate !== undefined && !candidate.startsWith('-'))
+  if (app !== undefined && app.length > 0)
+    return app
+
+  const fromEnv = env.DSH_PROFILE
+  return typeof fromEnv === 'string' && fromEnv.length > 0 ? fromEnv : 'web'
+}
+
 export interface DshFacts {
   id: string
   port: number | null

@@ -56,7 +56,7 @@ interface Harness {
   cliCalls: Array<{ args: string[], env: Record<string, string | undefined> }>
 }
 
-async function harness(options: { panel?: StubPanel } = {}): Promise<Harness> {
+async function harness(options: { panel?: StubPanel, panelVersion?: string } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -68,7 +68,7 @@ async function harness(options: { panel?: StubPanel } = {}): Promise<Harness> {
   fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
 
   if (options.panel !== undefined)
-    writeJsonFile(runtimeFile(home), { version: '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
+    writeJsonFile(runtimeFile(home), { version: options.panelVersion ?? '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
 
   const cliCalls: Harness['cliCalls'] = []
   const settings = new SettingsStore(path.join(state, 'settings.json'), 'dsh')
@@ -228,5 +228,61 @@ describe('home-hosted service', () => {
     const { service } = await harness()
     await expect(service.call('nope' as never, {})).rejects.toMatchObject({ code: 'UNKNOWN_ENDPOINT' })
     await expect(service.call('entries.apply', { intents: [{ id: 'BAD ID', autostart: true }] })).rejects.toMatchObject({ code: 'INVALID_ID' })
+  })
+})
+
+describe('panel lifecycle from the page', () => {
+  it('starts nothing when a panel already answers', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    const result = await service.startPanelNow() as { ok: boolean, detail: string }
+    expect(result.ok).toBe(true)
+    expect(result.detail).toContain('already answering')
+  })
+
+  it('refuses to replace a panel that would not bring this session back', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    // The stub panel answers, its version differs from the CLI's, and no adopted
+    // autostart entry exists for this process — so a takeover must be refused.
+    await expect(service.takeoverPanel()).rejects.toMatchObject({ code: 'TAKEOVER_UNSAFE' })
+  })
+
+  it('reports no takeover when nothing is answering', async () => {
+    const { service } = await harness()
+    const result = await service.takeoverPanel() as { ok: boolean, detail: string }
+    // Without a panel the call degrades to a start, and the fake CLI answers nothing.
+    expect(result.ok).toBe(true)
+  })
+})
+
+describe('config compatibility', () => {
+  it('refuses to write a kill policy the answering panel cannot parse', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel, panelVersion: '0.5.0' })
+    await expect(service.call('entries.apply', {
+      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }],
+    })).rejects.toMatchObject({ code: 'KILL_UNSUPPORTED' })
+    // Nothing was written to the panel.
+    expect(panel.servers).toHaveLength(0)
+  })
+
+  it('allows it once the panel is new enough', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel, panelVersion: '0.6.1' })
+    const entries = await service.call('entries.apply', {
+      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }],
+    }) as Array<{ intent: { id: string } }>
+    expect(entries[0]?.intent.id).toBe('dsh')
+    expect(panel.servers[0]?.config.onPortConflict).toBe('kill')
+  })
+
+  it('allows a policy that needs nothing from the panel', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel, panelVersion: '0.5.0' })
+    await service.call('entries.apply', {
+      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'reclaim', stopKillPortHolders: false }],
+    })
+    expect(panel.servers[0]?.config.onPortConflict).toBe('reclaim')
   })
 })

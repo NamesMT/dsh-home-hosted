@@ -13,6 +13,8 @@ export class PanelError extends Error {
     message: string,
     readonly code: string,
     readonly status: number | null = null,
+    /** The panel's own diagnostic, when it sent one. */
+    readonly detail: unknown = undefined,
   ) {
     super(message)
     this.name = 'PanelError'
@@ -66,10 +68,10 @@ export class PanelClient {
     }
 
     if (!response.ok) {
-      const record = parsed as { message?: unknown, code?: unknown } | null
+      const record = parsed as { message?: unknown, code?: unknown, detail?: unknown } | null
       const message = typeof record?.message === 'string' ? record.message : `the panel answered ${response.status}`
       const code = typeof record?.code === 'string' ? record.code : 'PANEL_ERROR'
-      throw new PanelError(message, code, response.status)
+      throw new PanelError(message, code, response.status, record?.detail)
     }
 
     return parsed as T

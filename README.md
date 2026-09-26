@@ -7,6 +7,7 @@ A DeepSeek Harness plugin for [home-hosted](https://github.com/NamesMT/home-host
 ## What it does
 
 - **Boot autostart** — installs, verifies and removes the OS entry that starts `home-hosted` at boot (systemd on Linux, launchd on macOS, Run key / Task Scheduler on Windows). Off by default; opt in from the plugin's page.
+- **Runs its own home-hosted** — the pinned copy ships as a dependency, so the panel that starts at boot is the version this plugin was built against. The page can start that panel, or replace a running one with it.
 - **Server management** — add, edit, start, stop and restart home-hosted's servers without leaving dsh, with the panel's API as the write path so nothing is restarted behind your back.
 - **Reclaim the harness** — a managed `dsh` entry gets `onPortConflict: kill`, so a leftover process holding the web port is reclaimed at boot instead of blocking forever.
 - **Agent tools** — off by default, allowlisted one by one; every tool that changes something asks for approval first.
@@ -32,14 +33,15 @@ The Cordis row config is for operator overrides only:
     defaultEntryId: dsh
 ```
 
-Everything a person toggles lives in `<stateDir>/settings.json`.
+Everything a person toggles lives in `<stateDir>/settings.json`, including **Options → which home-hosted to run**: the pinned dependency (default) or a global install. The page shows both candidates with their versions, and can install the pinned range globally for you.
 
 ## Notes
 
 - A plugin cannot act at boot: it installs and re-syncs the OS entry while dsh runs, and the OS starts home-hosted from then on.
-- The plugin ships its own `home-hosted` (pinned range) and drives that copy; a global install is only a fallback. Boot entries run a small stable launcher it writes, so a `node_modules` path that moves never breaks boot.
+- The plugin ships its own `home-hosted` (pinned range) and runs that copy by default; Options in the page can switch to a global install instead. Boot entries run a small stable launcher it writes, so a `node_modules` path that moves never breaks boot.
 - Boot (pre-login) scope needs privilege somewhere — a system unit, or `loginctl enable-linger` on Linux. When the process cannot elevate, the page shows the exact commands to run by hand.
 - The panel API token this plugin uses is minted on first write and kept 0600 under the plugin state directory; it is never rendered or logged.
+- `onPortConflict: kill` needs home-hosted 0.6.0 or newer; against an older panel the plugin refuses that write and says so, because that panel cannot parse the config it would produce.
 
 ## License
 

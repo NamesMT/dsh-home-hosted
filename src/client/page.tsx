@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import type { RpcError } from '../shared/contracts.js'
+import type { Envelope, RpcError } from '../shared/contracts.js'
 import { rpc, rpcSettingsUpdate, useStatus } from './api.js'
 import type { TranslateFn } from './context.js'
 import { resolveTranslator } from './locales.js'
@@ -8,6 +8,7 @@ import { AgentsSection } from './section-agents.js'
 import { BootSection } from './section-boot.js'
 import { EntriesSection } from './section-entries.js'
 import { PanelSection } from './section-panel.js'
+import { OptionsSection } from './section-options.js'
 import { ServersSection } from './section-servers.js'
 import { diffSettings } from './settings.js'
 import { Button, ErrorNote, Hint } from './ui.js'
@@ -30,16 +31,19 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
   const run = useCallback<Runner>((key, call) => {
     setBusy(key)
     setActionError(null)
-    void (async () => {
+    return (async (): Promise<Envelope<unknown>> => {
       try {
         const envelope = await call()
         if (!envelope.ok) setActionError(envelope.error)
+        return envelope
       }
       catch (caught) {
-        setActionError({
+        const error: RpcError = {
           code: 'client',
           message: caught instanceof Error ? caught.message : String(caught),
-        })
+        }
+        setActionError(error)
+        return { ok: false, error }
       }
       finally {
         setBusy(null)
@@ -52,7 +56,7 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
     if (data === null) return
     const patch = diffSettings(data.settings, mutate(data.settings))
     if (Object.keys(patch).length === 0) return
-    run('settings', () => rpcSettingsUpdate(patch))
+    void run('settings', () => rpcSettingsUpdate(patch))
   }, [data, run])
 
   if (data === null) {
@@ -90,6 +94,7 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
       <ErrorNote error={error} title={t('errorTitle')} />
       <ErrorNote error={actionError} title={t('errorTitle')} />
       <PanelSection {...sectionProps} />
+      <OptionsSection {...sectionProps} />
       <BootSection {...sectionProps} />
       <EntriesSection {...sectionProps} />
       <AgentsSection {...sectionProps} />
