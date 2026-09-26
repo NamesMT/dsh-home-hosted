@@ -288,6 +288,8 @@ export interface PluginSettings {
     enabled: boolean
     /** `auto` picks the best available mechanism; an explicit one is honoured only when available. */
     mechanism: 'auto' | BootMechanism
+    /** The last install/uninstall attempt, kept so a failure survives a reload. */
+    lastAttempt?: BootAttempt
   }
   entries: EntryIntent[]
   agentTools: {
@@ -298,6 +300,17 @@ export interface PluginSettings {
     /** `pinned` runs the copy this plugin ships; `global` runs the one on PATH. */
     prefer: 'pinned' | 'global'
   }
+}
+
+export interface BootAttempt {
+  ok: boolean
+  /** `install` or `uninstall`. */
+  action: 'install' | 'uninstall'
+  mechanism: BootMechanism | null
+  detail: string
+  /** The exact commands a person can run when the attempt needed privilege. */
+  commands: string[]
+  at: number
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {

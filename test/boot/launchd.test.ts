@@ -42,12 +42,25 @@ describe('launchd agent', () => {
     expect(candidate.reason).toContain('user/1000')
   })
 
-  it('is unavailable when neither domain is reachable', async () => {
+  it('stays available when neither domain is reachable, and says it loads at login', async () => {
     const runner = fakeRun(() => ({ code: 113 }))
     const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
     const candidate = await provider.detect()
-    expect(candidate.available).toBe(false)
-    expect(candidate.reason).toMatch(/no launchd/)
+    // ~/Library/LaunchAgents is loaded by launchd at login whether or not this
+    // process can reach the domain, so an unreachable domain is not a refusal.
+    expect(candidate.available).toBe(true)
+    expect(candidate.reason).toMatch(/loads at login/)
+  })
+
+  it('installs the plist without a reachable domain and reports the login load', async () => {
+    // Only launchctl is unreachable; plutil still validates the file we wrote.
+    const runner = fakeRun(command => (command === 'launchctl' ? { code: 113 } : { code: 0 }))
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    const result = await provider.install(agentSpec)
+    expect(result.ok).toBe(true)
+    expect(fs.readFileSync(plistPath, 'utf8')).toBe(launchdPlist(agentSpec))
+    expect(result.detail).toMatch(/loads at the next login/)
+    expect(runner.find('launchctl').some(call => call.args[0] === 'bootstrap')).toBe(false)
   })
 
   it('installs, lints, bootstraps and verifies', async () => {

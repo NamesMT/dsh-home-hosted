@@ -88,6 +88,13 @@ export const en = {
   bootCommandsExplain:
     'This process could not elevate. Run these commands yourself to install autostart:',
   bootRecheck: 'Re-check',
+  bootActionInstall: 'install',
+  bootActionUninstall: 'uninstall',
+  bootRequestedNotInstalled: 'Autostart is requested, but no boot entry is installed yet.',
+  bootAttemptFailed: 'Last attempt: {action} failed',
+  bootAttemptSucceeded: 'Last attempt: {action} succeeded — {detail}',
+  bootAttemptNoDetail: 'The host did not explain the refusal.',
+  bootAttemptCommands: 'Commands you can run yourself:',
 
   entriesTitle: 'Managed entries',
   entriesDesc: 'What this plugin wants each entry to be, and what the panel reports.',
@@ -114,7 +121,7 @@ export const en = {
 
   serversTitle: 'Servers',
   serversDesc: 'Servers supervised by the panel.',
-  serversHintPanel: 'Add, edit and remove entries in the home-hosted panel: {url}',
+  serversHintPanel: 'Add, edit and remove entries in the home-hosted panel:',
   serversHintNoPanel: 'Add, edit and remove entries in the home-hosted panel (it is not running right now).',
   serversEmpty: 'The panel reports no servers.',
   serversPid: 'PID',
@@ -202,6 +209,13 @@ export const zh: Record<keyof typeof en, string> = {
   bootCommands: '手动命令',
   bootCommandsExplain: '本进程无法提权。请自行执行以下命令来安装自启：',
   bootRecheck: '重新检查',
+  bootActionInstall: '安装',
+  bootActionUninstall: '卸载',
+  bootRequestedNotInstalled: '已请求开机自启，但尚未安装任何开机项。',
+  bootAttemptFailed: '上次尝试：{action}失败',
+  bootAttemptSucceeded: '上次尝试：{action}成功 — {detail}',
+  bootAttemptNoDetail: '宿主没有说明失败原因。',
+  bootAttemptCommands: '你可以自行运行以下命令：',
 
   entriesTitle: '受管条目',
   entriesDesc: '本插件希望每条目成为的样子，以及面板实际报告的状态。',
@@ -228,7 +242,7 @@ export const zh: Record<keyof typeof en, string> = {
 
   serversTitle: '服务器',
   serversDesc: '面板监管的服务器。',
-  serversHintPanel: '在 home-hosted 面板中添加、编辑和删除条目：{url}',
+  serversHintPanel: '在 home-hosted 面板中添加、编辑和删除条目：',
   serversHintNoPanel: '在 home-hosted 面板中添加、编辑和删除条目（当前未运行）。',
   serversEmpty: '面板未报告任何服务器。',
   serversPid: 'PID',

@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import { rpc } from './api.js'
 import { CLI_SOURCE_KEYS, dash, TOKEN_KEYS, WRITE_VIA_KEYS } from './format.js'
 import type { SectionProps } from './props.js'
-import { Button, Hint, Row, Section } from './ui.js'
+import { Button, Hint, Link, Row, Section } from './ui.js'
 
 const confirmBox: CSSProperties = {
   display: 'flex',
@@ -32,7 +32,9 @@ export function PanelSection({ t, status, run, busy }: SectionProps) {
     <Section title={t('panelTitle')} description={t('panelDesc')}>
       <Row label={t('panelReachable')}>{panel.reachable ? t('yes') : t('no')}</Row>
       <Row label={t('panelHome')}>{dash(panel.home)}</Row>
-      <Row label={t('panelUrl')}>{dash(panel.url)}</Row>
+      <Row label={t('panelUrl')}>
+        {panel.url === null ? dash(panel.url) : <Link href={panel.url}>{panel.url}</Link>}
+      </Row>
       <Row label={t('panelVersion')}>{dash(panel.version)}</Row>
       <Row label={t('panelPid')}>{dash(panel.pid)}</Row>
       <Row label={t('panelWriteVia')}>{t(WRITE_VIA_KEYS[panel.writeVia] ?? 'writeViaNone')}</Row>

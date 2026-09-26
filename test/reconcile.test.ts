@@ -41,6 +41,7 @@ interface Harness {
   state: string
   fakeCli: string
   specs: BootSpec[]
+  settings: SettingsStore
 }
 
 /**
@@ -48,7 +49,7 @@ interface Harness {
  * written when `unitFile: true`, so a test can describe "reported installed, but
  * nothing on disk".
  */
-function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean } = {}): Harness {
+function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean } = {}): Harness {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -70,6 +71,9 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     install: async (spec: BootSpec): Promise<BootInstallResult> => {
       installs.push(Date.now())
       specs.push(spec)
+      if (options.installFails === true) {
+        return { ok: false, changed: false, detail: 'launchd refused to load the agent', commands: ['sudo launchctl bootstrap system /x.plist'], needsPrivilege: true, status }
+      }
       return { ok: true, changed: true, detail: 'repaired', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status }
     },
     uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, status }),
@@ -86,7 +90,7 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     createLadder: () => ladder,
   })
 
-  return { service, installs, unitPath, state, fakeCli, specs }
+  return { service, installs, unitPath, state, fakeCli, specs, settings }
 }
 
 describe('startup reconcile', () => {
@@ -141,5 +145,29 @@ describe('boot entry target', () => {
     // node_modules path cannot break boot.
     expect(spec!.args).not.toContain(fakeCli)
     expect(spec!.args).toEqual(expect.arrayContaining(['up', '--foreground']))
+  })
+})
+
+describe('boot attempts', () => {
+  it('records a failed install so the page can explain it after a reload', async () => {
+    const { service, settings } = harness(unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }), { installFails: true, enabled: false })
+    const answer = await service.installBoot() as { result: { ok: boolean, commands: string[] } }
+    expect(answer.result.ok).toBe(false)
+
+    const attempt = settings.get().autostart.lastAttempt
+    expect(attempt).toMatchObject({ ok: false, action: 'install' })
+    expect(attempt?.detail).toContain('launchd refused')
+    expect(attempt?.commands).toEqual(['sudo launchctl bootstrap system /x.plist'])
+    // A failure must not claim the feature is on.
+    expect(settings.get().autostart.enabled).toBe(false)
+    // And it survives a reload of the store.
+    expect(new SettingsStore(settings.file, 'dsh').get().autostart.lastAttempt?.ok).toBe(false)
+  })
+
+  it('records a successful install and turns the preference on', async () => {
+    const { service, settings } = harness(unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }))
+    await service.installBoot()
+    expect(settings.get().autostart.enabled).toBe(true)
+    expect(settings.get().autostart.lastAttempt).toMatchObject({ ok: true, action: 'install' })
   })
 })

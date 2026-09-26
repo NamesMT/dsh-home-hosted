@@ -41,6 +41,15 @@ CLI that will parse it next. Below 0.6.0 the write is refused with
 `KILL_UNSUPPORTED` and the page offers the fix it already has — replace the panel
 with the preferred copy, or choose another policy.
 
+## macOS: reachable launchd is not a requirement
+
+A plist in `~/Library/LaunchAgents` is loaded by launchd at the next login whether
+or not the process that wrote it can reach `gui/$UID` (SSH sessions often cannot).
+So the agent stays `available` and its install writes the plist and reports "loads
+at the next login" instead of refusing; only the `bootstrap`/`enable`/`print`
+steps need the domain, and they are skipped when it is unreachable. The daemon
+scope still needs root for `/Library/LaunchDaemons`.
+
 ## Starting and replacing the panel
 
 `panel.start` runs the preferred CLI's `up`, which detaches itself and returns

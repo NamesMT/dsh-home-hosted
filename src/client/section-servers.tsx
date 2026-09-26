@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react'
 import { rpc } from './api.js'
 import { dash } from './format.js'
 import type { SectionProps } from './props.js'
-import { Button, Hint, Row, Section } from './ui.js'
+import { Button, Hint, Link, Row, Section } from './ui.js'
 
 const card: CSSProperties = {
   display: 'flex',
@@ -38,7 +38,12 @@ export function ServersSection({ t, status, run, busy }: SectionProps) {
       <Hint>
         {status.panel.url === null
           ? t('serversHintNoPanel')
-          : t('serversHintPanel', { url: status.panel.url })}
+          : (
+              <>
+                {`${t('serversHintPanel')} `}
+                <Link href={status.panel.url}>{status.panel.url}</Link>
+              </>
+            )}
       </Hint>
       {servers.length === 0
         ? <Hint>{t('serversEmpty')}</Hint>
@@ -49,7 +54,9 @@ export function ServersSection({ t, status, run, busy }: SectionProps) {
                 <span>{dash(server.status)}</span>
               </div>
               <Row label={t('serversPid')}>{dash(server.pid)}</Row>
-              <Row label={t('serversUrl')}>{dash(server.url)}</Row>
+              <Row label={t('serversUrl')}>
+                {server.url === null ? dash(server.url) : <Link href={server.url}>{server.url}</Link>}
+              </Row>
               <div style={actions}>
                 <Button
                   busy={busy === `servers.start:${server.id}`}

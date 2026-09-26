@@ -28,10 +28,12 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
     ? raw.entries.map(intent => normalizeIntent(intent, fallbackEntryId))
     : []
   const allow = Array.isArray(raw?.agentTools?.allow) ? raw.agentTools.allow.filter(knownTool) : DEFAULT_SETTINGS.agentTools.allow
+  const attempt = raw?.autostart?.lastAttempt
   return {
     autostart: {
       enabled: raw?.autostart?.enabled === true,
       mechanism: raw?.autostart?.mechanism ?? 'auto',
+      ...(attempt === undefined ? {} : { lastAttempt: attempt }),
     },
     entries,
     agentTools: {

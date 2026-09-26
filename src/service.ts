@@ -518,14 +518,25 @@ export class HomeHostedService extends Service {
     if (spec === null)
       throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
     const result = await this.ladder().install(spec, mechanism)
-    if (result.ok) {
-      this.options.settings.update({
-        autostart: {
-          enabled: true,
-          mechanism: mechanism ?? result.mechanism ?? this.options.settings.get().autostart.mechanism,
+    const current = this.options.settings.get().autostart
+    this.options.settings.update({
+      autostart: {
+        // The preference follows the outcome for a real install, and the last
+        // attempt is recorded either way so a failure is visible after a reload.
+        enabled: result.ok ? true : current.enabled,
+        mechanism: result.ok
+          ? (mechanism ?? result.mechanism ?? current.mechanism)
+          : current.mechanism,
+        lastAttempt: {
+          ok: result.ok,
+          action: 'install',
+          mechanism: result.mechanism ?? mechanism ?? null,
+          detail: result.detail,
+          commands: result.commands,
+          at: Date.now(),
         },
-      })
-    }
+      },
+    })
     return { result, status: await this.bootStatus(mechanism) }
   }
 
@@ -534,8 +545,21 @@ export class HomeHostedService extends Service {
     if (spec === null)
       throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
     const result = await this.ladder().uninstall(spec, mechanism)
-    if (result.ok)
-      this.options.settings.update({ autostart: { ...this.options.settings.get().autostart, enabled: false } })
+    const current = this.options.settings.get().autostart
+    this.options.settings.update({
+      autostart: {
+        ...current,
+        enabled: result.ok ? false : current.enabled,
+        lastAttempt: {
+          ok: result.ok,
+          action: 'uninstall',
+          mechanism: result.mechanism ?? mechanism ?? null,
+          detail: result.detail,
+          commands: result.commands,
+          at: Date.now(),
+        },
+      },
+    })
     return { result, status: await this.bootStatus(mechanism) }
   }
 

@@ -178,11 +178,14 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         const domain = await domainOf()
         return {
           mechanism,
-          available: domain !== null,
+          // A plist in ~/Library/LaunchAgents is loaded at login whether or not
+          // this process can reach launchd right now, so an unreachable domain
+          // is a diagnostic, not a reason to refuse.
+          available: true,
           bootCapable: false,
           privileged: true,
           reason: domain === null
-            ? `no launchd gui/$UID or user/$UID domain is reachable for uid ${uidOf(ctx) ?? '?'}`
+            ? `a LaunchAgent loads at login; launchd's domain is not reachable from this process for uid ${uidOf(ctx) ?? '?'} right now, so it is loaded at the next login`
             : `launchd ${domain} domain is reachable; a LaunchAgent loads at login, not at boot`,
         }
       }
@@ -250,13 +253,11 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         }
 
         const domain = await domainOf()
-        if (domain === null)
-          return failed(`launchd has no reachable domain for uid ${uidOf(ctx) ?? '?'}; refusing to write an agent that could never load`)
 
         ensureDirQuiet(path.posix.dirname(file))
         ensureDirQuiet(spec.logDir)
 
-        const loaded = codeOf(await ctx.run('launchctl', ['print', `${domain}/${label}`])) === 0
+        const loaded = domain !== null && codeOf(await ctx.run('launchctl', ['print', `${domain}/${label}`])) === 0
         const before = { text: own.text, exists: own.exists }
 
         let changed = false
@@ -285,6 +286,16 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         const lint = await runPrivileged('plutil', ['-lint', file])
         if (codeOf(lint) !== 0)
           return failed(`plutil -lint rejected the generated plist: ${(lint.stderr || lint.stdout).trim() || 'no output'}`, { changed, commands: commands(file, label) })
+
+        if (domain === null) {
+          return {
+            ok: true,
+            changed,
+            detail: `${file} is in place; launchd's domain is not reachable from this process, so it loads at the next login`,
+            commands: [],
+            needsPrivilege: false,
+          }
+        }
 
         if (loaded && changed) {
           const bootout = await runPrivileged('launchctl', ['bootout', `${domain}/${label}`])

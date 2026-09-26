@@ -52,6 +52,40 @@ export function Hint({ children }: { children: ReactNode }) {
   return <p style={{ margin: 0, fontSize: 12, color: muted, lineHeight: 1.5 }}>{children}</p>
 }
 
+/** Muted external link; the page's own origin is never a navigation target. */
+export function Link({ href, children }: { href: string, children?: ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      style={{ color: muted, textDecoration: 'underline', overflowWrap: 'anywhere' }}
+    >
+      {children ?? href}
+    </a>
+  )
+}
+
+/** Inline refusal block: a title plus the host's own detail, never a silent failure. */
+export function FailureNote({ title, detail }: { title: string, detail: string }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        padding: '8px 10px',
+        borderRadius: 6,
+        fontSize: 12,
+        lineHeight: 1.5,
+        border: `1px solid ${errorColor}`,
+        color: errorColor,
+      }}
+    >
+      <strong>{title}</strong>
+      {detail.length > 0 ? <p style={{ margin: '4px 0 0' }}>{detail}</p> : null}
+    </div>
+  )
+}
+
 export function Button({ children, onClick, disabled, busy }: {
   children: ReactNode
   onClick: () => void

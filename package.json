@@ -1,6 +1,6 @@
 {
   "name": "dsh-home-hosted",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Boot autostart for home-hosted and home-hosted server management from DeepSeek Harness.",
   "type": "module",
   "license": "MIT",
