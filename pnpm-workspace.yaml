@@ -1,2 +1,4 @@
+# The pinned home-hosted is deliberately current; consumers keep their own policy.
+minimumReleaseAge: 0
 allowBuilds:
   esbuild: true
