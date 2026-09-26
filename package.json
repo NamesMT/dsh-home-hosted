@@ -1,7 +1,7 @@
 {
   "name": "dsh-home-hosted",
-  "version": "0.2.1",
-  "description": "Boot autostart for home-hosted and home-hosted server management from DeepSeek Harness.",
+  "version": "0.2.2",
+  "description": "DeepSeek Harness (dsh) plugin: start your dsh web server automatically at boot, and manage home-hosted's panel and servers from inside dsh.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -17,11 +17,25 @@
   },
   "keywords": [
     "deepseek-harness",
+    "dsh",
     "dsh-plugin",
+    "deepseek",
     "home-hosted",
     "autostart",
+    "boot",
+    "startup",
+    "reboot",
     "systemd",
-    "launchd"
+    "launchd",
+    "xdg-autostart",
+    "windows-task-scheduler",
+    "process-supervisor",
+    "server-management",
+    "self-hosted",
+    "homelab",
+    "agent-tools",
+    "cordis",
+    "typescript"
   ],
   "engines": {
     "node": ">=24"

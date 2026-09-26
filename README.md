@@ -2,6 +2,8 @@
 
 **Manage [home-hosted](https://github.com/NamesMT/home-hosted) — its boot entry, its panel and its servers — from inside DeepSeek Harness.**
 
+**Your `dsh` web server, up after every reboot.** home-hosted starts it at boot and keeps it alive: restarting the panel no longer cuts a prompt mid-flight.
+
 [![npm](https://img.shields.io/npm/v/dsh-home-hosted?label=npm&color=blue)](https://www.npmjs.com/package/dsh-home-hosted)
 [![CI](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml/badge.svg)](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-home-hosted?color=green)](./LICENSE)
@@ -16,12 +18,13 @@
 dsh plugin --profile web add dsh-home-hosted
 ```
 
-Then open **Settings → Home Hosted**. Nothing is installed or started until you say so; the page defaults to a **Detailed** style, with a Compact one beside the title.
+Then open **Settings → Home Hosted** and turn on **Manage dsh** — with the panel's autostart enabled, that is what brings `dsh` back after a reboot. Nothing is installed or started until you say so; the page defaults to a **Detailed** style, with a Compact one beside the title.
 
 | | |
 |---|---|
-| 🚀 **Boot autostart** | Installs, verifies and removes the OS entry that starts the panel. Opt in per machine. |
-| 🛡️ **Survives a panel restart** | The managed `dsh` entry runs under home-hosted's nanny, so restarting the panel never cuts a prompt mid-flight. |
+| 🖥️ **`dsh`, up at boot** | home-hosted starts your `dsh` entry after every reboot, so the web UI is there without you touching anything. |
+| 🚀 **Boot autostart** | Installs, verifies and removes the OS entry that starts the panel — systemd, launchd, XDG or the Windows Run key. Opt in per machine. |
+| 🛡️ **Survives a panel restart** | The managed entry runs under home-hosted's nanny, so a panel restart leaves it running. |
 | 📦 **Ships its own panel** | The pinned `home-hosted` is a dependency, so boot runs the version this plugin is tested against. |
 | 🖥️ **Server control** | Add, edit, start, stop and restart entries — written through the panel's API, so nothing restarts behind your back. |
 | 🧭 **A sign-in page that helps** | dsh's 401 points at the panel log holding the tokenised URL, instead of leaving you to find it. |
