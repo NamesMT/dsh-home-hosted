@@ -39,6 +39,7 @@ export type RpcEndpoint =
   | 'boot.verify'
   | 'panel.start'
   | 'panel.takeover'
+  | 'panel.reclaimToken'
   | 'cli.installGlobal'
   | 'ui.manage'
   | 'settings.update'
@@ -50,6 +51,7 @@ export interface SettingsPatch {
   entries?: PluginSettings['entries']
   panel?: Partial<PluginSettings['panel']>
   authNotice?: boolean
+  reclaimToken?: boolean
   uiStyle?: UiStyle
   agentTools?: Partial<PluginSettings['agentTools']>
   cli?: Partial<PluginSettings['cli']>
@@ -78,6 +80,11 @@ export interface EndpointPayloads {
   'panel.start': Record<string, never>
   /** Stop the answering panel and start the preferred copy instead. */
   'panel.takeover': { force?: boolean }
+  /**
+   * Mint a fresh panel API token and enrol it, replacing one the panel refuses.
+   * Clearing first is what makes it work when home-hosted already holds a hash.
+   */
+  'panel.reclaimToken': Record<string, never>
   /** Install the pinned range as a global CLI, so the `global` preference can use it. */
   'cli.installGlobal': Record<string, never>
   /** Drive the panel's own UI: status, update, revert, or switch to a local build. */
@@ -165,7 +172,12 @@ export interface ManagedEntryStatus {
 // Panel
 // ---------------------------------------------------------------------------
 
-export type TokenState = 'enrolled' | 'present' | 'absent' | 'unknown'
+/**
+ * `enrolled` — the plugin holds a token; `present` — home-hosted has one this
+ * plugin does not hold; `absent` — none exists yet; `stale` — the plugin holds
+ * one the panel just refused; `unknown` — the panel was not reachable to ask.
+ */
+export type TokenState = 'enrolled' | 'present' | 'absent' | 'stale' | 'unknown'
 
 export interface PanelStatus {
   /** `$HHOSTED_HOME` this plugin resolved, whether or not the panel answers. */
@@ -179,6 +191,8 @@ export interface PanelStatus {
   /** How writes are authenticated right now. */
   writeVia: 'api' | 'file' | 'none'
   token: TokenState
+  /** True when the panel was asked and accepted the token, so `token` is measured, not assumed. */
+  tokenVerified?: boolean
   detail: string
 }
 
@@ -336,6 +350,12 @@ export interface PluginSettings {
   }
   /** Point dsh web's sign-in page at the panel log that holds the tokenised URL. */
   authNotice: boolean
+  /**
+   * When the panel refuses the plugin's API token, re-enrol one on the spot
+   * instead of failing the call. On by default: a token that went stale (someone
+   * cleared it, or minted their own) should not keep an agent tool from working.
+   */
+  reclaimToken: boolean
   /** `detailed` shows cards and open disclosures; `compact` folds both away. */
   uiStyle: UiStyle
   cli: {
@@ -364,6 +384,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   agentTools: { enabled: true, allow: [...AGENT_TOOL_NAMES] },
   panel: { port: null },
   authNotice: true,
+  reclaimToken: true,
   uiStyle: 'detailed',
   cli: { prefer: 'pinned' },
 }

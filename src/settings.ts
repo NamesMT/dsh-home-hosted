@@ -91,6 +91,8 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
         : null,
     },
     authNotice: raw?.authNotice === undefined ? DEFAULT_SETTINGS.authNotice : raw.authNotice === true,
+    // Absent means on: a stale token is a fault to repair, not a setting to opt into.
+    reclaimToken: raw?.reclaimToken === undefined ? DEFAULT_SETTINGS.reclaimToken : raw.reclaimToken === true,
     uiStyle: raw?.uiStyle === 'compact' ? 'compact' : 'detailed',
     agentTools: {
       // Absent means the default (on), and so does the pair the previous
@@ -136,6 +138,7 @@ export class SettingsStore {
       entries: patch.entries ?? this.current.entries,
       panel: { ...this.current.panel, ...(patch.panel ?? {}) },
       authNotice: patch.authNotice ?? this.current.authNotice,
+      reclaimToken: patch.reclaimToken ?? this.current.reclaimToken,
       uiStyle: patch.uiStyle ?? this.current.uiStyle,
       agentTools: { ...this.current.agentTools, ...(patch.agentTools ?? {}) },
       cli: { ...this.current.cli, ...(patch.cli ?? {}) },

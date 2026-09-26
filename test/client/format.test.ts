@@ -73,7 +73,7 @@ describe('locale key tables', () => {
   })
 
   it('covers every token state', () => {
-    expect(Object.keys(TOKEN_KEYS).sort()).toEqual(['absent', 'enrolled', 'present', 'unknown'])
+    expect(Object.keys(TOKEN_KEYS).sort()).toEqual(['absent', 'enrolled', 'present', 'stale', 'unknown'])
   })
 
   it('covers every boot state', () => {

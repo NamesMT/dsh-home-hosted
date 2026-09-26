@@ -3,12 +3,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { BootStatus } from '../src/shared/contracts.js'
+import type { BootStatus, HomeHostedStatus } from '../src/shared/contracts.js'
 import { readConfig } from '../src/home-hosted/config-file.js'
+import { readStoredToken, storeToken } from '../src/home-hosted/token.js'
 import { HomeHostedService } from '../src/service.js'
+import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
-import { configFile, runtimeFile } from '../src/util/paths.js'
+import { configFile, runtimeFile, secretsFile } from '../src/util/paths.js'
 import type { RunResult } from '../src/util/exec.js'
 import { startStubPanel } from './helpers/stub-panel.js'
 import type { StubPanel } from './helpers/stub-panel.js'
@@ -57,7 +59,18 @@ interface Harness {
   cliCalls: Array<{ args: string[], env: Record<string, string | undefined> }>
 }
 
-async function harness(options: { panel?: StubPanel, panelVersion?: string, cli?: string } = {}): Promise<Harness> {
+async function harness(options: {
+  panel?: StubPanel
+  panelVersion?: string
+  cli?: string
+  /** Called with each plaintext the CLI is handed, as a real `set-token` would
+   *  enrol its hash: the stub panel then accepts that token. */
+  onEnroll?: (token: string) => void
+  /** Replaces the default CLI seam when a test needs a failing CLI. */
+  execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
+  /** Replaces the running-harness probe, so a clone can be expressed from a test. */
+  resolveDsh?: (options: { dshHome: string, stateDir: string }) => Promise<DshLaunch | null>
+} = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -81,11 +94,17 @@ async function harness(options: { panel?: StubPanel, panelVersion?: string, cli?
     defaultEntryId: 'dsh',
     settings,
     createLadder: () => ladder,
-    execCli: async (args, env): Promise<RunResult> => {
+    resolveDsh: options.resolveDsh,
+    execCli: options.execCli ?? (async (args, env): Promise<RunResult> => {
       cliCalls.push({ args, env })
-      writeJsonFile(path.join(home, '.control-secrets.json'), { version: 2, apiToken: { hint: 'abcd', hash: 'x' } })
+      if (env.HHOSTED_TOKEN === undefined)
+        writeJsonFile(secretsFile(home), { version: 2 })
+      else
+        writeJsonFile(secretsFile(home), { version: 2, apiToken: { hint: 'abcd', hash: 'x' } })
+      if (env.HHOSTED_TOKEN !== undefined)
+        options.onEnroll?.(env.HHOSTED_TOKEN)
       return { command: fakeCli, args, code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
-    },
+    }),
   })
 
   return { home, state, service, settings, cliCalls }
@@ -103,7 +122,9 @@ describe('home-hosted service', () => {
     const status = await service.status()
     expect(status.panel.reachable).toBe(false)
     expect(status.panel.writeVia).toBe('file')
-    expect(status.panel.token).toBe('absent')
+    // No panel answered, so the token was never measured: unknown, not absent.
+    expect(status.panel.token).toBe('unknown')
+    expect(status.panel.tokenVerified).toBe(false)
     expect(status.boot.state).toBe('enabled-running')
     expect(status.entries.map(entry => entry.intent.id)).toEqual(['dsh'])
     expect(status.entries[0]?.drift).toEqual(['missing entry'])
@@ -455,5 +476,202 @@ describe('persistence needs the release that has it', () => {
     // Not writing the key is not drift, or every entry would report one here.
     const reported = (await service.status()).entries.find(entry => entry.intent.id === 'other')
     expect(reported?.drift).toEqual([])
+  })
+})
+
+describe('panel token verification', () => {
+  it('measures a token the panel refuses as stale, and says how it was measured', async () => {
+    const panel = await withPanel({ acceptAnyToken: false })
+    const { service, state } = await harness({ panel })
+    storeToken(state, 'not-the-panel-token')
+
+    const status = await service.status()
+    expect(status.panel.reachable).toBe(true)
+    expect(status.panel.token).toBe('stale')
+    expect(status.panel.tokenVerified).toBe(true)
+    // A refused token is not a write path, however present it is on disk.
+    expect(status.panel.writeVia).toBe('file')
+    expect(status.panel.detail).toContain('refused')
+    // The panel was actually asked, with the token this plugin holds.
+    const attempts = panel.requests.filter(request => request.path === '/api/servers')
+    expect(attempts.length).toBeGreaterThan(0)
+    expect(attempts.every(attempt => !attempt.authorized)).toBe(true)
+  })
+
+  it('reports absent without claiming a verification when no token exists yet', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({
+      panel,
+      execCli: async (args): Promise<RunResult> => ({
+        command: 'home-hosted', args, code: 1, signal: null, stdout: '', stderr: 'no api token support', timedOut: false, error: null,
+      }),
+    })
+
+    const status = await service.status()
+    expect(status.panel.reachable).toBe(true)
+    expect(status.panel.token).toBe('absent')
+    expect(status.panel.tokenVerified).toBe(false)
+    expect(status.panel.writeVia).toBe('file')
+  })
+
+  it('reports present, unverified, when home-hosted holds a token this plugin does not have', async () => {
+    const panel = await withPanel()
+    const { home, service } = await harness({ panel })
+    writeJsonFile(secretsFile(home), { version: 2, apiToken: { hint: 'ffff', hash: 'foreign' } })
+
+    const status = await service.status()
+    expect(status.panel.reachable).toBe(true)
+    expect(status.panel.token).toBe('present')
+    expect(status.panel.tokenVerified).toBe(false)
+  })
+})
+
+describe('reclaiming the panel token', () => {
+  it('replaces a refused token and writes through the API afterwards', async () => {
+    const panel = await withPanel({ acceptAnyToken: false })
+    const { home, state, service, cliCalls } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    storeToken(state, 'old-refused-token')
+
+    const before = await service.status()
+    expect(before.panel.token).toBe('stale')
+
+    const after = await service.call('panel.reclaimToken', {}) as HomeHostedStatus
+    expect(after.panel.token).toBe('enrolled')
+    expect(after.panel.tokenVerified).toBe(true)
+    expect(after.panel.writeVia).toBe('api')
+
+    const minted = readStoredToken(state)
+    expect(minted).not.toBeNull()
+    expect(minted).not.toBe('old-refused-token')
+    // The old hash was dropped before the new one was enrolled.
+    expect(cliCalls.map(call => call.args)).toEqual([
+      ['--home', home, 'set-token', '--clear'],
+      ['--home', home, 'set-token'],
+    ])
+    expect(cliCalls[1]?.env.HHOSTED_TOKEN).toBe(minted)
+
+    // The panel refused the old token and now accepts the new one: a real write lands.
+    expect(panel.requests.some(request => request.path === '/api/servers' && !request.authorized)).toBe(true)
+    panel.servers.push({ id: 'other', config: { id: 'other', command: 'sleep' } })
+    await service.call('servers.start', { id: 'other' })
+    expect(panel.servers[0]?.status).toBe('running')
+  })
+
+  it('clears a foreign token home-hosted already holds, and ends with a working one', async () => {
+    const panel = await withPanel({ acceptAnyToken: false })
+    const { home, state, service, cliCalls } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    // home-hosted holds a hash this plugin never had, and the stored plaintext is stale.
+    writeJsonFile(secretsFile(home), { version: 2, apiToken: { hint: 'ffff', hash: 'foreign' } })
+    storeToken(state, 'stale-token')
+
+    expect((await service.status()).panel.token).toBe('stale')
+
+    const status = await service.call('panel.reclaimToken', {}) as HomeHostedStatus
+    expect(cliCalls[0]?.args).toEqual(['--home', home, 'set-token', '--clear'])
+    expect(status.panel.token).toBe('enrolled')
+    expect(status.panel.tokenVerified).toBe(true)
+    expect(status.panel.writeVia).toBe('api')
+  })
+
+  it('reports a CLI that cannot clear the old token, and leaves it in place', async () => {
+    const panel = await withPanel({ acceptAnyToken: false })
+    const { state, service } = await harness({
+      panel,
+      execCli: async (args): Promise<RunResult> => ({
+        command: 'home-hosted', args, code: 1, signal: null, stdout: '', stderr: 'set-token refused', timedOut: false, error: null,
+      }),
+    })
+    storeToken(state, 'stale-token')
+
+    await expect(service.call('panel.reclaimToken', {})).rejects.toMatchObject({
+      code: 'TOKEN_RECLAIM_FAILED',
+      message: expect.stringContaining('set-token refused'),
+    })
+    expect(readStoredToken(state)).toBe('stale-token')
+  })
+
+  it('drops a token that can never work when the re-enrol fails after the clear', async () => {
+    const panel = await withPanel({ acceptAnyToken: false })
+    let calls = 0
+    const { state, service } = await harness({
+      panel,
+      execCli: async (args): Promise<RunResult> => {
+        calls += 1
+        return {
+          command: 'home-hosted', args, code: calls === 1 ? 0 : 2, signal: null, stdout: '', stderr: calls === 1 ? '' : 'mint failed', timedOut: false, error: null,
+        }
+      },
+    })
+    storeToken(state, 'stale-token')
+
+    await expect(service.call('panel.reclaimToken', {})).rejects.toMatchObject({
+      code: 'TOKEN_RECLAIM_FAILED',
+      message: expect.stringContaining('mint failed'),
+    })
+    // The old hash is gone, so a stored plaintext would only lie about being usable.
+    expect(readStoredToken(state)).toBeNull()
+  })
+
+  it('refuses to regenerate against a panel that is not answering, without running the CLI', async () => {
+    const { service, state, cliCalls } = await harness()
+    storeToken(state, 'stale-token')
+
+    await expect(service.call('panel.reclaimToken', {})).rejects.toMatchObject({ code: 'PANEL_UNAVAILABLE' })
+    expect(cliCalls).toHaveLength(0)
+    expect(readStoredToken(state)).toBe('stale-token')
+  })
+
+  it('persists the reclaimToken switch through settings.update', async () => {
+    const { service, settings, state } = await harness()
+    expect(settings.get().reclaimToken).toBe(true)
+
+    await service.call('settings.update', { patch: { reclaimToken: false } })
+    expect(settings.get().reclaimToken).toBe(false)
+    expect(new SettingsStore(path.join(state, 'settings.json'), 'dsh').get().reclaimToken).toBe(false)
+  })
+})
+
+describe('an entry that boots a clone directly', () => {
+  const cloneLaunch = (launcherPath: string | null, cliEntry: string): DshLaunch => ({
+    program: process.execPath,
+    args: [cliEntry],
+    cliEntry,
+    shimPath: null,
+    source: 'entry',
+    launcherPath,
+  })
+
+  it('re-points the stored entry at the launcher when it is managed again', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({
+      panel,
+      resolveDsh: async () => cloneLaunch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
+    })
+    panel.servers.push({
+      id: 'dsh',
+      config: { id: 'dsh', command: process.execPath, args: ['/opt/dsh-clone/lib/bin.js', 'web', '--port', '3080'], autostart: true, onPortConflict: 'follow', stop: { killPortHolders: true } },
+    })
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }] })
+
+    expect(panel.servers[0]!.config.command).toBe(process.execPath)
+    expect(panel.servers[0]!.config.args).toEqual(['/state/bin/dsh.mjs', 'web', '--port', '3080'])
+  })
+
+  it('leaves an entry alone when the harness came from PATH', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({
+      panel,
+      resolveDsh: async () => cloneLaunch(null, '/opt/dsh-clone/lib/bin.js'),
+    })
+    panel.servers.push({
+      id: 'dsh',
+      config: { id: 'dsh', command: 'dsh', args: ['web'], autostart: true, onPortConflict: 'follow', stop: { killPortHolders: true } },
+    })
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }] })
+
+    expect(panel.servers[0]!.config.command).toBe('dsh')
+    expect(panel.servers[0]!.config.args).toEqual(['web'])
   })
 })

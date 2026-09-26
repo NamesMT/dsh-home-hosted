@@ -1,9 +1,20 @@
 import { useEffect, useState } from 'react'
+import type { TokenState } from '../shared/contracts.js'
 import { rpc } from './api.js'
 import { CLI_SOURCE_KEYS, dash, effectiveCandidates, shortenPath, TOKEN_KEYS, WRITE_VIA_KEYS } from './format.js'
 import { IconPanel } from './icons.js'
 import type { SectionProps } from './props.js'
-import { Button, Code, CommandBox, Details, Hint, Link, Note, Option, Section, Spec, Tag } from './ui.js'
+import { Button, Code, CommandBox, Details, Hint, Link, Note, Option, Section, Spec, Switch, Tag } from './ui.js'
+
+/**
+ * The token states a person must act on while the panel is answering.
+ * `enrolled` is healthy and `unknown` was never measured, so neither warns.
+ */
+const TOKEN_WARNING_KEYS: Partial<Record<TokenState, string>> = {
+  absent: 'panelTokenWarnAbsent',
+  present: 'panelTokenWarnPresent',
+  stale: 'panelTokenWarnStale',
+}
 
 /** Draft-then-commit numeric field: empty means `null`, invalid reverts. */
 function PortField({ value, label, hint, invalidLabel, placeholder, disabled, onChange }: {
@@ -58,6 +69,11 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
   const preferred = cli?.prefer ?? status.settings.cli?.prefer ?? 'pinned'
   const [confirming, setConfirming] = useState(false)
   const [installOutput, setInstallOutput] = useState<string | null>(null)
+  const [tokenNote, setTokenNote] = useState<string | null>(null)
+
+  // Only a measured refusal or a missing token warns: an unreachable panel has
+  // nothing to warn about, and the Details row still carries its raw state.
+  const tokenWarningKey = panel.reachable ? TOKEN_WARNING_KEYS[panel.token] : undefined
 
   const cliVersion = cli?.version ?? null
   const versionsKnown = cliVersion !== null && panel.version !== null
@@ -81,8 +97,33 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
     setInstallOutput(typeof value?.output === 'string' ? value.output : null)
   }
 
+  const regenerate = async (): Promise<void> => {
+    const envelope = await run('panel.reclaimToken', () => rpc('panel.reclaimToken', {}))
+    setTokenNote(envelope.ok
+      ? t('panelTokenRegenerated')
+      : t('panelTokenRegenerateFailed', { message: envelope.error.message }))
+  }
+
   return (
     <Section icon={<IconPanel />} title={t('panelTitle')}>
+      {tokenWarningKey === undefined
+        ? null
+        : (
+            <Note tone="warn" title={t('panelTokenWarningTitle')}>
+              <p>{t(tokenWarningKey)}</p>
+              <div className="hh-note-actions">
+                <Button
+                  variant="primary"
+                  busy={busy === 'panel.reclaimToken'}
+                  onClick={() => { void regenerate() }}
+                >
+                  {t('panelTokenRegenerate')}
+                </Button>
+              </div>
+            </Note>
+          )}
+      {tokenNote === null ? null : <Hint>{tokenNote}</Hint>}
+
       {cli === undefined ? null : (
         <>
           <div className="hh-choice" role="radiogroup" aria-label={t('panelCopy')}>
@@ -125,6 +166,16 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
         disabled={panel.reachable || busy !== null}
         onChange={port => updateSettings(current => ({ ...current, panel: { ...current.panel, port } }))}
       />
+
+      <div className="hh-field-block">
+        <Switch
+          label={t('panelReclaimAuto')}
+          checked={status.settings.reclaimToken !== false}
+          disabled={busy === 'settings'}
+          onChange={checked => updateSettings(current => ({ ...current, reclaimToken: checked }))}
+        />
+        <Hint>{t('panelReclaimAutoHint')}</Hint>
+      </div>
 
       <div className="hh-btn-row">
         {panel.reachable

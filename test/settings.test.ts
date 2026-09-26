@@ -27,10 +27,27 @@ describe('settings store', () => {
       entries: [],
       panel: { port: null },
       authNotice: true,
+      reclaimToken: true,
       uiStyle: 'detailed',
       agentTools: { enabled: true, allow: ['status', 'servers_list', 'servers_lifecycle', 'servers_edit', 'autostart_manage', 'ui_manage'] },
       cli: { prefer: 'pinned' },
     })
+  })
+
+  it('defaults the token reclaim on, and persists an explicit off', () => {
+    const s = store()
+    expect(s.get().reclaimToken).toBe(true)
+
+    s.update({ reclaimToken: false })
+    expect(s.get().reclaimToken).toBe(false)
+    expect(new SettingsStore(s.file, 'dsh').get().reclaimToken).toBe(false)
+
+    // A settings write that leaves it out keeps the choice.
+    s.update({ autostart: { enabled: true } })
+    expect(s.get().reclaimToken).toBe(false)
+
+    s.update({ reclaimToken: true })
+    expect(new SettingsStore(s.file, 'dsh').get().reclaimToken).toBe(true)
   })
 
   it('materialises a default intent for an entry it has never seen', () => {

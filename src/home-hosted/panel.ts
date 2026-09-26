@@ -119,13 +119,31 @@ export class PanelClient {
   }
 }
 
-/** Prove a token works, without needing any write permission. */
-export async function verifyToken(baseUrl: string, token: string, timeoutMs = 5000): Promise<boolean> {
+/**
+ * What a token probe measured: `ok` — the panel accepted it; `refused` — the
+ * panel answered and rejected it; `unreachable` — the panel was not there to
+ * ask, which is not the same as a refusal.
+ */
+export type TokenProbe = 'ok' | 'refused' | 'unreachable'
+
+/**
+ * Prove a token with a non-mutating `listServers()`, and say whether the panel
+ * refused it or merely was not answering. A timeout or connection error must
+ * never be reported as a stale token.
+ */
+export async function probeToken(baseUrl: string, token: string, timeoutMs = 5000): Promise<TokenProbe> {
   try {
     await new PanelClient({ baseUrl, token, timeoutMs }).listServers()
-    return true
+    return 'ok'
   }
-  catch {
-    return false
+  catch (error) {
+    if (error instanceof PanelError && (error.code === 'AUTH_REQUIRED' || error.status === 401 || error.status === 403))
+      return 'refused'
+    return 'unreachable'
   }
+}
+
+/** Prove a token works, without needing any write permission. */
+export async function verifyToken(baseUrl: string, token: string, timeoutMs = 5000): Promise<boolean> {
+  return await probeToken(baseUrl, token, timeoutMs) === 'ok'
 }

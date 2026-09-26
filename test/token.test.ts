@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apiTokenEnrolled, ensureToken, readStoredToken, storeToken, storedTokenPath } from '../src/home-hosted/token.js'
+import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, storeToken, storedTokenPath } from '../src/home-hosted/token.js'
 import { secretsFile } from '../src/util/paths.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
@@ -114,5 +114,108 @@ describe('panel API token', () => {
     expect(result.token).toBeNull()
     expect(result.detail).toContain('boom')
     expect(readStoredToken(state)).toBeNull()
+  })
+})
+
+describe('reclaiming a refused panel token', () => {
+  it('clears the old hash first, then mints a fresh token and stores it 0600', async () => {
+    const { home, state } = dirs()
+    storeToken(state, 'old-token')
+    const calls: Array<{ args: string[], env: Record<string, string | undefined> }> = []
+    const result = await reclaimToken({
+      home,
+      stateDir: state,
+      exec: async (args, env) => {
+        calls.push({ args, env })
+        return ok()
+      },
+    })
+
+    expect(result.token).not.toBeNull()
+    expect(result.token).not.toBe('old-token')
+    // The clear runs first and carries no new plaintext; the mint follows with it.
+    expect(calls.map(call => call.args)).toEqual([
+      ['--home', home, 'set-token', '--clear'],
+      ['--home', home, 'set-token'],
+    ])
+    expect(calls[0]?.env.HHOSTED_TOKEN).toBeUndefined()
+    expect(calls[1]?.env.HHOSTED_TOKEN).toBe(result.token)
+    expect(readStoredToken(state)).toBe(result.token)
+    expect(fs.statSync(storedTokenPath(state)).mode & 0o777).toBe(0o600)
+  })
+
+  it('keeps the old token when the clear fails, so nothing is half-written', async () => {
+    const { home, state } = dirs()
+    storeToken(state, 'old-token')
+    let called = 0
+    const result = await reclaimToken({
+      home,
+      stateDir: state,
+      exec: async () => {
+        called += 1
+        return { ...ok(), code: 1, stderr: 'clear refused' }
+      },
+    })
+
+    expect(result.token).toBeNull()
+    expect(result.detail).toContain('clear refused')
+    expect(called).toBe(1)
+    // The old hash is untouched, so the old plaintext is still the one to use.
+    expect(readStoredToken(state)).toBe('old-token')
+  })
+
+  it('drops a token that can never work when the re-enrol fails after the clear', async () => {
+    const { home, state } = dirs()
+    storeToken(state, 'old-token')
+    let called = 0
+    const result = await reclaimToken({
+      home,
+      stateDir: state,
+      exec: async () => {
+        called += 1
+        return called === 1 ? ok() : { ...ok(), code: 2, stderr: 'mint failed' }
+      },
+    })
+
+    expect(result.token).toBeNull()
+    expect(result.detail).toContain('mint failed')
+    // home-hosted no longer holds the old hash, so a stored plaintext would lie.
+    expect(readStoredToken(state)).toBeNull()
+  })
+
+  it('reports a CLI that cannot run at all, without touching the stored token', async () => {
+    const { home, state } = dirs()
+    storeToken(state, 'old-token')
+    const result = await reclaimToken({
+      home,
+      stateDir: state,
+      exec: async () => { throw new Error('no home-hosted CLI is available') },
+    })
+
+    expect(result.token).toBeNull()
+    expect(result.detail).toContain('no home-hosted CLI is available')
+    expect(readStoredToken(state)).toBe('old-token')
+  })
+
+  it('never interleaves two reclaims, so the last enrolment is the stored token', async () => {
+    const { home, state } = dirs()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const order: string[] = []
+    const exec = async (_args: string[], env: Record<string, string | undefined>): Promise<RunResult> => {
+      order.push(env.HHOSTED_TOKEN === undefined ? 'clear' : 'set')
+      await gate
+      return ok()
+    }
+
+    const first = reclaimToken({ home, stateDir: state, exec })
+    const second = reclaimToken({ home, stateDir: state, exec })
+    // Let the first operation reach its clear before either can finish.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    release()
+    await Promise.all([first, second])
+
+    expect(order).toEqual(['clear', 'set', 'clear', 'set'])
+    expect(readStoredToken(state)).not.toBeNull()
   })
 })

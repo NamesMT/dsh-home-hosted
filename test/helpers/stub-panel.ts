@@ -23,6 +23,7 @@ export interface RecordedRequest {
 
 export interface StubPanel {
   url: string
+  /** The one token the panel accepts; assignable so a test can rotate it. */
   token: string
   servers: StubServerRecord[]
   requests: RecordedRequest[]
@@ -40,7 +41,9 @@ function view(record: StubServerRecord) {
 }
 
 export async function startStubPanel(options: { token?: string, acceptAnyToken?: boolean } = {}): Promise<StubPanel> {
-  const token = options.token ?? 'stub-panel-token'
+  // A holder, not a local: a test rotates the token on the returned object and
+  // the listener starts accepting the new one without a restart.
+  const state = { token: options.token ?? 'stub-panel-token' }
   const acceptAny = options.acceptAnyToken === true
   const servers: StubServerRecord[] = []
   const requests: RecordedRequest[] = []
@@ -59,7 +62,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
       }
 
       const authorization = request.headers.authorization ?? ''
-      const authorized = acceptAny ? authorization.startsWith('Bearer ') : authorization === `Bearer ${token}`
+      const authorized = acceptAny ? authorization.startsWith('Bearer ') : authorization === `Bearer ${state.token}`
       const path = request.url ?? '/'
       const method = request.method ?? 'GET'
       requests.push({ method, path, body, authorized })
@@ -156,7 +159,8 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
 
   return {
     url: `http://127.0.0.1:${address.port}`,
-    token,
+    get token() { return state.token },
+    set token(value: string) { state.token = value },
     servers,
     requests,
     stop: async () => await new Promise<void>((resolve, reject) => {

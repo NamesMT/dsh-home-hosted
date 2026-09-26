@@ -1,7 +1,7 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { PanelClient, PanelError } from '../src/home-hosted/panel.js'
+import { PanelClient, PanelError, probeToken, verifyToken } from '../src/home-hosted/panel.js'
 import { startStubPanel } from './helpers/stub-panel.js'
 import type { StubPanel } from './helpers/stub-panel.js'
 
@@ -85,5 +85,22 @@ describe('panel client', () => {
     const url = await listenPlain('<html>login</html>')
     const client = new PanelClient({ baseUrl: url, token: 'secret', timeoutMs: 2000 })
     await expect(client.listServers()).rejects.toMatchObject({ code: 'PANEL_BAD_RESPONSE', status: 200 })
+  })
+})
+
+describe('token probes', () => {
+  it('tells a refusal from a panel that never answered', async () => {
+    const panel = await stub({ token: 'secret' })
+    expect(await probeToken(panel.url, 'secret')).toBe('ok')
+    expect(await probeToken(panel.url, 'wrong')).toBe('refused')
+    // No listener on this port: a failure to ask is not a refusal.
+    expect(await probeToken('http://127.0.0.1:1', 'secret', 1000)).toBe('unreachable')
+  })
+
+  it('keeps verifyToken boolean for the write path', async () => {
+    const panel = await stub({ token: 'secret' })
+    expect(await verifyToken(panel.url, 'secret')).toBe(true)
+    expect(await verifyToken(panel.url, 'wrong')).toBe(false)
+    expect(await verifyToken('http://127.0.0.1:1', 'secret', 1000)).toBe(false)
   })
 })

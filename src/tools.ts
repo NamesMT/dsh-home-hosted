@@ -11,7 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { AgentToolName, RpcEndpoint, UiAction } from './shared/contracts.js'
+import type { AgentToolName, HomeHostedStatus, RpcEndpoint, UiAction } from './shared/contracts.js'
 import { MUTATING_AGENT_TOOLS } from './shared/contracts.js'
 import type { HomeHostedService } from './service.js'
 import type { SettingsStore } from './settings.js'
@@ -158,7 +158,67 @@ const READ_ONLY_ACTIONS: Partial<Record<AgentToolName, (input: Input) => boolean
   ui_manage: input => stringArg(input, 'action') === 'status',
 }
 
-function registerOne(ctx: Context, service: HomeHostedService, name: AgentToolName): () => void {
+/** Error codes that mean the panel refused the plugin's credential. */
+const TOKEN_REFUSAL_CODES = new Set([
+  'AUTH_REQUIRED',
+  'AUTH_UNARMED',
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'INVALID_TOKEN',
+  'TOKEN_STALE',
+  'TOKEN_REFUSED',
+])
+
+function errorCode(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  return typeof code === 'string' ? code : null
+}
+
+function errorStatus(error: unknown): number | null {
+  const status = (error as { status?: unknown } | null | undefined)?.status
+  return typeof status === 'number' ? status : null
+}
+
+/** A panel answer that refused the token, as opposed to a bad request or a 404. */
+function refusedByPanel(error: unknown): boolean {
+  const status = errorStatus(error)
+  if (status === 401 || status === 403)
+    return true
+  const code = errorCode(error)
+  return code !== null && TOKEN_REFUSAL_CODES.has(code)
+}
+
+/**
+ * Whether a failed call failed because the panel refused this plugin's token.
+ *
+ * A 401/403 or an auth code is that refusal directly. A client that could not be
+ * established at all is ambiguous — the panel may simply be down — so the
+ * panel's measured token state is asked instead; only `stale`, which the panel
+ * sets from an actual refusal, justifies a repair.
+ */
+async function tokenRefused(service: Pick<HomeHostedService, 'call'>, error: unknown): Promise<boolean> {
+  if (refusedByPanel(error))
+    return true
+  if (errorCode(error) !== 'PANEL_UNAVAILABLE')
+    return false
+  try {
+    const status = await service.call('status', {}) as HomeHostedStatus | null
+    return status?.panel.token === 'stale'
+  }
+  catch {
+    return false
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function failureText(error: unknown): string {
+  return `failed: ${messageOf(error)}`
+}
+
+function registerOne(ctx: Context, service: HomeHostedService, settings: SettingsStore, name: AgentToolName): () => void {
   const spec = TOOL_SPECS[name]
   const toolName = toolNameFor(name)
   const mutatingTool = MUTATING_AGENT_TOOLS.includes(name)
@@ -191,12 +251,38 @@ function registerOne(ctx: Context, service: HomeHostedService, name: AgentToolNa
           return `refused: approval answered "${outcome}" (session sandbox: ${mode ?? 'unknown'}). ${remedy}`
       }
 
+      // Argument handling is not a panel call: a bad input is reported as-is,
+      // never "repaired" by minting a token.
+      let request: { endpoint: RpcEndpoint, payload: unknown }
       try {
-        const { endpoint, payload } = spec.run(input)
-        return JSON.stringify(await service.call(endpoint, payload), null, 2)
+        request = spec.run(input)
       }
       catch (error) {
-        return `failed: ${error instanceof Error ? error.message : String(error)}`
+        return failureText(error)
+      }
+
+      try {
+        return JSON.stringify(await service.call(request.endpoint, request.payload), null, 2)
+      }
+      catch (error) {
+        if (!settings.get().reclaimToken || !(await tokenRefused(service, error)))
+          return failureText(error)
+
+        // One repair, one retry. The reclaim is a write, but it repairs this
+        // plugin's own credential, not the panel's state, so it runs behind the
+        // call's existing approval gate rather than asking for a second one.
+        try {
+          await service.call('panel.reclaimToken', {})
+        }
+        catch (reclaimError) {
+          return `${failureText(error)} (token reclaim failed: ${messageOf(reclaimError)})`
+        }
+        try {
+          return JSON.stringify(await service.call(request.endpoint, request.payload), null, 2)
+        }
+        catch (retryError) {
+          return failureText(retryError)
+        }
       }
     },
   }))
@@ -214,7 +300,7 @@ export function registerAgentTools(ctx: Context, service: HomeHostedService, set
         return
       for (const name of current.agentTools.allow) {
         try {
-          disposers.push(registerOne(scoped, service, name))
+          disposers.push(registerOne(scoped, service, settings, name))
         }
         catch {
           // one unruly tool must not keep the rest of the allowlist off the model

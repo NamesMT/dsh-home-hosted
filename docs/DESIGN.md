@@ -164,6 +164,22 @@ one, passes it to `home-hosted set-token` through `HHOSTED_TOKEN` (the CLI print
 nothing), and keeps it 0600 in its own state directory. It is never rendered,
 logged, or embedded in a unit file.
 
+The token state the page shows is measured, not assumed. When the panel answers,
+the plugin proves its token with a non-mutating `listServers()`: a refusal is
+`stale` and the write path drops to the config file, while a panel that never
+answered leaves the state `unknown` — a timeout is not a refusal, and
+`tokenVerified` records whether a proof actually happened.
+
+A refused token, or a hash this plugin never had, is replaced by
+`panel.reclaimToken`: it clears the old hash first (`set-token --clear`, without
+which `set-token` refuses to overwrite one), mints and enrols a fresh token
+through the same `HHOSTED_TOKEN` path, and proves it against the panel before
+returning the refreshed status. Every token operation on one state directory is
+serialised; two concurrent mints used to leave the stored plaintext and the
+panel's hash disagreeing, and nothing could ever recover. If the CLI cannot run
+nothing is written; if it fails after the clear, the stored token is removed,
+because home-hosted no longer accepts it and a stored plaintext would only lie.
+
 ## Privilege
 
 Boot scope needs privilege somewhere on every platform: a system unit, or

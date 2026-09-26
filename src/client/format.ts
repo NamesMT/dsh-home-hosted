@@ -65,6 +65,7 @@ export const TOKEN_KEYS: Record<TokenState, string> = {
   enrolled: 'tokenEnrolled',
   present: 'tokenPresent',
   absent: 'tokenAbsent',
+  stale: 'tokenStale',
   unknown: 'tokenUnknown',
 }
 

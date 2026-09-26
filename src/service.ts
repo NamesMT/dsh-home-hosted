@@ -16,7 +16,8 @@ import { isOnPortConflict, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.
 import type { BootSpec } from './boot/types.js'
 import { createBootLadder } from './boot/index.js'
 import { findEntry, patchControl, patchEntry, readConfig, removeEntry as removeConfigEntry, upsertEntry, writeConfig } from './home-hosted/config-file.js'
-import { buildDshEntry, detectProfile, resolveDshLaunch } from './home-hosted/dsh-entry.js'
+import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
+import type { DshLaunch } from './home-hosted/dsh-entry.js'
 import { defaultIntent, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
 import { buildHomeHostedBootSpec, homeHostedEnv } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
@@ -24,9 +25,9 @@ import { compareVersions, EXPECTED_RANGE, MIN_KILL_VERSION, MIN_PERSISTENT_VERSI
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
 import { installGlobal, spawnTakeover, startPanel as startPanelProcess } from './home-hosted/panel-control.js'
-import { PanelClient, PanelError, verifyToken } from './home-hosted/panel.js'
+import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
-import { apiTokenEnrolled, ensureToken, readStoredToken } from './home-hosted/token.js'
+import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
 import { dshHome } from './util/paths.js'
 import type { RunResult } from './util/exec.js'
@@ -34,6 +35,9 @@ import { run } from './util/exec.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
 
 const ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
+
+/** A token probe is an auxiliary fact, not a user action: never let it stall a poll. */
+const TOKEN_PROBE_TIMEOUT_MS = 3000
 
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
 function pluginRoot(): string | null {
@@ -81,6 +85,8 @@ export interface HomeHostedServiceOptions {
   execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
   /** Test seam: supply the boot ladder instead of probing the real OS. */
   createLadder?: () => BootLadderLike
+  /** Test seam: resolve the running harness instead of reading this process. */
+  resolveDsh?: (options: { dshHome: string, stateDir: string }) => Promise<DshLaunch | null>
 }
 
 interface CachedClient {
@@ -95,12 +101,21 @@ interface LiveEntry {
 
 export class HomeHostedService extends Service {
   private clientCache: CachedClient | null = null
+  /** The last token this service proved against a panel, so a poll does not re-probe it. */
+  private tokenProof: { url: string, token: string, until: number } | null = null
   private tokenDetail = ''
   private readonly snapshotsFile: string
 
   constructor(ctx: Context, private readonly options: HomeHostedServiceOptions) {
     super(ctx, 'homeHosted')
     this.snapshotsFile = path.join(options.stateDir, 'snapshots.json')
+  }
+
+  private async resolveDsh(dshHome: string): Promise<DshLaunch | null> {
+    return await (this.options.resolveDsh ?? (options => resolveDshLaunch(options)))({
+      dshHome,
+      stateDir: this.options.stateDir,
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -209,6 +224,16 @@ export class HomeHostedService extends Service {
     writeConfig(this.options.home, patchControl(read.raw ?? {}, { port }), this.writtenBy())
   }
 
+  /** Whether this exact token was already proved against this exact panel. */
+  private tokenProven(url: string, token: string): boolean {
+    return this.tokenProof !== null && this.tokenProof.until > Date.now()
+      && this.tokenProof.url === url && this.tokenProof.token === token
+  }
+
+  private proveToken(url: string, token: string): void {
+    this.tokenProof = { url, token, until: Date.now() + 30_000 }
+  }
+
   async panelStatus(): Promise<PanelStatus> {
     const runtime = this.runtime()
     const stored = readStoredToken(this.options.stateDir)
@@ -216,8 +241,36 @@ export class HomeHostedService extends Service {
     const reachable = runtime !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url))
     const answered = runtime !== null && await probePanel(runtime.url)
 
-    const token: PanelStatus['token'] = stored !== null ? 'enrolled' : (enrolledOnDisk ? 'present' : 'absent')
-    const writeVia: PanelStatus['writeVia'] = answered && stored !== null ? 'api' : 'file'
+    // The token state is measured, not assumed: when the panel answers, the
+    // plugin's own token is proved against it. A refusal is `stale`; a panel
+    // that would not answer the API call leaves the state `unknown` rather than
+    // claiming a measurement that was never taken.
+    let token: PanelStatus['token'] = 'unknown'
+    let tokenVerified = false
+    if (answered) {
+      if (stored === null) {
+        token = enrolledOnDisk ? 'present' : 'absent'
+      }
+      else if (this.tokenProven(runtime.url, stored)) {
+        token = 'enrolled'
+        tokenVerified = true
+      }
+      else {
+        const probe = await probeToken(runtime.url, stored, TOKEN_PROBE_TIMEOUT_MS)
+        if (probe === 'ok') {
+          token = 'enrolled'
+          tokenVerified = true
+          this.proveToken(runtime.url, stored)
+        }
+        else if (probe === 'refused') {
+          token = 'stale'
+          tokenVerified = true
+        }
+      }
+    }
+
+    // A token the panel refuses is not a write path, however present it is on disk.
+    const writeVia: PanelStatus['writeVia'] = token === 'enrolled' ? 'api' : 'file'
 
     return {
       home: this.options.home,
@@ -228,16 +281,64 @@ export class HomeHostedService extends Service {
       pid: runtime?.pid ?? null,
       writeVia,
       token,
+      tokenVerified,
       detail: answered
-        ? (stored !== null
+        ? (token === 'enrolled'
             ? (this.tokenDetail || 'the panel is answering and this plugin holds a token')
-            : (enrolledOnDisk
+            : token === 'stale'
+              ? 'the panel refused this plugin\'s API token, so writes go straight to servers.config.json; regenerate the token'
+              : token === 'present'
                 ? 'the panel is answering, but home-hosted already holds an API token this plugin does not have'
-                : 'the panel is answering; a token will be enrolled on the first write'))
+                : token === 'absent'
+                  ? 'the panel is answering; a token will be enrolled on the first write'
+                  : 'the panel answered, but the plugin\'s token could not be checked')
         : (runtime === null
             ? 'no run.json: the panel is not running, so entries are written straight to servers.config.json'
             : reachable ? 'the panel process is alive but is not answering' : 'the panel is not running'),
     }
+  }
+
+  /**
+   * Replace the panel's API token with a fresh one and prove it.
+   *
+   * home-hosted keeps only a hash, so a token this plugin does not hold cannot
+   * be recovered: the old hash is cleared, a new token is enrolled through the
+   * CLI, and it is proved against the answering panel before being reported.
+   * Nothing is written when the CLI cannot run, and a panel that is not
+   * answering is refused up front rather than left with an unverifiable token.
+   */
+  async reclaimPanelToken(): Promise<HomeHostedStatus> {
+    const runtime = this.runtime()
+    if (runtime === null || !(await probePanel(runtime.url))) {
+      throw new HomeHostedError(
+        'the panel is not answering, so a regenerated token could not be verified; start the panel first',
+        'PANEL_UNAVAILABLE',
+      )
+    }
+
+    const result = await reclaimToken({
+      home: this.options.home,
+      stateDir: this.options.stateDir,
+      exec: (args, env) => this.cliExec(args, env),
+    })
+    // Whatever happened, nothing cached was built from the token in play now.
+    this.clientCache = null
+    this.tokenProof = null
+    this.tokenDetail = result.detail
+    if (result.token === null)
+      throw new HomeHostedError(result.detail, 'TOKEN_RECLAIM_FAILED')
+
+    const probe = await probeToken(runtime.url, result.token, TOKEN_PROBE_TIMEOUT_MS)
+    if (probe !== 'ok') {
+      throw new HomeHostedError(
+        probe === 'refused'
+          ? 'a fresh token was enrolled, but the panel refused it; check the panel log before trying again'
+          : 'a fresh token was enrolled, but the panel stopped answering before it could be verified',
+        'TOKEN_RECLAIM_UNVERIFIED',
+      )
+    }
+    this.proveToken(runtime.url, result.token)
+    return await this.status()
   }
 
   private async tryClient(): Promise<PanelClient | null> {
@@ -260,6 +361,7 @@ export class HomeHostedService extends Service {
 
     const client = new PanelClient({ baseUrl: runtime.url, token: ensured.token })
     this.clientCache = { client, until: Date.now() + 30_000 }
+    this.proveToken(runtime.url, ensured.token)
     return client
   }
 
@@ -307,20 +409,38 @@ export class HomeHostedService extends Service {
     return map
   }
 
-  private async createEntry(intent: EntryIntent, patch: ServerEntryPatch, live: ServerEntry | null): Promise<ServerEntry | null> {
+  private async createEntry(intent: EntryIntent, patch: ServerEntryPatch): Promise<ServerEntry | null> {
     if (intent.id !== this.options.defaultEntryId)
       return null
-    const dsh = await resolveDshLaunch()
+    const harnessHome = process.env.DSH_HOME ?? dshHome()
+    // State dir and harness home are the plugin's own, not the defaults: an
+    // override has to point the launcher at the same place everything else is.
+    const dsh = await this.resolveDsh(harnessHome)
     const { port, host } = this.webServer()
     const generated = buildDshEntry({
       id: intent.id,
       port,
       host,
       profile: detectProfile(process.argv, process.env),
-      dshHome: process.env.DSH_HOME ?? dshHome(),
+      dshHome: harnessHome,
       launch: dsh,
+      launcherPath: dsh?.launcherPath ?? null,
     })
-    return { ...(live ?? generated), ...generated, ...patch }
+    return { ...generated, ...patch }
+  }
+
+  /**
+   * An entry written before the launcher existed still runs a clone's build
+   * output directly. Point it at the stable launcher, or the fix would only
+   * ever apply to freshly created entries — the plugin never rewrites an
+   * existing entry's command.
+   */
+  private async dshCommandRepair(live: ServerEntry | null): Promise<{ command: string, args: string[] } | null> {
+    if (live === null || !needsLauncherRepair(live))
+      return null
+    const harnessHome = process.env.DSH_HOME ?? dshHome()
+    const dsh = await this.resolveDsh(harnessHome)
+    return launcherRepair(live, dsh)
   }
 
   private async writeOwned(intent: EntryIntent): Promise<void> {
@@ -332,13 +452,14 @@ export class HomeHostedService extends Service {
     }
 
     const patch = ownedPatch(intent, live?.config ?? null, { persistent: await this.supportsPersistent() })
+    const repair = intent.id === this.options.defaultEntryId ? await this.dshCommandRepair(live?.config ?? null) : null
     const client = await this.tryClient()
     if (client !== null) {
       if (live !== null) {
-        await client.updateServer(intent.id, patch)
+        await client.updateServer(intent.id, { ...patch, ...(repair ?? {}) })
         return
       }
-      const entry = await this.createEntry(intent, patch, null)
+      const entry = await this.createEntry(intent, patch)
       if (entry === null) {
         throw new HomeHostedError(
           `no server "${intent.id}" exists; create it first, then this plugin can adopt its autostart and conflict policy`,
@@ -354,11 +475,11 @@ export class HomeHostedService extends Service {
       throw new HomeHostedError(read.error, 'CONFIG_UNREADABLE')
     let raw = read.raw ?? {}
     if (findEntry(raw, intent.id) !== null) {
-      writeConfig(this.options.home, patchEntry(raw, intent.id, patch), this.writtenBy())
+      writeConfig(this.options.home, patchEntry(raw, intent.id, { ...patch, ...(repair ?? {}) }), this.writtenBy())
       return
     }
 
-    const entry = await this.createEntry(intent, patch, null)
+    const entry = await this.createEntry(intent, patch)
     if (entry === null)
       throw new HomeHostedError(`no server "${intent.id}" exists in ${this.options.home}/servers.config.json`, 'ENTRY_MISSING')
 
@@ -951,6 +1072,9 @@ export class HomeHostedService extends Service {
 
       case 'panel.takeover':
         return await this.takeoverPanel(input.force === true)
+
+      case 'panel.reclaimToken':
+        return await this.reclaimPanelToken()
 
       case 'cli.installGlobal':
         return await this.installGlobalCli()
