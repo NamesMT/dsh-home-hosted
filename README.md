@@ -1,8 +1,13 @@
-# dsh-home-hosted
+<div align="center">
 
-**Manage [home-hosted](https://github.com/NamesMT/home-hosted) — its boot entry, its panel and its servers — from inside DeepSeek Harness.**
+# 📌 dsh-home-hosted
 
-**Your `dsh` web server, up after every reboot.** home-hosted starts it at boot and keeps it alive: restarting the panel no longer cuts a prompt mid-flight.
+**Your whole home stack, up after every reboot — your `dsh` web server included.**
+
+A [DeepSeek Harness](https://github.com/deepseek-ai/dsh) plugin for
+[home-hosted](https://github.com/NamesMT/home-hosted), the panel that supervises your services.
+Declare the servers once; this page manages the panel, the boot entry and the entries.
+<sub>Nothing is installed or started until you say so.</sub>
 
 [![npm](https://img.shields.io/npm/v/dsh-home-hosted?label=npm&color=blue)](https://www.npmjs.com/package/dsh-home-hosted)
 [![CI](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml/badge.svg)](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml)
@@ -10,27 +15,72 @@
 [![node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![dsh](https://img.shields.io/badge/dsh-%3E%3D0.1.7--rc.2-5b21b6)](https://github.com/deepseek-ai/dsh)
 
+[🚀 Quick start](#-quick-start) · [🎛️ What the plugin does](#-what-the-plugin-does) · [🤖 Agent tools](#-agent-tools) · [🧩 Depth](#-depth)
+
+</div>
+
+<div align="center">
+
 ![The plugin's page: Detailed and Compact styles, under Settings → Home Hosted](https://raw.githubusercontent.com/NamesMT/dsh-home-hosted/main/assets/settings.gif)
 
-## Install
+<sub>The Detailed style, then the same sections in Compact — both switchable from the page header.</sub>
+
+</div>
+
+---
+
+## 🚀 Quick start
 
 ```sh
 dsh plugin --profile web add dsh-home-hosted
 ```
 
-Then open **Settings → Home Hosted** and turn on **Manage dsh** — with the panel's autostart enabled, that is what brings `dsh` back after a reboot. Nothing is installed or started until you say so; the page defaults to a **Detailed** style, with a Compact one beside the title.
+Open **Settings → Home Hosted**, turn on **Manage dsh**, and enable autostart.
+<sub>Reboot once; `dsh` comes back without you touching anything.</sub>
+
+## 🤔 Why
+
+A panel restart shouldn't kill a prompt mid-flight, and a reboot shouldn't cost you an SSH session.
+
+```text
+                 reboot
+                   │
+                   ▼
+  OS boot entry ──▶ home-hosted panel ──▶ ┌─────────────┐
+  systemd ·                    │          │ dsh web ✓   │
+   launchd ·                   │          └─────────────┘
+    XDG · Run key              │
+                               ├────────▶ ┌─────────────┐
+                               │          │ docker      │
+                               │          │ compose     │
+                               │          └─────────────┘
+                               │
+                               └────────▶ ┌─────────────┐
+                                          │ postgres    │
+                                          │ :5432       │
+                                          └─────────────┘
+```
+
+**`dsh` is one entry in the panel, not the whole product.** The panel is the supervisor: it starts
+each entry, watches it, restarts what dies and reclaims its port. Add your compose stack, your
+database, your bot — manage them from the page, or hand the entry ids to an agent.
+
+A plugin cannot run at boot, so this one writes the OS entry while dsh runs and the OS takes over.
+One managed entry (`dsh`) is kept alive under home-hosted's nanny, so a panel restart leaves it
+running.
+
+## 🎛️ What the plugin does
 
 | | |
 |---|---|
-| 🖥️ **`dsh`, up at boot** | home-hosted starts your `dsh` entry after every reboot, so the web UI is there without you touching anything. |
-| 🚀 **Boot autostart** | Installs, verifies and removes the OS entry that starts the panel — systemd, launchd, XDG or the Windows Run key. Opt in per machine. |
-| 🛡️ **Survives a panel restart** | The managed entry runs under home-hosted's nanny, so a panel restart leaves it running. |
+| 🚀 **Boot autostart** | Installs, verifies and removes the OS entry. Opt in per machine. |
+| 🛡️ **Survives a panel restart** | The managed entry runs under home-hosted's nanny, so restarting the panel leaves it running. |
 | 📦 **Ships its own panel** | The pinned `home-hosted` is a dependency, so boot runs the version this plugin is tested against. |
 | 🖥️ **Server control** | Add, edit, start, stop and restart entries — written through the panel's API, so nothing restarts behind your back. |
-| 🧭 **A sign-in page that helps** | dsh's 401 points at the panel log holding the tokenised URL, instead of leaving you to find it. |
-| 🤖 **Agent tools** | On by default: the agent can inspect state, manage servers, install autostart and switch the panel's UI. |
+| 🧭 **Token warnings that mean something** | A missing or refused API token is called out on the page, with one click to mint a working one. |
+| 🤖 **Agent tools** | On by default, session permissions still gate every write. |
 
-## Agent tools
+## 🤖 Agent tools
 
 | Tool | Does |
 |---|---|
@@ -42,6 +92,9 @@ Then open **Settings → Home Hosted** and turn on **Manage dsh** — with the p
 | `home_hosted_ui_manage` | `status` · `update` · `revert` · `switch` the panel's own UI |
 
 A tool that changes something asks for approval **only** when the session is not already Full access.
+<sub>A refused token is re-enrolled on the spot and the tool retries — see **Auto reclaim** below.</sub>
+
+## 🧩 Depth
 
 <details>
 <summary><b>Boot autostart, per platform</b></summary>
@@ -52,26 +105,55 @@ A tool that changes something asks for approval **only** when the session is not
 | macOS | `launchd-agent`, `launchd-daemon` | login, or boot with the daemon (one-time `sudo`) |
 | Windows | Run key, Task Scheduler | login |
 
-A plugin cannot act at boot: it installs and re-syncs the entry while dsh runs, and the OS takes over from there. When the process cannot elevate, the page prints the exact commands to run instead — including the `launchd-daemon` that starts a Mac **before** login.
+When the process cannot elevate, the page prints the exact commands instead — including the
+`launchd-daemon` that starts a Mac **before** login.
 
 </details>
 
 <details>
 <summary><b>Which home-hosted runs</b></summary>
 
-The pinned dependency by default. The page can switch to a global install, or install the pinned range globally for you. Boot entries run a small stable launcher the plugin writes, so a `node_modules` path that moves never breaks boot.
+The pinned dependency by default; the page can switch to a global install, or install the pinned
+range globally for you. Boot entries run a small stable launcher the plugin writes, so a
+`node_modules` path that moves never breaks boot.
+
+</details>
+
+<details>
+<summary><b>dsh from a local clone</b></summary>
+
+A `dsh` you cloned and built yourself is supported: the managed entry starts a stable launcher that
+re-finds your build at boot, so a rebuild, a moved checkout or a fresh profile does not strand it.
+<sub>Falls back to whatever `dsh` is on PATH, and fails with the reason when it finds neither.</sub>
 
 </details>
 
 <details>
 <summary><b>Managed entry and port policy</b></summary>
 
-One entry (`dsh`) is managed from the page with a single toggle: the panel keeps it alive, restarts it and reclaims its port. A detached restart is recognised on macOS and Linux (`follow`); Windows cannot prove identity through a `.cmd` shim, so it uses `onPortConflict: kill` — which needs home-hosted 0.6.0 or newer, and the plugin refuses that write against an older panel rather than producing a config it cannot parse.
+One entry (`dsh`), one toggle: the panel keeps it alive, restarts it and reclaims its port. A
+detached restart is recognised on macOS and Linux (`follow`); Windows cannot prove identity through
+a `.cmd` shim, so it uses `onPortConflict: kill` — needing home-hosted 0.6.0+, and the plugin
+refuses that write against an older panel rather than producing a config it cannot parse.
 
 </details>
 
 <details>
-<summary><b>Configuration</b></summary>
+<summary><b>API tokens and Auto reclaim</b></summary>
+
+The plugin needs its own home-hosted API token to read and write the panel. home-hosted keeps only
+the token's hash, so a token it did not mint can never be recovered — `<stateDir>/panel-token` is
+`0600`, never rendered or logged, and **Regenerate** clears the old hash and enrols a new one.
+
+A token that stops working (someone ran `home-hosted set-token`, or cleared it) shows on the page as
+a warning with that button. **Auto reclaim**, on by default, does the same thing automatically when a
+panel call is refused: the tool re-enrols and retries once instead of failing. Turn it off to be
+asked instead of having a working token silently replaced.
+
+</details>
+
+<details>
+<summary><b>Operator config</b></summary>
 
 The Cordis row config is for operator overrides only:
 
@@ -84,7 +166,7 @@ The Cordis row config is for operator overrides only:
     defaultEntryId: dsh
 ```
 
-Everything a person toggles lives in `<stateDir>/settings.json`. The panel API token it mints is kept `0600` there, and is never rendered or logged.
+Everything a person toggles lives in `<stateDir>/settings.json`.
 
 </details>
 
@@ -96,8 +178,14 @@ pnpm install
 pnpm typecheck && pnpm test && pnpm build
 ```
 
-Node 24+, pnpm, 360 tests. Same four commands CI runs.
+Node 24+, pnpm. The same commands CI runs.
 
 </details>
 
+---
+
+<div align="center">
+
 MIT · [npm](https://www.npmjs.com/package/dsh-home-hosted) · [releases](https://github.com/NamesMT/dsh-home-hosted/releases) · [issues](https://github.com/NamesMT/dsh-home-hosted/issues) · built on [home-hosted](https://github.com/NamesMT/home-hosted)
+
+</div>
