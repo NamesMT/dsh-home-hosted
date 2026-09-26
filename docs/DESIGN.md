@@ -10,6 +10,24 @@ starts home-hosted from then on. Every plugin start re-asserts that entry
 (rewrite-if-changed), which is also what repairs a node path that moved after an
 upgrade.
 
+## Which home-hosted runs
+
+The plugin depends on `home-hosted` at a pinned range and drives its own copy —
+a global install is only a fallback. Resolution order: an operator override in
+the plugin row, then the pinned dependency, then PATH.
+
+That copy resolves to a pnpm path carrying a version and a peer hash
+(`…/.pnpm/home-hosted@0.6.1_zod@4.6.5/node_modules/home-hosted/…`), which moves
+on the next install and disappears when the profile is rebuilt. A boot entry
+that baked it in would fail exactly when it matters.
+
+So the boot entry runs a generated launcher in the plugin state directory
+(`bin/home-hosted.mjs`, rewritten on every plugin start). At boot the launcher
+finds the pinned copy again — recorded path, then `$DSH_HOME/profiles/*`
+node_modules (flat or pnpm), then PATH — and forwards its argv, so the entry
+survives plugin upgrades and profile reinstalls. The plugin preflights the
+launcher the way the unit invokes it and shows the version it answers.
+
 ## Two writes, and why the API comes first
 
 home-hosted's config store compares the bytes it last wrote, so a write through

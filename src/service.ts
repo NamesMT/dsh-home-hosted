@@ -10,14 +10,17 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import type { BootMechanism, BootStatus, EntryIntent, HomeHostedStatus, ManagedEntryStatus, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView } from './shared/contracts.js'
 import type { BootSpec } from './boot/types.js'
 import { createBootLadder } from './boot/index.js'
 import { findEntry, patchEntry, readConfig, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, resolveDshLaunch } from './home-hosted/dsh-entry.js'
 import { ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
-import type { CliLaunch } from './home-hosted/launch.js'
-import { buildHomeHostedBootSpec, resolveHomeHostedLaunch } from './home-hosted/launch.js'
+import { buildHomeHostedBootSpec } from './home-hosted/launch.js'
+import type { CliResolution } from './home-hosted/resolve.js'
+import { MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
+import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import { PanelClient, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken } from './home-hosted/token.js'
@@ -28,6 +31,16 @@ import { run } from './util/exec.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
 
 const ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
+
+/** This plugin's own package root, used as a search hint for the pinned CLI. */
+function pluginRoot(): string | null {
+  try {
+    return path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+  }
+  catch {
+    return null
+  }
+}
 
 /** What a boot install/uninstall answers with; mirrors the boot module's shape. */
 export interface BootInstallResult {
@@ -79,7 +92,6 @@ interface LiveEntry {
 
 export class HomeHostedService extends Service {
   private clientCache: CachedClient | null = null
-  private launchCache: { value: CliLaunch | null, until: number } | null = null
   private tokenDetail = ''
   private readonly snapshotsFile: string
 
@@ -114,20 +126,40 @@ export class HomeHostedService extends Service {
     return { port, host }
   }
 
-  private async launch(): Promise<CliLaunch | null> {
-    if (this.launchCache !== null && this.launchCache.until > Date.now())
-      return this.launchCache.value
-    const value = await resolveHomeHostedLaunch(this.options.homeHostedCommand)
-    this.launchCache = { value, until: Date.now() + 60_000 }
-    return value
+  private cliCache: { resolution: CliResolution, launcher: string | null, launcherVersion: string | null, until: number } | null = null
+
+  /**
+   * Resolve the pinned CLI, refresh the stable launcher a boot entry runs, and
+   * preflight that launcher the same way the entry will invoke it.
+   */
+  private async cli(): Promise<{ resolution: CliResolution, launcher: string | null, launcherVersion: string | null }> {
+    if (this.cliCache !== null && this.cliCache.until > Date.now())
+      return this.cliCache
+    const resolution = await resolveCli({ override: this.options.homeHostedCommand })
+    let launcher: string | null = null
+    let launcherVersion: string | null = null
+    if (resolution.launch !== null) {
+      launcher = writeLauncher({
+        stateDir: this.options.stateDir,
+        dshHome: dshHome(),
+        resolvedEntry: resolution.launch.cliEntry ?? resolution.launch.shimPath ?? null,
+        resolvedVersion: resolution.status.version,
+        pluginRoot: pluginRoot(),
+        minVersion: MIN_SUPPORTED_VERSION,
+      }).path
+      launcherVersion = await preflightLauncher(this.options.stateDir)
+    }
+    this.cliCache = { resolution, launcher, launcherVersion, until: Date.now() + 60_000 }
+    return this.cliCache
   }
 
   private async cliExec(args: string[], env: Record<string, string | undefined>) {
     if (this.options.execCli !== undefined)
       return await this.options.execCli(args, env)
-    const launch = await this.launch()
+    const { resolution } = await this.cli()
+    const launch = resolution.launch
     if (launch === null)
-      throw new HomeHostedError('the home-hosted executable was not found on PATH', 'CLI_NOT_FOUND')
+      throw new HomeHostedError(resolution.status.detail, 'CLI_NOT_FOUND')
     return await run(launch.program, [...launch.args, ...args], { env, timeoutMs: 30_000 })
   }
 
@@ -377,11 +409,12 @@ export class HomeHostedService extends Service {
   }
 
   private async bootSpec(): Promise<BootSpec | null> {
-    const launch = await this.launch()
+    const { resolution, launcher } = await this.cli()
+    const launch = resolution.launch
     if (launch === null)
       return null
     const runtime = this.runtime()
-    return buildHomeHostedBootSpec(
+    const spec = buildHomeHostedBootSpec(
       {
         home: this.options.home,
         projectDir: process.env.HHOSTED_PROJECT ?? runtime?.projectDir ?? null,
@@ -390,6 +423,21 @@ export class HomeHostedService extends Service {
       launch,
       { stateDir: this.options.stateDir },
     )
+
+    // The entry runs the stable launcher, not the pinned node_modules path: that
+    // path carries a version and a peer hash, and moves on the next install.
+    if (launcher !== null) {
+      const cliArgs = spec.args.slice(launch.args.length)
+      if (process.platform === 'win32') {
+        spec.command = process.execPath
+        spec.args = [launcher, ...cliArgs]
+      }
+      else {
+        spec.command = launcher
+        spec.args = cliArgs
+      }
+    }
+    return spec
   }
 
   async bootStatus(mechanism?: BootMechanism): Promise<BootStatus> {
@@ -407,7 +455,7 @@ export class HomeHostedService extends Service {
         privileged: false,
         unitPath: null,
         commands: [],
-        detail: 'the home-hosted executable was not found on PATH, so no boot entry can be generated',
+        detail: 'no home-hosted CLI is available, so no boot entry can be generated; install the plugin with its dependencies',
         candidates: [],
       }
     }
@@ -419,7 +467,7 @@ export class HomeHostedService extends Service {
   async installBoot(mechanism?: BootMechanism): Promise<{ result: BootInstallResult, status: BootStatus }> {
     const spec = await this.bootSpec()
     if (spec === null)
-      throw new HomeHostedError('the home-hosted executable was not found on PATH', 'CLI_NOT_FOUND')
+      throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
     const result = await this.ladder().install(spec, mechanism)
     if (result.ok) {
       this.options.settings.update({
@@ -435,7 +483,7 @@ export class HomeHostedService extends Service {
   async uninstallBoot(mechanism?: BootMechanism): Promise<{ result: BootInstallResult, status: BootStatus }> {
     const spec = await this.bootSpec()
     if (spec === null)
-      throw new HomeHostedError('the home-hosted executable was not found on PATH', 'CLI_NOT_FOUND')
+      throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
     const result = await this.ladder().uninstall(spec, mechanism)
     if (result.ok)
       this.options.settings.update({ autostart: { ...this.options.settings.get().autostart, enabled: false } })
@@ -482,6 +530,19 @@ export class HomeHostedService extends Service {
     // available, and the page should see the state after that, not before.
     const client = await this.tryClient()
     const panel = await this.panelStatus()
+    const { resolution, launcher, launcherVersion } = await this.cli()
+    const cliDetail = resolution.status.detail
+    const panelVersion = this.runtime()?.version ?? null
+    const cli = {
+      ...resolution.status,
+      launcherPath: launcher,
+      launcherVersion,
+      // A panel left running from an older install is the usual reason to see
+      // two versions on this page; say so instead of leaving it ambiguous.
+      detail: panelVersion !== null && resolution.status.version !== null && panelVersion !== resolution.status.version
+        ? `${cliDetail}; the running panel is ${panelVersion}`
+        : cliDetail,
+    }
     let servers: ServerEntryView[] = []
     let lastError: string | null = null
     if (client !== null) {
@@ -502,6 +563,7 @@ export class HomeHostedService extends Service {
       entries: await this.entriesStatus(),
       servers,
       settings: this.options.settings.get(),
+      cli,
       lastError,
     }
   }

@@ -37,6 +37,7 @@ Everything a person toggles lives in `<stateDir>/settings.json`.
 ## Notes
 
 - A plugin cannot act at boot: it installs and re-syncs the OS entry while dsh runs, and the OS starts home-hosted from then on.
+- The plugin ships its own `home-hosted` (pinned range) and drives that copy; a global install is only a fallback. Boot entries run a small stable launcher it writes, so a `node_modules` path that moves never breaks boot.
 - Boot (pre-login) scope needs privilege somewhere — a system unit, or `loginctl enable-linger` on Linux. When the process cannot elevate, the page shows the exact commands to run by hand.
 - The panel API token this plugin uses is minted on first write and kept 0600 under the plugin state directory; it is never rendered or logged.
 

@@ -3,9 +3,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BootStatus } from '../src/shared/contracts.js'
+import type { BootSpec } from '../src/boot/types.js'
 import { HomeHostedService } from '../src/service.js'
 import type { BootInstallResult, BootLadderLike } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
+import { launcherPath } from '../src/home-hosted/launcher.js'
 import { tempDir } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
 
@@ -36,6 +38,9 @@ interface Harness {
   service: HomeHostedService
   installs: number[]
   unitPath: string
+  state: string
+  fakeCli: string
+  specs: BootSpec[]
 }
 
 /**
@@ -59,10 +64,12 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
   const status = make(unitPath)
 
   const installs: number[] = []
+  const specs: BootSpec[] = []
   const ladder: BootLadderLike = {
     status: async () => status,
-    install: async (): Promise<BootInstallResult> => {
+    install: async (spec: BootSpec): Promise<BootInstallResult> => {
       installs.push(Date.now())
+      specs.push(spec)
       return { ok: true, changed: true, detail: 'repaired', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status }
     },
     uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, status }),
@@ -79,7 +86,7 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     createLadder: () => ladder,
   })
 
-  return { service, installs, unitPath }
+  return { service, installs, unitPath, state, fakeCli, specs }
 }
 
 describe('startup reconcile', () => {
@@ -111,5 +118,28 @@ describe('startup reconcile', () => {
     const { service, installs } = harness(unit => statusWith({ state: 'enabled-running', mechanism: 'systemd-user', unitPath: unit }), { unitFile: true })
     await service.reconcile()
     expect(installs).toHaveLength(0)
+  })
+})
+
+describe('boot entry target', () => {
+  it('runs the stable launcher instead of the moving dependency path', async () => {
+    const { service, specs, state, fakeCli } = harness(unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }))
+    await service.installBoot()
+
+    const spec = specs[0]
+    expect(spec).toBeDefined()
+    const launcher = launcherPath(state)
+
+    if (process.platform === 'win32') {
+      expect(spec!.command).toBe(process.execPath)
+      expect(spec!.args[0]).toBe(launcher)
+    }
+    else {
+      expect(spec!.command).toBe(launcher)
+    }
+    // The pinned/configured CLI entry is not baked into the entry, so a moved
+    // node_modules path cannot break boot.
+    expect(spec!.args).not.toContain(fakeCli)
+    expect(spec!.args).toEqual(expect.arrayContaining(['up', '--foreground']))
   })
 })

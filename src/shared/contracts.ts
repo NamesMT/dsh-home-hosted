@@ -147,6 +147,25 @@ export interface PanelStatus {
   detail: string
 }
 
+/** Which home-hosted CLI the plugin drives, and where it came from. */
+export type CliSource = 'config' | 'dependency' | 'path' | 'none'
+
+export interface CliStatus {
+  /** `config` (operator override), `dependency` (the pinned copy), `path`, or none. */
+  source: CliSource
+  path: string | null
+  version: string | null
+  /** The range the plugin ships in its own dependencies. */
+  expectedRange: string
+  /** False when the resolved CLI is older than the oldest release this plugin supports. */
+  supported: boolean
+  /** The stable launcher a boot entry runs instead of a moving node_modules path. */
+  launcherPath?: string | null
+  /** What the launcher answers right now, as the boot entry would invoke it. */
+  launcherVersion?: string | null
+  detail: string
+}
+
 // ---------------------------------------------------------------------------
 // Boot autostart
 // ---------------------------------------------------------------------------
@@ -259,6 +278,8 @@ export interface HomeHostedStatus {
   entries: ManagedEntryStatus[]
   servers: ServerEntryView[]
   settings: PluginSettings
+  /** The CLI the plugin drives; absent only from a host older than this field. */
+  cli?: CliStatus
   /** Set when the panel could not be reached, so the UI can show a degraded page. */
   lastError: string | null
 }
