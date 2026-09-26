@@ -1,8 +1,8 @@
 name: Release
 
 # Manual, version-first release. Dispatch with the version to ship:
-#   * gates on the macOS and Windows suite (`cross-platform.yml`) at this exact commit,
-#     so a platform-specific break cannot be published (a dry run exercises the gate too)
+#   * gates on the macOS suite (`platform-gate.yml`) at this exact commit, so a
+#     platform-specific break cannot be published (a dry run exercises the gate too)
 #   * verifies the version, typechecks, tests and builds the host half, the client bundle
 #     and the declarations
 #   * changelogen derives the changelog from conventional commits, bumps package.json,
@@ -40,17 +40,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The platform gate: Windows and macOS must pass before anything is tagged or published.
+  # The platform gate: macOS must pass before anything is tagged or published.
   # It runs from the same commit being released, on a dry run as well — the gate is exactly
   # what a rehearsal needs to exercise.
-  cross-platform:
-    uses: ./.github/workflows/cross-platform.yml
+  platform-gate:
+    uses: ./.github/workflows/platform-gate.yml
 
   release:
-    needs: [cross-platform]
+    needs: [platform-gate]
     # `always()` because a skipped dependency would otherwise skip this job too, and
     # `needs.*.result` is what makes the gate real: a red platform run stops the release.
-    if: ${{ always() && needs.cross-platform.result == 'success' }}
+    if: ${{ always() && needs.platform-gate.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ inputs.version }}

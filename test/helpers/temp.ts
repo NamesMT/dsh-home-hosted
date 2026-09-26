@@ -9,7 +9,11 @@ export interface TempDir {
 
 /** A scratch directory outside the repo, removed when the test finishes. */
 export function tempDir(prefix = 'dsh-home-hosted-'): TempDir {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const created = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  // Canonicalised: on macOS `os.tmpdir()` is reached as `/var/...` while the
+  // product resolves it to `/private/var/...`, and a test comparing the two
+  // would fail on a path that is really the same file.
+  const dir = fs.realpathSync(created)
   return {
     path: dir,
     cleanup: () => {

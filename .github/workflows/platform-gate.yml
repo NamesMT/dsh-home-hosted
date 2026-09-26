@@ -1,0 +1,50 @@
+name: Platform gate
+
+# Linux runs on every push and pull request (ci.yml). This is the other half, on a macOS
+# runner, dispatched by hand or as the release gate — so a platform-specific break is
+# caught before it ships rather than on a user's machine.
+#
+# macOS is the platform that matters here: boot entries are written for launchd as well as
+# systemd, and a temp directory is reached as `/var/...` while it resolves as
+# `/private/var/...`, so a path comparison that is correct on Linux can still be wrong.
+#
+# Windows is deliberately not gated yet: the suite still carries POSIX assumptions (a
+# `mode & 0o777` check, the systemd and launchd providers running unguarded), so it fails
+# there for reasons that are not product defects. Port the suite before adding it here —
+# a gate that always fails teaches everyone to ignore the gate.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Types and tests
+        run: pnpm typecheck && pnpm test

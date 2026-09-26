@@ -182,8 +182,11 @@ export async function resolveDshLaunch(options: ResolveDshLaunchOptions = {}): P
 
   const local = typeof argv1 === 'string' && argv1.length > 0 ? launchedEntry(argv1) : null
   // A process already booted through the launcher is not a clone to snapshot:
-  // one more layer would just reimplement the launcher.
-  if (local !== null && local !== dshLauncherPath(stateDir, path.extname(local))) {
+  // one more layer would just reimplement the launcher. Both sides are
+  // canonicalised first — on macOS a temp directory is reached as `/var/...`
+  // and resolved as `/private/var/...`, and comparing those would stack a
+  // second launcher on every boot.
+  if (local !== null && realPath(local) !== realPath(dshLauncherPath(stateDir, path.extname(local)))) {
     const launcher = writeDshLauncher({
       stateDir,
       dshHome,
