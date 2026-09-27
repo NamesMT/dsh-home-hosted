@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.3.3
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.3.2...v0.3.3)
+
+### 🩹 Fixes
+
+- Bind the generated dsh entry to loopback ([99f5525](https://github.com/NamesMT/dsh-home-hosted/commit/99f5525))
+
+### 📖 Documentation
+
+- State that deleting on toggle-off is intended ([d45a837](https://github.com/NamesMT/dsh-home-hosted/commit/d45a837))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.3.2
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.3.1...v0.3.2)
