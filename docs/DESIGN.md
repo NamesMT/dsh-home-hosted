@@ -53,6 +53,13 @@ the rest from the platform default policy; removing one restores an entry this
 plugin merely adopted, and deletes one it created. Removing an entry the panel
 supervises stops that process — which may be the session asking for it.
 
+Deleting on toggle-off is the intended reading of that switch, not an oversight:
+"manage" means the plugin owns the entry, so switching it off gives the entry
+back — removed if this plugin created it, restored if it only adopted one.
+Pausing instead would leave an entry nobody manages. The state that must never
+happen is the third one: a toggle that is on with no entry behind it, which is
+why the entry is recreated from the intent while the switch is on.
+
 ## The sign-in page points at the log
 
 dsh web's unauthenticated 401 is a plain-text line written by the in-box
