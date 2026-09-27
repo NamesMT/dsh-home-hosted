@@ -309,8 +309,8 @@ export class HomeHostedService extends Service {
    * Replace the panel's API token with a fresh one and prove it.
    *
    * home-hosted keeps only a hash, so a token this plugin does not hold cannot
-   * be recovered: the old hash is cleared, a new token is enrolled through the
-   * CLI, and it is proved against the answering panel before being reported.
+   * be recovered: a new token replaces the old hash in one CLI write, and it is
+   * proved against the answering panel before being reported.
    *
    * The panel is not required to be *answering*: a missing or refused token is a
    * common reason it cannot be reached at all, and refusing the repair for that
