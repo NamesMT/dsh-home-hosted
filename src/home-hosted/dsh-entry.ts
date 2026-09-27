@@ -5,6 +5,10 @@
  * `onPortConflict` and `stop.killPortHolders`. A generated entry (only used when
  * there is none) mirrors how this process was actually launched where that is
  * knowable, and otherwise falls back to the `dsh web` app arguments.
+ *
+ * The generated entry binds loopback only: `dsh` refuses `--host 0.0.0.0`, so a
+ * running harness configured to bind the network cannot boot through an entry
+ * that repeats its host.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -52,7 +56,6 @@ export function detectProfile(argv: readonly string[], env: Record<string, strin
 export interface DshFacts {
   id: string
   port: number | null
-  host: string
   profile: string | null
   dshHome: string
   launch: CliLaunch | null
@@ -282,12 +285,10 @@ export function buildDshEntry(facts: DshFacts): ServerEntry {
   if (facts.port !== null) {
     appArgs.push(
       '--port', '{port}',
-      '--host', '{host}',
+      '--host', '127.0.0.1',
       '--no-open',
       '--trusted-host', `localhost:{port}`,
     )
-    if (facts.host === '0.0.0.0')
-      appArgs.push('--trusted-host', '{lanIp}:{port}')
   }
 
   const launcherArgs = profile === 'web' ? ['web'] : ['--profile', profile]
@@ -302,7 +303,7 @@ export function buildDshEntry(facts: DshFacts): ServerEntry {
     autostart: true,
     command: generated.command,
     args: [...generated.entryArgs, ...launcherArgs, ...appArgs],
-    bind: facts.host === '0.0.0.0' ? 'lan' : 'local',
+    bind: 'local',
     port: facts.port,
     cwd: process.cwd(),
     env: {},

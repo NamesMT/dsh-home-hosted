@@ -142,11 +142,10 @@ export class HomeHostedService extends Service {
     return this.runtime()?.version ?? 'dsh-home-hosted'
   }
 
-  private webServer(): { port: number | null, host: string } {
-    const service = this.ctx.get('webServer') as { port?: unknown, host?: unknown } | undefined
+  private webServer(): { port: number | null } {
+    const service = this.ctx.get('webServer') as { port?: unknown } | undefined
     const port = typeof service?.port === 'number' ? service.port : null
-    const host = typeof service?.host === 'string' ? service.host : '127.0.0.1'
-    return { port, host }
+    return { port }
   }
 
   private cliCache: { prefer: 'pinned' | 'global', resolution: CliResolution, launcher: string | null, launcherVersion: string | null, until: number } | null = null
@@ -434,11 +433,10 @@ export class HomeHostedService extends Service {
     // State dir and harness home are the plugin's own, not the defaults: an
     // override has to point the launcher at the same place everything else is.
     const dsh = await this.resolveDsh(harnessHome)
-    const { port, host } = this.webServer()
+    const { port } = this.webServer()
     const generated = buildDshEntry({
       id: intent.id,
       port,
-      host,
       profile: detectProfile(process.argv, process.env),
       dshHome: harnessHome,
       launch: dsh,

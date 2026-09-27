@@ -58,7 +58,6 @@ function facts(overrides: Partial<DshFacts> = {}): DshFacts {
   return {
     id: 'dsh',
     port: 3080,
-    host: '127.0.0.1',
     profile: 'web',
     dshHome: '/home/me/.dsh',
     launch: { program: '/usr/bin/node', args: ['/opt/dsh/lib/bin.js'], cliEntry: '/opt/dsh/lib/bin.js', shimPath: null, source: 'entry' },
@@ -75,10 +74,11 @@ describe('generated dsh entry', () => {
     expect(entry.args!.slice(1)).toEqual([
       'web',
       '--port', '{port}',
-      '--host', '{host}',
+      '--host', '127.0.0.1',
       '--no-open',
       '--trusted-host', 'localhost:{port}',
     ])
+    expect(entry.bind).toBe('local')
   })
 
   it('keeps the launcher entry shape when no launcher is supplied', () => {
@@ -103,13 +103,19 @@ describe('generated dsh entry', () => {
       launcherPath,
       '--profile', 'work',
       '--port', '{port}',
-      '--host', '{host}',
+      '--host', '127.0.0.1',
       '--no-open',
       '--trusted-host', 'localhost:{port}',
     ])
     // No known port: app flags are dropped, the app argument is not.
     expect(buildDshEntry(facts({ launcherPath, port: null })).args).toEqual([launcherPath, 'web'])
-    expect(buildDshEntry(facts({ launcherPath, host: '0.0.0.0' })).args).toContain('{lanIp}:{port}')
+  })
+
+  it('never asks dsh to bind beyond loopback, which its CLI refuses', () => {
+    const entry = buildDshEntry(facts({ launcherPath: '/home/me/.dsh/dsh-home-hosted/bin/dsh.mjs' }))
+    expect(entry.args).not.toContain('0.0.0.0')
+    expect(entry.args).not.toContain('{host}')
+    expect(entry.args).not.toContain('{lanIp}:{port}')
   })
 })
 

@@ -60,6 +60,10 @@ Pausing instead would leave an entry nobody manages. The state that must never
 happen is the third one: a toggle that is on with no entry behind it, which is
 why the entry is recreated from the intent while the switch is on.
 
+The generated entry always binds loopback (`bind: 'local'`, `--host 127.0.0.1`):
+`dsh` rejects `--host 0.0.0.0` as a usage error, so repeating a running harness's
+network bind would produce an entry that can never start.
+
 ## The sign-in page points at the log
 
 dsh web's unauthenticated 401 is a plain-text line written by the in-box
