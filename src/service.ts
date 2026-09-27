@@ -39,6 +39,9 @@ const ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
 /** A token probe is an auxiliary fact, not a user action: never let it stall a poll. */
 const TOKEN_PROBE_TIMEOUT_MS = 3000
 
+/** How often a deleted managed entry may be put back from the status read. */
+const ENTRY_RECOVERY_INTERVAL_MS = 30_000
+
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
 function pluginRoot(): string | null {
   try {
@@ -104,6 +107,8 @@ export class HomeHostedService extends Service {
   /** The last token this service proved against a panel, so a poll does not re-probe it. */
   private tokenProof: { url: string, token: string, until: number } | null = null
   private tokenDetail = ''
+  /** When a missing managed entry was last put back, so a poll cannot become a write loop. */
+  private entryRecoveryAt = 0
   private readonly snapshotsFile: string
 
   constructor(ctx: Context, private readonly options: HomeHostedServiceOptions) {
@@ -290,11 +295,13 @@ export class HomeHostedService extends Service {
               : token === 'present'
                 ? 'the panel is answering, but home-hosted already holds an API token this plugin does not have'
                 : token === 'absent'
-                  ? 'the panel is answering; a token will be enrolled on the first write'
+                  ? 'the panel is answering but no API token is enrolled for it yet; writes go to servers.config.json until one is'
                   : 'the panel answered, but the plugin\'s token could not be checked')
         : (runtime === null
             ? 'no run.json: the panel is not running, so entries are written straight to servers.config.json'
-            : reachable ? 'the panel process is alive but is not answering' : 'the panel is not running'),
+            : token === 'present' || token === 'stale'
+              ? 'the panel process is up but does not answer with this plugin\'s API token, so this page cannot reach it'
+              : 'the panel process is alive but is not answering'),
     }
   }
 
@@ -304,17 +311,21 @@ export class HomeHostedService extends Service {
    * home-hosted keeps only a hash, so a token this plugin does not hold cannot
    * be recovered: the old hash is cleared, a new token is enrolled through the
    * CLI, and it is proved against the answering panel before being reported.
-   * Nothing is written when the CLI cannot run, and a panel that is not
-   * answering is refused up front rather than left with an unverifiable token.
+   *
+   * The panel is not required to be *answering*: a missing or refused token is a
+   * common reason it cannot be reached at all, and refusing the repair for that
+   * reason would leave no way out from the page. Only a panel that was never
+   * started is refused — there is nothing to enrol a token against yet.
    */
   async reclaimPanelToken(): Promise<HomeHostedStatus> {
     const runtime = this.runtime()
-    if (runtime === null || !(await probePanel(runtime.url))) {
+    if (runtime === null) {
       throw new HomeHostedError(
-        'the panel is not answering, so a regenerated token could not be verified; start the panel first',
+        'the panel has not been started, so there is nothing to enrol a token against; start it first',
         'PANEL_UNAVAILABLE',
       )
     }
+    const answering = await probePanel(runtime.url)
 
     const result = await reclaimToken({
       home: this.options.home,
@@ -327,6 +338,13 @@ export class HomeHostedService extends Service {
     this.tokenDetail = result.detail
     if (result.token === null)
       throw new HomeHostedError(result.detail, 'TOKEN_RECLAIM_FAILED')
+
+    if (!answering) {
+      // Enrolled, but there is nothing to hand it to yet. The page says so
+      // instead of claiming a verification it could not take.
+      this.tokenDetail = `${result.detail}; the panel is not answering, so it could not be proved yet`
+      return await this.status()
+    }
 
     const probe = await probeToken(runtime.url, result.token, TOKEN_PROBE_TIMEOUT_MS)
     if (probe !== 'ok') {
@@ -561,8 +579,9 @@ export class HomeHostedService extends Service {
       entries.push(intent)
       this.options.settings.update({
         // The page's toggle reads this flag, so managing the harness has to record
-        // itself; restoring or removing that entry clears it again.
-        ...(intent.id === this.options.defaultEntryId ? { manageDsh: true } : {}),
+        // itself; restoring or removing that entry clears it again. A paused intent
+        // (`autostart: false`) is not management, or the toggle could never go off.
+        ...(intent.id === this.options.defaultEntryId ? { manageDsh: intent.autostart } : {}),
         entries,
       })
     }
@@ -914,6 +933,45 @@ export class HomeHostedService extends Service {
    * an explicit click or an approved tool call, not as a side effect of startup.
    */
   async reconcile(): Promise<void> {
+    // A managed entry that someone deleted (by mistake, from the panel or by hand)
+    // stays "managed" in settings with nothing to manage, which is the state the
+    // page reports as a missing entry. Recreate it — the toggle is the intent.
+    await this.ensureManagedEntry()
+    await this.repairBootEntry()
+  }
+
+  /**
+   * Put back a managed entry that no longer exists, while its intent still wants
+   * autostart. A paused intent is a deliberate stop and is left alone.
+   *
+   * Called from startup `reconcile()` as well as the status read, because a person
+   * who deletes the entry from the panel is looking at the page right then — not
+   * at the next plugin start. A failed attempt is not repeated for a while, so a
+   * config that cannot be written does not turn every poll into a write.
+   */
+  private async ensureManagedEntry(): Promise<void> {
+    const { settings } = this.options
+    const id = this.options.defaultEntryId
+    if (!settings.get().manageDsh || !settings.intentFor(id).autostart)
+      return
+    // Claim the attempt before the first await, so two status calls racing each
+    // other cannot both decide to create the same entry.
+    const now = Date.now()
+    if (now - this.entryRecoveryAt < ENTRY_RECOVERY_INTERVAL_MS)
+      return
+    this.entryRecoveryAt = now
+    if ((await this.entriesStatus()).every(entry => entry.intent.id !== id || entry.exists))
+      return
+    try {
+      await this.writeOwned({ ...settings.intentFor(id), autostart: true })
+    }
+    catch {
+      // an unwritable config is reported by the status the page reads
+    }
+  }
+
+  /** Re-assert the boot entry when the OS still has it but it stopped working. */
+  private async repairBootEntry(): Promise<void> {
     if (!this.options.settings.get().autostart.enabled)
       return
     const status = await this.bootStatus()
@@ -976,7 +1034,9 @@ export class HomeHostedService extends Service {
       defaultEntryId: this.options.defaultEntryId,
       panel,
       boot: await this.bootStatus(),
-      entries: await this.entriesStatus(),
+      // A deleted managed entry is put back here as well as at startup: whoever
+      // deleted it is looking at the page that reports it missing.
+      entries: await this.ensureManagedEntry().then(async () => await this.entriesStatus()),
       servers,
       settings: this.options.settings.get(),
       cli,

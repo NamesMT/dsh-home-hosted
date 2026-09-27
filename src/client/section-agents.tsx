@@ -5,7 +5,7 @@ import type { SectionProps } from './props.js'
 import { toggleAllowed } from './settings.js'
 import { Check, Chip, Hint, Section, Switch } from './ui.js'
 
-export function AgentsSection({ t, status, updateSettings, uiStyle }: SectionProps) {
+export function AgentsSection({ t, status, updateSettings, busy, uiStyle }: SectionProps) {
   const agentTools = status.settings.agentTools
   const allow = agentTools.allow ?? []
   const granted = AGENT_TOOL_NAMES.filter(name => allow.includes(name)).length
@@ -34,6 +34,15 @@ export function AgentsSection({ t, status, updateSettings, uiStyle }: SectionPro
           agentTools: { ...current.agentTools, enabled },
         }))}
       />
+      <div className="hh-field-block">
+        <Switch
+          label={t('reclaimAutoLabel')}
+          checked={status.settings.reclaimToken !== false}
+          disabled={busy === 'settings'}
+          onChange={checked => updateSettings(current => ({ ...current, reclaimToken: checked }))}
+        />
+        <Hint>{t('reclaimAutoHint')}</Hint>
+      </div>
       <Hint>{t('agentApproval')}</Hint>
 
       {uiStyle === 'detailed'

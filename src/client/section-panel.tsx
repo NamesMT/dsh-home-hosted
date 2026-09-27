@@ -1,19 +1,43 @@
 import { useEffect, useState } from 'react'
-import type { TokenState } from '../shared/contracts.js'
+import type { Envelope, HomeHostedStatus, PanelStatus, TokenState } from '../shared/contracts.js'
 import { rpc } from './api.js'
+import type { TranslateFn } from './context.js'
 import { CLI_SOURCE_KEYS, dash, effectiveCandidates, shortenPath, TOKEN_KEYS, WRITE_VIA_KEYS } from './format.js'
 import { IconPanel } from './icons.js'
 import type { SectionProps } from './props.js'
-import { Button, Code, CommandBox, Details, Hint, Link, Note, Option, Section, Spec, Switch, Tag } from './ui.js'
+import { Button, Code, CommandBox, Details, Hint, Link, Note, Option, Section, Spec, Tag } from './ui.js'
 
-/**
- * The token states a person must act on while the panel is answering.
- * `enrolled` is healthy and `unknown` was never measured, so neither warns.
- */
+/** The measured token states a person must act on, whether or not the panel answers. */
 const TOKEN_WARNING_KEYS: Partial<Record<TokenState, string>> = {
   absent: 'panelTokenWarnAbsent',
   present: 'panelTokenWarnPresent',
   stale: 'panelTokenWarnStale',
+}
+
+/**
+ * Whether the token is the reason this page cannot reach the panel. A measured
+ * `absent`/`present`/`stale` always warns; an unmeasured `unknown` warns only
+ * when the panel process was started (`url` is known) — its silence is then
+ * token-shaped. An `enrolled` token, or a panel that was never started (no
+ * `url`, so no token could have been enrolled against it), does not warn.
+ */
+function tokenWarningKey(panel: Pick<PanelStatus, 'reachable' | 'token' | 'url'>): string | undefined {
+  if (panel.token === 'enrolled') return undefined
+  if (panel.token !== 'unknown') return TOKEN_WARNING_KEYS[panel.token]
+  return panel.url === null ? undefined : 'panelTokenWarnUnreachable'
+}
+
+/**
+ * The outcome note for a reclaim: the host's own settled detail is shown when it
+ * has one, so a panel that never answered is reported as "not proved yet" rather
+ * than claiming an acceptance that never happened.
+ */
+export function reclaimNote(envelope: Envelope<unknown>, t: TranslateFn): string {
+  if (!envelope.ok) return t('panelTokenRegenerateFailed', { message: envelope.error.message })
+  const settled = (envelope.value as HomeHostedStatus | null | undefined)?.panel
+  return settled !== undefined && settled.detail.length > 0
+    ? settled.detail
+    : t('panelTokenRegenerated')
 }
 
 /** Draft-then-commit numeric field: empty means `null`, invalid reverts. */
@@ -71,9 +95,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
   const [installOutput, setInstallOutput] = useState<string | null>(null)
   const [tokenNote, setTokenNote] = useState<string | null>(null)
 
-  // Only a measured refusal or a missing token warns: an unreachable panel has
-  // nothing to warn about, and the Details row still carries its raw state.
-  const tokenWarningKey = panel.reachable ? TOKEN_WARNING_KEYS[panel.token] : undefined
+  const tokenWarning = tokenWarningKey(panel)
 
   const cliVersion = cli?.version ?? null
   const versionsKnown = cliVersion !== null && panel.version !== null
@@ -98,19 +120,18 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
   }
 
   const regenerate = async (): Promise<void> => {
-    const envelope = await run('panel.reclaimToken', () => rpc('panel.reclaimToken', {}))
-    setTokenNote(envelope.ok
-      ? t('panelTokenRegenerated')
-      : t('panelTokenRegenerateFailed', { message: envelope.error.message }))
+    setTokenNote(reclaimNote(await run('panel.reclaimToken', () => rpc('panel.reclaimToken', {})), t))
   }
 
   return (
     <Section icon={<IconPanel />} title={t('panelTitle')}>
-      {tokenWarningKey === undefined
+      {tokenWarning === undefined
         ? null
         : (
             <Note tone="warn" title={t('panelTokenWarningTitle')}>
-              <p>{t(tokenWarningKey)}</p>
+              <p>{t(tokenWarning)}</p>
+              {/* The unmeasured branch already names the panel needing a start. */}
+              {panel.reachable || panel.token === 'unknown' ? null : <p>{t('panelTokenWarnPanelDown')}</p>}
               <div className="hh-note-actions">
                 <Button
                   variant="primary"
@@ -166,16 +187,6 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
         disabled={panel.reachable || busy !== null}
         onChange={port => updateSettings(current => ({ ...current, panel: { ...current.panel, port } }))}
       />
-
-      <div className="hh-field-block">
-        <Switch
-          label={t('panelReclaimAuto')}
-          checked={status.settings.reclaimToken !== false}
-          disabled={busy === 'settings'}
-          onChange={checked => updateSettings(current => ({ ...current, reclaimToken: checked }))}
-        />
-        <Hint>{t('panelReclaimAutoHint')}</Hint>
-      </div>
 
       <div className="hh-btn-row">
         {panel.reachable

@@ -612,13 +612,29 @@ describe('reclaiming the panel token', () => {
     expect(readStoredToken(state)).toBeNull()
   })
 
-  it('refuses to regenerate against a panel that is not answering, without running the CLI', async () => {
+  it('refuses to regenerate when the panel was never started, without running the CLI', async () => {
     const { service, state, cliCalls } = await harness()
     storeToken(state, 'stale-token')
 
     await expect(service.call('panel.reclaimToken', {})).rejects.toMatchObject({ code: 'PANEL_UNAVAILABLE' })
     expect(cliCalls).toHaveLength(0)
     expect(readStoredToken(state)).toBe('stale-token')
+  })
+
+  it('regenerates against a panel that was started but is not answering', async () => {
+    // The reason a person cannot reach the panel is often the token itself, so a
+    // panel that is up but silent must not make the repair impossible.
+    const { home, service, state, cliCalls } = await harness()
+    writeJsonFile(runtimeFile(home), { version: '0.6.1', pid: 9_999_999, url: 'http://127.0.0.1:1', port: 1 })
+    storeToken(state, 'stale-token')
+
+    const status = await service.call('panel.reclaimToken', {}) as HomeHostedStatus
+
+    expect(cliCalls.length).toBeGreaterThan(0)
+    expect(readStoredToken(state)).not.toBe('stale-token')
+    expect(readStoredToken(state)).not.toBeNull()
+    // Enrolled, and honest about the fact it could not be proved yet.
+    expect(status.panel.detail).toContain('not answering')
   })
 
   it('persists the reclaimToken switch through settings.update', async () => {
@@ -673,5 +689,104 @@ describe('an entry that boots a clone directly', () => {
 
     expect(panel.servers[0]!.config.command).toBe('dsh')
     expect(panel.servers[0]!.config.args).toEqual(['web'])
+  })
+})
+
+describe('a managed entry someone deleted', () => {
+  const deleted = {
+    manageDsh: true,
+    entries: [{ id: 'dsh', autostart: true, onPortConflict: 'follow' as const, stopKillPortHolders: true, persistent: true }],
+  }
+
+  it('is put back on the next reconcile while the toggle is on', async () => {
+    const { home, service, settings } = await harness()
+    expect(readConfig(home).raw?.servers ?? []).toHaveLength(0)
+    settings.update(deleted)
+
+    await service.reconcile()
+
+    expect((readConfig(home).raw?.servers ?? []).map(entry => entry.id)).toEqual(['dsh'])
+  })
+
+  it('is put back by the status read, without waiting for a restart', async () => {
+    // Whoever deleted it is looking at the page that reports it missing.
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    settings.update(deleted)
+
+    const status = await service.status()
+
+    expect(status.entries.find(entry => entry.intent.id === 'dsh')?.exists).toBe(true)
+    expect(panel.servers.map(entry => entry.id)).toEqual(['dsh'])
+  })
+
+  it('does not turn a failing recovery into a write on every poll', async () => {
+    // The panel keeps refusing to add the entry: three polls must not be three
+    // CREATE attempts, or every status read would hammer the panel.
+    const panel = await startStubPanel({ acceptAnyToken: true, failCreate: true })
+    panels.push(panel)
+    const { service, settings } = await harness({ panel })
+    settings.update(deleted)
+
+    await service.status()
+    await service.status()
+    await service.status()
+
+    const creates = panel.requests.filter(entry => entry.method === 'POST' && entry.path === '/api/servers')
+    expect(creates).toHaveLength(1)
+  })
+
+  it('is put back through the panel API when the panel answers and the token works', async () => {
+    // The live case: a working panel and token, so the recreation must be an API
+    // write rather than a config-file one.
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    settings.update(deleted)
+
+    await service.reconcile()
+
+    expect(panel.servers.map(entry => entry.id)).toEqual(['dsh'])
+    expect(panel.requests.some(entry => entry.method === 'POST' && entry.path === '/api/servers')).toBe(true)
+  })
+
+  it('stays deleted while the toggle is off', async () => {
+    const { home, service, settings } = await harness()
+    settings.update({ ...deleted, manageDsh: false })
+
+    await service.reconcile()
+
+    expect(readConfig(home).raw?.servers ?? []).toHaveLength(0)
+  })
+
+  it('stays deleted when the intent was paused, even though the toggle is on', async () => {
+    const { home, service, settings } = await harness()
+    settings.update({ ...deleted, entries: [{ ...deleted.entries[0]!, autostart: false }] })
+
+    await service.reconcile()
+
+    expect(readConfig(home).raw?.servers ?? []).toHaveLength(0)
+  })
+
+  it('is left alone while it still exists', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel })
+    panel.servers.push({ id: 'dsh', config: { id: 'dsh', command: 'dsh', args: ['web'], autostart: true, onPortConflict: 'follow', stop: { killPortHolders: true } } })
+    settings.update(deleted)
+
+    const before = panel.requests.length
+    await service.reconcile()
+
+    expect(panel.requests.slice(before).some(entry => entry.method !== 'GET')).toBe(false)
+  })
+
+  it('clears the toggle when the intent is applied with autostart off', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel })
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }] })
+    expect(settings.get().manageDsh).toBe(true)
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: false, onPortConflict: 'follow', stopKillPortHolders: true }] })
+    expect(settings.get().manageDsh).toBe(false)
   })
 })

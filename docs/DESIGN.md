@@ -19,6 +19,12 @@ choice, and the page shows both candidates with their versions and can install
 the pinned range globally. An operator's `homeHostedCommand` in the plugin row
 always wins — that is an instruction, not a preference.
 
+The range is stated twice and both must agree: `dependencies['home-hosted']` in
+`package.json` (what gets installed) and `EXPECTED_RANGE` in
+`src/home-hosted/resolve.ts` (what the page offers to install globally and warns
+about when a global copy is older). Bumping one alone makes the page recommend a
+range the plugin is not actually built against.
+
 That copy resolves to a pnpm path carrying a version and a peer hash
 (`…/.pnpm/home-hosted@0.6.1_zod@4.6.5/node_modules/home-hosted/…`), which moves
 on the next install and disappears when the profile is rebuilt. A boot entry
@@ -179,6 +185,28 @@ serialised; two concurrent mints used to leave the stored plaintext and the
 panel's hash disagreeing, and nothing could ever recover. If the CLI cannot run
 nothing is written; if it fails after the clear, the stored token is removed,
 because home-hosted no longer accepts it and a stored plaintext would only lie.
+
+Only a panel that was never started is refused: a missing or refused token is
+itself a common reason the panel cannot be reached, so requiring it to answer
+would make the repair impossible in exactly the case it exists for. A panel that
+is up but silent gets the token enrolled without a proof, and the page says so
+rather than claiming a verification it did not take.
+
+## A managed entry that was deleted
+
+`manageDsh` with an `autostart` intent is the whole instruction: it says this
+plugin manages the harness entry. If someone deletes that entry — from the panel,
+a tool call, or a hand edit — the page would otherwise show a managed entry that
+is missing with no way to act on it. So the status read puts it back, and startup
+`reconcile()` does the same for a deletion that happened while the plugin was
+not running. A paused intent (`autostart: false`) is a deliberate stop and is
+left alone, and `entries.apply` records `manageDsh` from the intent rather than
+forcing it on, so applying a paused intent cannot leave the toggle stuck.
+
+Recovery runs from a read, which the page polls, so it is throttled
+(`ENTRY_RECOVERY_INTERVAL_MS`) and claims its attempt before its first await:
+a panel that refuses the create must not be hit once per poll, and two status
+calls racing each other must not both create the same entry.
 
 ## Privilege
 

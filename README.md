@@ -92,7 +92,7 @@ running.
 | `home_hosted_ui_manage` | `status` · `update` · `revert` · `switch` the panel's own UI |
 
 A tool that changes something asks for approval **only** when the session is not already Full access.
-<sub>A refused token is re-enrolled on the spot and the tool retries — see **Auto reclaim** below.</sub>
+<sub>A refused token is re-enrolled on the spot and the tool retries — see **automatic regeneration** below.</sub>
 
 ## 🧩 Depth
 
@@ -139,14 +139,15 @@ refuses that write against an older panel rather than producing a config it cann
 </details>
 
 <details>
-<summary><b>API tokens and Auto reclaim</b></summary>
+<summary><b>API tokens and automatic regeneration</b></summary>
 
 The plugin needs its own home-hosted API token to read and write the panel. home-hosted keeps only
 the token's hash, so a token it did not mint can never be recovered — `<stateDir>/panel-token` is
-`0600`, never rendered or logged, and **Regenerate** clears the old hash and enrols a new one.
+`0600`, never rendered or logged, and **Regenerate token** clears the old hash and enrols a new one.
 
-A token that stops working (someone ran `home-hosted set-token`, or cleared it) shows on the page as
-a warning with that button. **Auto reclaim**, on by default, does the same thing automatically when a
+A missing or refused token is called out on the page with that button, including when the panel is
+not answering at all — a token problem is often *why* it cannot be reached.
+**Regenerate token automatically** (Agent tools section, on by default) does the same thing when a
 panel call is refused: the tool re-enrols and retries once instead of failing. Turn it off to be
 asked instead of having a working token silently replaced.
 

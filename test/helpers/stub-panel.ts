@@ -40,7 +40,7 @@ function view(record: StubServerRecord) {
   }
 }
 
-export async function startStubPanel(options: { token?: string, acceptAnyToken?: boolean } = {}): Promise<StubPanel> {
+export async function startStubPanel(options: { token?: string, acceptAnyToken?: boolean, failCreate?: boolean } = {}): Promise<StubPanel> {
   // A holder, not a local: a test rotates the token on the returned object and
   // the listener starts accepting the new one without a restart.
   const state = { token: options.token ?? 'stub-panel-token' }
@@ -91,6 +91,10 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
       }
 
       if (path === '/api/servers' && method === 'POST') {
+        if (options.failCreate === true) {
+          send(500, { message: 'the panel refused to add the server', code: 'CREATE_FAILED' })
+          return
+        }
         const entry = body as Record<string, unknown>
         const record: StubServerRecord = { id: String(entry.id), config: entry }
         servers.push(record)
