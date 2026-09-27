@@ -170,6 +170,14 @@ one, passes it to `home-hosted set-token` through `HHOSTED_TOKEN` (the CLI print
 nothing), and keeps it 0600 in its own state directory. It is never rendered,
 logged, or embedded in a unit file.
 
+Three facts about that CLI are load-bearing, and were read out of its source
+rather than guessed from `--help`: `set-token --clear` drops the hash (and says
+"nothing to clear" instead of failing when none is set), `HHOSTED_TOKEN` is the
+non-interactive input, and every command peels `--home <dir>` off before any
+state module is imported and turns it into `HHOSTED_HOME` — which is what makes
+the secrets file, `run.json` and the servers config live under the directory this
+plugin passes, so the plugin and the CLI always agree on where state is.
+
 The token state the page shows is measured, not assumed. When the panel answers,
 the plugin proves its token with a non-mutating `listServers()`: a refusal is
 `stale` and the write path drops to the config file, while a panel that never
