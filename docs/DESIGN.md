@@ -171,12 +171,13 @@ nothing), and keeps it 0600 in its own state directory. It is never rendered,
 logged, or embedded in a unit file.
 
 Three facts about that CLI are load-bearing, and were read out of its source
-rather than guessed from `--help`: `set-token --clear` drops the hash (and says
-"nothing to clear" instead of failing when none is set), `HHOSTED_TOKEN` is the
-non-interactive input, and every command peels `--home <dir>` off before any
-state module is imported and turns it into `HHOSTED_HOME` — which is what makes
-the secrets file, `run.json` and the servers config live under the directory this
-plugin passes, so the plugin and the CLI always agree on where state is.
+rather than guessed from `--help`: `set-token` replaces whatever hash is there
+(so `--clear` is not needed to overwrite, and is not used — see below),
+`HHOSTED_TOKEN` is the non-interactive input, and every command peels
+`--home <dir>` off before any state module is imported and turns it into
+`HHOSTED_HOME` — which is what makes the secrets file, `run.json` and the servers
+config live under the directory this plugin passes, so the plugin and the CLI
+always agree on where state is.
 
 The token state the page shows is measured, not assumed. When the panel answers,
 the plugin proves its token with a non-mutating `listServers()`: a refusal is
@@ -185,14 +186,15 @@ answered leaves the state `unknown` — a timeout is not a refusal, and
 `tokenVerified` records whether a proof actually happened.
 
 A refused token, or a hash this plugin never had, is replaced by
-`panel.reclaimToken`: it clears the old hash first (`set-token --clear`, without
-which `set-token` refuses to overwrite one), mints and enrols a fresh token
-through the same `HHOSTED_TOKEN` path, and proves it against the panel before
-returning the refreshed status. Every token operation on one state directory is
-serialised; two concurrent mints used to leave the stored plaintext and the
-panel's hash disagreeing, and nothing could ever recover. If the CLI cannot run
-nothing is written; if it fails after the clear, the stored token is removed,
-because home-hosted no longer accepts it and a stored plaintext would only lie.
+`panel.reclaimToken`: one `set-token` write with a freshly minted token in
+`HHOSTED_TOKEN`, proved against the panel before the refreshed status is
+returned. It is one write and not a `--clear`-then-set pair, because `set-token`
+replaces whatever hash is there (probed against the real CLI) and clearing first
+would leave a window in which the panel has no token at all. Every token
+operation on one state directory is serialised; two concurrent mints used to
+leave the stored plaintext and the panel's hash disagreeing, and nothing could
+ever recover. A failed write replaced nothing, so the previously stored token is
+kept — it may still be the panel's.
 
 Only a panel that was never started is refused: a missing or refused token is
 itself a common reason the panel cannot be reached, so requiring it to answer

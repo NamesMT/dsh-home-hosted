@@ -543,12 +543,9 @@ describe('reclaiming the panel token', () => {
     const minted = readStoredToken(state)
     expect(minted).not.toBeNull()
     expect(minted).not.toBe('old-refused-token')
-    // The old hash was dropped before the new one was enrolled.
-    expect(cliCalls.map(call => call.args)).toEqual([
-      ['--home', home, 'set-token', '--clear'],
-      ['--home', home, 'set-token'],
-    ])
-    expect(cliCalls[1]?.env.HHOSTED_TOKEN).toBe(minted)
+    // One write replaces the hash the panel refuses.
+    expect(cliCalls.map(call => call.args)).toEqual([['--home', home, 'set-token']])
+    expect(cliCalls[0]?.env.HHOSTED_TOKEN).toBe(minted)
 
     // The panel refused the old token and now accepts the new one: a real write lands.
     expect(panel.requests.some(request => request.path === '/api/servers' && !request.authorized)).toBe(true)
@@ -567,7 +564,7 @@ describe('reclaiming the panel token', () => {
     expect((await service.status()).panel.token).toBe('stale')
 
     const status = await service.call('panel.reclaimToken', {}) as HomeHostedStatus
-    expect(cliCalls[0]?.args).toEqual(['--home', home, 'set-token', '--clear'])
+    expect(cliCalls[0]?.args).toEqual(['--home', home, 'set-token'])
     expect(status.panel.token).toBe('enrolled')
     expect(status.panel.tokenVerified).toBe(true)
     expect(status.panel.writeVia).toBe('api')
@@ -590,26 +587,21 @@ describe('reclaiming the panel token', () => {
     expect(readStoredToken(state)).toBe('stale-token')
   })
 
-  it('drops a token that can never work when the re-enrol fails after the clear', async () => {
+  it('says the stored token was kept when the enrolment fails', async () => {
     const panel = await withPanel({ acceptAnyToken: false })
-    let calls = 0
     const { state, service } = await harness({
       panel,
-      execCli: async (args): Promise<RunResult> => {
-        calls += 1
-        return {
-          command: 'home-hosted', args, code: calls === 1 ? 0 : 2, signal: null, stdout: '', stderr: calls === 1 ? '' : 'mint failed', timedOut: false, error: null,
-        }
-      },
+      execCli: async (args): Promise<RunResult> => ({
+        command: 'home-hosted', args, code: 2, signal: null, stdout: '', stderr: 'mint failed', timedOut: false, error: null,
+      }),
     })
     storeToken(state, 'stale-token')
 
     await expect(service.call('panel.reclaimToken', {})).rejects.toMatchObject({
       code: 'TOKEN_RECLAIM_FAILED',
-      message: expect.stringContaining('mint failed'),
+      message: expect.stringContaining('the previously stored token was kept'),
     })
-    // The old hash is gone, so a stored plaintext would only lie about being usable.
-    expect(readStoredToken(state)).toBeNull()
+    expect(readStoredToken(state)).toBe('stale-token')
   })
 
   it('refuses to regenerate when the panel was never started, without running the CLI', async () => {

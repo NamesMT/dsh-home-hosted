@@ -118,7 +118,7 @@ describe('panel API token', () => {
 })
 
 describe('reclaiming a refused panel token', () => {
-  it('clears the old hash first, then mints a fresh token and stores it 0600', async () => {
+  it('replaces the old hash in one write, and stores the fresh token 0600', async () => {
     const { home, state } = dirs()
     storeToken(state, 'old-token')
     const calls: Array<{ args: string[], env: Record<string, string | undefined> }> = []
@@ -133,18 +133,15 @@ describe('reclaiming a refused panel token', () => {
 
     expect(result.token).not.toBeNull()
     expect(result.token).not.toBe('old-token')
-    // The clear runs first and carries no new plaintext; the mint follows with it.
-    expect(calls.map(call => call.args)).toEqual([
-      ['--home', home, 'set-token', '--clear'],
-      ['--home', home, 'set-token'],
-    ])
-    expect(calls[0]?.env.HHOSTED_TOKEN).toBeUndefined()
-    expect(calls[1]?.env.HHOSTED_TOKEN).toBe(result.token)
+    // One write: `set-token` replaces whatever hash is there, and a clear first
+    // would leave a window with no token at all.
+    expect(calls.map(call => call.args)).toEqual([['--home', home, 'set-token']])
+    expect(calls[0]?.env.HHOSTED_TOKEN).toBe(result.token)
     expect(readStoredToken(state)).toBe(result.token)
     expect(fs.statSync(storedTokenPath(state)).mode & 0o777).toBe(0o600)
   })
 
-  it('keeps the old token when the clear fails, so nothing is half-written', async () => {
+  it('keeps the old token when the CLI refuses, so nothing is half-written', async () => {
     const { home, state } = dirs()
     storeToken(state, 'old-token')
     let called = 0
@@ -153,34 +150,15 @@ describe('reclaiming a refused panel token', () => {
       stateDir: state,
       exec: async () => {
         called += 1
-        return { ...ok(), code: 1, stderr: 'clear refused' }
+        return { ...ok(), code: 1, stderr: 'set-token refused' }
       },
     })
 
     expect(result.token).toBeNull()
-    expect(result.detail).toContain('clear refused')
+    expect(result.detail).toContain('set-token refused')
     expect(called).toBe(1)
-    // The old hash is untouched, so the old plaintext is still the one to use.
+    // Nothing was replaced, so the stored plaintext is still the panel's.
     expect(readStoredToken(state)).toBe('old-token')
-  })
-
-  it('drops a token that can never work when the re-enrol fails after the clear', async () => {
-    const { home, state } = dirs()
-    storeToken(state, 'old-token')
-    let called = 0
-    const result = await reclaimToken({
-      home,
-      stateDir: state,
-      exec: async () => {
-        called += 1
-        return called === 1 ? ok() : { ...ok(), code: 2, stderr: 'mint failed' }
-      },
-    })
-
-    expect(result.token).toBeNull()
-    expect(result.detail).toContain('mint failed')
-    // home-hosted no longer holds the old hash, so a stored plaintext would lie.
-    expect(readStoredToken(state)).toBeNull()
   })
 
   it('reports a CLI that cannot run at all, without touching the stored token', async () => {
@@ -210,12 +188,12 @@ describe('reclaiming a refused panel token', () => {
 
     const first = reclaimToken({ home, stateDir: state, exec })
     const second = reclaimToken({ home, stateDir: state, exec })
-    // Let the first operation reach its clear before either can finish.
+    // Let the first operation reach its write before either can finish.
     await new Promise(resolve => setTimeout(resolve, 0))
     release()
     await Promise.all([first, second])
 
-    expect(order).toEqual(['clear', 'set', 'clear', 'set'])
+    expect(order).toEqual(['set', 'set'])
     expect(readStoredToken(state)).not.toBeNull()
   })
 })

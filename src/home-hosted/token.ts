@@ -5,14 +5,14 @@
  * create can never be recovered from disk. When none is enrolled, the plugin
  * mints one and hands it to `home-hosted set-token` through `HHOSTED_TOKEN`,
  * which stores the hash and prints nothing; when the panel refuses the stored
- * one, `reclaimToken` clears the old hash and enrols a fresh token the same way.
+ * one, `reclaimToken` replaces it with a fresh token the same way.
  * The plaintext lives 0600 under the plugin state directory and is never logged,
  * rendered, or sent to the browser.
  */
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import type { RunResult } from '../util/exec.js'
-import { readJson, readText, removeFile, writeFileAtomic } from '../util/fsx.js'
+import { readJson, readText, writeFileAtomic } from '../util/fsx.js'
 import { secretsFile } from '../util/paths.js'
 
 export type CliExecutor = (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
@@ -96,12 +96,11 @@ export async function ensureToken(options: EnsureTokenOptions): Promise<EnsureTo
  * Replace the panel's API token with a fresh one.
  *
  * home-hosted keeps only the token's hash, so a token this plugin does not hold
- * cannot be recovered: the old hash is cleared first (without that, `set-token`
- * refuses to overwrite a token home-hosted already has), a fresh token is minted
- * and enrolled through the same `HHOSTED_TOKEN` path `ensureToken` uses, and only
- * then is the plaintext stored 0600. A failure before the new enrolment leaves
- * the previous stored token untouched; a failure after the clear removes it,
- * because home-hosted no longer accepts it.
+ * cannot be recovered: a fresh token is minted, enrolled through the same
+ * `HHOSTED_TOKEN` path `ensureToken` uses — one write, since `set-token` replaces
+ * whatever hash is there — and only then is the plaintext stored 0600. The
+ * attempted write carries no risk to the stored token: a failure replaced
+ * nothing, so the previous plaintext is kept.
  */
 export async function reclaimToken(options: ReclaimTokenOptions): Promise<ReclaimTokenResult> {
   return await serialised(options.stateDir, async () => await enrollFreshToken(options))
@@ -158,24 +157,18 @@ async function enrollToken(options: EnsureTokenOptions): Promise<EnsureTokenResu
 }
 
 async function enrollFreshToken(options: ReclaimTokenOptions): Promise<ReclaimTokenResult> {
-  const cleared = await runCli(options.exec, ['--home', options.home, 'set-token', '--clear'], {})
-  if (cleared.result === undefined) {
-    return {
-      token: null,
-      detail: `could not clear the old API token: ${cleared.failure ?? 'the CLI did not answer'}`,
-    }
-  }
-
+  // One write, not a clear-then-set pair: `set-token` replaces whatever hash is
+  // there (proved against the real CLI), and clearing first would leave a window
+  // in which the panel has no token at all.
   const token = generateToken()
   const enrolled = await runCli(options.exec, ['--home', options.home, 'set-token'], { HHOSTED_TOKEN: token })
   if (enrolled.result === undefined) {
-    // The old hash is gone and no new one landed, so the stored plaintext can
-    // never authenticate again; drop it rather than leave a token that lies.
-    removeFile(storedTokenPath(options.stateDir))
+    // Nothing was replaced, so the stored token is still the panel's and is left
+    // alone: dropping it would throw away a credential that may still work.
     return {
       token: null,
-      detail: `the old API token was cleared, but a new one could not be enrolled: `
-        + `${enrolled.failure ?? 'the CLI did not answer'}; retrying is safe`,
+      detail: `could not enrol a fresh API token: ${enrolled.failure ?? 'the CLI did not answer'}; `
+        + 'the previously stored token was kept',
     }
   }
 

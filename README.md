@@ -143,7 +143,7 @@ refuses that write against an older panel rather than producing a config it cann
 
 The plugin needs its own home-hosted API token to read and write the panel. home-hosted keeps only
 the token's hash, so a token it did not mint can never be recovered — `<stateDir>/panel-token` is
-`0600`, never rendered or logged, and **Regenerate token** clears the old hash and enrols a new one.
+`0600`, never rendered or logged, and **Regenerate token** enrols a new one that replaces it.
 
 A missing or refused token is called out on the page with that button, including when the panel is
 not answering at all — a token problem is often *why* it cannot be reached.
