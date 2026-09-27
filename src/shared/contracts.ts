@@ -147,7 +147,7 @@ export interface EntryIntent {
 }
 
 /** Keys an intent owns: a patch touches these and nothing else. */
-export const OWNED_ENTRY_KEYS = ['autostart', 'onPortConflict', 'stop'] as const
+export const OWNED_ENTRY_KEYS = ['autostart', 'onPortConflict', 'persistent', 'stop'] as const
 
 export interface ServerEntryView {
   id: string
