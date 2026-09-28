@@ -1,6 +1,26 @@
 # Changelog
 
 
+## v0.4.0
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.3.3...v0.4.0)
+
+### 🚀 Enhancements
+
+- Know and act on every home-hosted panel, not just the one we own ([34c74f5](https://github.com/NamesMT/dsh-home-hosted/commit/34c74f5))
+
+### 🩹 Fixes
+
+- Boot the dsh this plugin was installed on ([92576c4](https://github.com/NamesMT/dsh-home-hosted/commit/92576c4))
+
+### 📖 Documentation
+
+- Say each install drives its own panel root ([9c7f749](https://github.com/NamesMT/dsh-home-hosted/commit/9c7f749))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.3.3
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.3.2...v0.3.3)
