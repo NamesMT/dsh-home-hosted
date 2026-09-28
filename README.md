@@ -171,6 +171,10 @@ The Cordis row config is for operator overrides only:
 
 Everything a person toggles lives in `<stateDir>/settings.json`.
 
+Each install drives its own panel root — `<stateDir>/panel`, or `$HHOSTED_HOME` when set — and names
+its own boot entry, so two dsh installs no longer share one panel. An existing `~/.home-hosted`
+panel is adopted as-is, and the page shows which root this install owns.
+
 </details>
 
 <details>
