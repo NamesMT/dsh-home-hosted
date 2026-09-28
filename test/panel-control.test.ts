@@ -77,6 +77,22 @@ describe('panel control', () => {
     expect(result.detail).toContain('no home-hosted CLI')
   })
 
+  it('reports why a stop failed, not just that the CLI exited', async () => {
+    const { deps: d } = deps()
+    d.exec = async () => ({ command: 'home-hosted', args: [], code: null, signal: null, stdout: '', stderr: '', timedOut: false, error: 'spawn home-hosted ENOENT' })
+    const result = await stopPanel(d)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('spawn home-hosted ENOENT')
+  })
+
+  it('surfaces a non-zero stop exit rather than reporting a stopped panel', async () => {
+    const { deps: d } = deps()
+    d.exec = async () => ({ command: 'home-hosted', args: [], code: 1, signal: null, stdout: '', stderr: 'no panel is running', timedOut: false, error: null })
+    const result = await stopPanel(d)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('no panel is running')
+  })
+
   it('writes a self-contained takeover helper that names the old pid and the CLI', () => {
     const { deps: d } = deps()
     const source = buildTakeoverSource(d, 4242)

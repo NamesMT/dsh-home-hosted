@@ -10,7 +10,7 @@ import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
-import { configFile, runtimeFile, secretsFile } from '../src/util/paths.js'
+import { bootUnitName, configFile, runtimeFile, secretsFile } from '../src/util/paths.js'
 import type { RunResult } from '../src/util/exec.js'
 import { startStubPanel } from './helpers/stub-panel.js'
 import type { StubPanel } from './helpers/stub-panel.js'
@@ -72,6 +72,8 @@ async function harness(options: {
   resolveDsh?: (options: { dshHome: string, stateDir: string }) => Promise<DshLaunch | null>
   /** Names of extra panels to create under the scratch dir and declare. */
   otherPanels?: string[]
+  /** Replaces the boot ladder, for tests about what was written or retired. */
+  ladder?: BootLadderLike
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -106,7 +108,7 @@ async function harness(options: {
     envHome: null,
     homeDir: scratch.path,
     settings,
-    createLadder: () => ladder,
+    createLadder: () => options.ladder ?? ladder,
     resolveDsh: options.resolveDsh,
     execCli: options.execCli ?? (async (args, env): Promise<RunResult> => {
       cliCalls.push({ args, env })
@@ -131,8 +133,12 @@ async function withPanel(harnessOptions: { acceptAnyToken?: boolean } = {}): Pro
 
 describe('home-hosted service', () => {
   it('reports a stopped panel and a missing entry without pretending otherwise', async () => {
-    const { service, state } = await harness()
+    const { service, state, home } = await harness()
     const status = await service.status()
+    // The page must be able to say which root and artifact this instance owns.
+    expect(status.panelRoot).toBe(home)
+    expect(status.panelRootSource).toBe('instance')
+    expect(status.bootUnitName).toBe(bootUnitName(state))
     expect(status.panel.reachable).toBe(false)
     expect(status.panel.writeVia).toBe('file')
     // No panel answered, so the token was never measured: unknown, not absent.
@@ -597,11 +603,14 @@ describe('panel lifecycle from the page', () => {
 
   it('stops the answering panel through the CLI down command', async () => {
     const panel = await withPanel()
-    const { service, cliCalls } = await harness({ panel })
+    const { home, service, cliCalls } = await harness({ panel })
     const result = await service.stopPanelNow()
     expect(result.ok).toBe(true)
     expect(result.detail).toContain('stopped')
-    expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
+    const down = cliCalls.find(call => call.args.includes('down'))
+    expect(down).toBeDefined()
+    // The panel it stops is the managed root, not whatever the default is.
+    expect(down!.args).toEqual(expect.arrayContaining(['down', '--home', home]))
   })
 
   it('reports nothing to stop when no panel is answering', async () => {
@@ -611,6 +620,85 @@ describe('panel lifecycle from the page', () => {
     expect(result.detail).toContain('nothing to stop')
     // Nothing answered, so no CLI was asked to stop one.
     expect(cliCalls.some(call => call.args.includes('down'))).toBe(false)
+  })
+
+  it('refuses to stop a panel when there is no CLI that could stop it', async () => {
+    const panel = await withPanel()
+    // A CLI that is not there resolves to nothing, so stopping cannot even start.
+    const { service } = await harness({ panel, cli: path.join(os.tmpdir(), 'dsh-home-hosted-no-such-cli.mjs') })
+    await expect(service.stopPanelNow()).rejects.toMatchObject({ code: 'CLI_NOT_FOUND' })
+  })
+})
+
+describe('retiring the pre-per-instance boot artifact', () => {
+  /** A ladder where a marker-owned legacy `home-hosted` entry already exists. */
+  function recordingLadder(dir: string): { ladder: BootLadderLike, written: string[], retired: string[] } {
+    const written: string[] = []
+    const retired: string[] = []
+    const legacyFile = path.join(dir, 'home-hosted.service')
+    fs.writeFileSync(legacyFile, '# managed by dsh-home-hosted\n', 'utf8')
+    const stateFor = (unitName: string, state: BootStatus['state'], unitPath: string | null): BootStatus => ({
+      platform: 'linux',
+      mechanism: 'systemd-user',
+      recommended: 'systemd-user',
+      state,
+      bootCapable: true,
+      privileged: true,
+      unitPath,
+      commands: [],
+      detail: '',
+      candidates: [],
+    })
+    return {
+      written,
+      retired,
+      ladder: {
+        status: async spec => spec.unitName === 'home-hosted'
+          ? stateFor(spec.unitName, 'enabled-running', legacyFile)
+          : stateFor(spec.unitName, 'not-installed', null),
+        install: async (spec): Promise<BootInstallResult> => {
+          written.push(spec.unitName)
+          return { ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: stateFor(spec.unitName, 'enabled-running', legacyFile) }
+        },
+        uninstall: async (spec): Promise<BootInstallResult> => {
+          retired.push(spec.unitName)
+          return { ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: stateFor(spec.unitName, 'not-installed', null) }
+        },
+      },
+    }
+  }
+
+  it('writes its own artifact and retires the old one', async () => {
+    const dir = tempDir()
+    const { ladder: custom, written, retired } = recordingLadder(dir.path)
+    const { service, state } = await harness({ ladder: custom })
+    const expected = bootUnitName(state)
+    expect(expected).not.toBe('home-hosted')
+
+    await service.installBoot('systemd-user')
+
+    expect(written).toEqual([expected])
+    // Otherwise the machine autostarts the panel twice, from two artifacts.
+    expect(retired).toEqual(['home-hosted'])
+    dir.cleanup()
+  })
+
+  it('leaves the old artifact alone when the install did not succeed', async () => {
+    const dir = tempDir()
+    const { ladder: custom, retired } = recordingLadder(dir.path)
+    custom.install = async (): Promise<BootInstallResult> => ({
+      ok: false,
+      changed: false,
+      detail: 'nope',
+      commands: [],
+      needsPrivilege: false,
+      mechanism: null,
+      status: { platform: 'linux', mechanism: null, recommended: null, state: 'not-installed', bootCapable: true, privileged: false, unitPath: null, commands: [], detail: '', candidates: [] },
+    })
+    const { service } = await harness({ ladder: custom })
+    await service.installBoot('systemd-user')
+    expect(retired).toEqual([])
+    dir.cleanup()
   })
 })
 

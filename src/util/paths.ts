@@ -16,16 +16,19 @@ export function expandHome(value: string): string {
   return value
 }
 
+/** A configured path, resolved against one home — never against the cwd. */
+function resolveUnder(value: string, homeDir: string): string {
+  if (value === '~')
+    return path.resolve(homeDir)
+  if (value.startsWith('~/') || value.startsWith('~\\'))
+    return path.resolve(path.join(homeDir, value.slice(2)))
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(homeDir, value)
+}
+
 /** DeepSeek Harness home: `$DSH_HOME`, else `~/.dsh`. */
 export function dshHome(): string {
   const configured = process.env.DSH_HOME?.trim()
   return configured ? path.resolve(expandHome(configured)) : path.join(os.homedir(), '.dsh')
-}
-
-/** home-hosted state root: `$HHOSTED_HOME`, else `~/.home-hosted`. */
-export function homeHostedHome(): string {
-  const configured = process.env.HHOSTED_HOME?.trim()
-  return configured ? path.resolve(expandHome(configured)) : path.join(os.homedir(), '.home-hosted')
 }
 
 /**
@@ -46,38 +49,55 @@ export function resolveHomeHostedHome(
 ): { home: string, source: 'env' | 'legacy' | 'instance' } {
   const configured = env.HHOSTED_HOME?.trim()
   if (configured)
-    return { home: path.resolve(expandHome(configured)), source: 'env' }
-  if (hasPanelState(path.join(homeDir, '.home-hosted')))
-    return { home: path.join(homeDir, '.home-hosted'), source: 'legacy' }
-  return { home: path.join(path.resolve(expandHome(stateDir)), 'panel'), source: 'instance' }
-}
-
-/** Whether a root already holds a panel, as opposed to merely existing. */
-function hasPanelState(home: string): boolean {
-  return ['servers.config.json', 'run.json'].some(file => {
-    try {
-      return fs.statSync(path.join(home, file)).isFile()
-    }
-    catch {
-      return false
-    }
-  })
+    return { home: resolveUnder(configured, homeDir), source: 'env' }
+  const legacy = path.join(homeDir, '.home-hosted')
+  if (hasLivePanel(legacy))
+    return { home: legacy, source: 'legacy' }
+  return { home: path.join(resolveUnder(stateDir, homeDir), 'panel'), source: 'instance' }
 }
 
 /**
- * The boot artifact one state root owns: the default keeps the historical name,
- * and every other instance gets its own, so two plugins cannot overwrite one
- * unit or delete the other's entry.
+ * Whether a root holds a panel somebody is running. A `run.json` alone is not
+ * proof — it survives a crash — so it only counts while its pid is alive.
  */
-export function bootUnitName(stateDir: string): string {
-  if (isDefaultStateDir(stateDir))
-    return 'home-hosted'
-  return `home-hosted-${crypto.createHash('sha256').update(path.resolve(stateDir)).digest('hex').slice(0, 8)}`
+function hasLivePanel(home: string): boolean {
+  try {
+    if (fs.statSync(path.join(home, 'servers.config.json')).isFile())
+      return true
+  }
+  catch {
+    // no config; a runtime with a live pid still counts below
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(home, 'run.json'), 'utf8')) as { pid?: unknown }
+    if (typeof raw.pid !== 'number')
+      return false
+    process.kill(raw.pid, 0)
+    return true
+  }
+  catch {
+    return false
+  }
 }
 
-function isDefaultStateDir(stateDir: string): boolean {
+/**
+ * The boot artifact one state root owns. Only the machine-wide default keeps the
+ * historical name: keying on the running process's own `$DSH_HOME` would give
+ * two differently-homed installs the same name, which is the collision this
+ * naming exists to prevent.
+ */
+export function bootUnitName(stateDir: string): string {
+  if (isMachineDefaultStateDir(stateDir))
+    return 'home-hosted'
+  const key = path.resolve(expandHome(stateDir?.trim() ?? ''))
+  return `home-hosted-${crypto.createHash('sha256').update(key).digest('hex').slice(0, 8)}`
+}
+
+function isMachineDefaultStateDir(stateDir: string): boolean {
   const bare = stateDir?.trim()
-  return bare === undefined || bare.length === 0 || path.resolve(expandHome(bare)) === path.join(dshHome(), 'dsh-home-hosted')
+  if (bare === undefined || bare.length === 0)
+    return true
+  return path.resolve(expandHome(bare)) === path.join(os.homedir(), '.dsh', 'dsh-home-hosted')
 }
 
 /** Where this plugin keeps its own durable state (settings, snapshots, token). */
@@ -89,15 +109,15 @@ export function pluginStateDir(override?: string): string {
 }
 
 /** home-hosted's own tokens file, written by the panel at startup. */
-export function runtimeFile(home = homeHostedHome()): string {
+export function runtimeFile(home: string): string {
   return path.join(home, 'run.json')
 }
 
 /** home-hosted's secrets file (0600): proves whether an API token is enrolled. */
-export function secretsFile(home = homeHostedHome()): string {
+export function secretsFile(home: string): string {
   return path.join(home, '.control-secrets.json')
 }
 
-export function configFile(home = homeHostedHome()): string {
+export function configFile(home: string): string {
   return path.join(home, 'servers.config.json')
 }

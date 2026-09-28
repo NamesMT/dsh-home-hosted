@@ -21,7 +21,7 @@ import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, reso
 import type { DshLaunch } from './home-hosted/dsh-entry.js'
 import { canonicalPath, discoverInstances } from './home-hosted/instances.js'
 import { defaultIntent, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
-import { buildHomeHostedBootSpec, homeHostedEnv } from './home-hosted/launch.js'
+import { buildHomeHostedBootSpec, homeHostedEnv, LEGACY_BOOT_UNIT_NAME } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
 import { EXPECTED_RANGE, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
@@ -960,7 +960,7 @@ export class HomeHostedService extends Service {
         version: runtime?.version ?? null,
       },
       launch,
-      { stateDir: this.options.stateDir },
+      { stateDir: this.options.stateDir, unitName: bootUnitName(this.options.stateDir) },
     )
 
     // The entry runs the stable launcher, not the pinned node_modules path: that
@@ -1008,6 +1008,8 @@ export class HomeHostedService extends Service {
     if (spec === null)
       throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
     const result = await this.ladder().install(spec, mechanism)
+    if (result.ok)
+      await this.retireLegacyBootEntry(spec, mechanism)
     const current = this.options.settings.get().autostart
     this.options.settings.update({
       autostart: {
@@ -1035,6 +1037,8 @@ export class HomeHostedService extends Service {
     if (spec === null)
       throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
     const result = await this.ladder().uninstall(spec, mechanism)
+    if (result.ok)
+      await this.retireLegacyBootEntry(spec, mechanism)
     const current = this.options.settings.get().autostart
     this.options.settings.update({
       autostart: {
@@ -1051,6 +1055,32 @@ export class HomeHostedService extends Service {
       },
     })
     return { result, status: await this.bootStatus(mechanism) }
+  }
+
+  /**
+   * Remove the pre-per-instance artifact once this state root has its own.
+   *
+   * An install that used to write `home-hosted` now writes `home-hosted-<hash>`,
+   * and a machine left with both would autostart the panel twice — or keep
+   * starting it from an entry the page no longer reports. Only an artifact
+   * carrying this plugin's marker is touched, so somebody else's unit survives.
+   */
+  private async retireLegacyBootEntry(spec: BootSpec, mechanism?: BootMechanism): Promise<void> {
+    if (spec.unitName === LEGACY_BOOT_UNIT_NAME)
+      return
+    const legacy = { ...spec, unitName: LEGACY_BOOT_UNIT_NAME }
+    try {
+      const status = await this.ladder().status(legacy, mechanism)
+      if (status.unitPath === null || status.state === 'not-installed' || status.state === 'unsupported')
+        return
+      if (!fs.existsSync(status.unitPath))
+        return
+      await this.ladder().uninstall(legacy, status.mechanism ?? mechanism)
+    }
+    catch {
+      // A legacy entry we cannot retire is reported by the boot status the page
+      // reads; failing the install over it would be worse.
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1152,6 +1182,30 @@ export class HomeHostedService extends Service {
     // page reports as a missing entry. Recreate it — the toggle is the intent.
     await this.ensureManagedEntry()
     await this.repairBootEntry()
+    await this.migrateBootEntryName()
+  }
+
+  /**
+   * An upgrade from a release that named every artifact `home-hosted` leaves
+   * that one behind while this state root now writes its own name. Once our own
+   * artifact is in place, the old one is retired — otherwise the machine
+   * autostarts the panel twice, or from an entry the page no longer reports.
+   */
+  private async migrateBootEntryName(): Promise<void> {
+    if (!this.options.settings.get().autostart.enabled)
+      return
+    const spec = await this.bootSpec()
+    if (spec === null || spec.unitName === LEGACY_BOOT_UNIT_NAME)
+      return
+    try {
+      const own = await this.bootStatus()
+      if (own.state !== 'enabled-running' && own.state !== 'enabled-failing' && own.state !== 'installed-disabled')
+        return
+      await this.retireLegacyBootEntry(spec, own.mechanism ?? undefined)
+    }
+    catch {
+      // reported by the boot status the page reads
+    }
   }
 
   /**

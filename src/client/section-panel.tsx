@@ -40,6 +40,18 @@ export function reclaimNote(envelope: Envelope<unknown>, t: TranslateFn): string
     : t('panelTokenRegenerated')
 }
 
+/**
+ * The note a stop attempt leaves behind.
+ *
+ * A dropped transport is not a failure: stopping the panel this session runs
+ * under kills the connection, and claiming "did not stop" there would be false.
+ */
+export function stopNoteFor(envelope: Envelope<unknown>, t: TranslateFn): string {
+  if (!envelope.ok)
+    return envelope.error.code === 'client' ? t('panelStopping') : t('panelStopFailed', { message: envelope.error.message })
+  return (envelope.value as { detail?: string } | null)?.detail || t('panelStopped')
+}
+
 /** Draft-then-commit numeric field: empty means `null`, invalid reverts. */
 function PortField({ value, label, hint, invalidLabel, placeholder, disabled, onChange }: {
   value: number | null
@@ -131,10 +143,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
     // If this harness is one of the panel's servers, the answer may never
     // arrive; say what is happening before asking, not after.
     setStopNote(t('panelStopping'))
-    const envelope = await run('panel.stop', () => rpc('panel.stop', {}))
-    setStopNote(envelope.ok
-      ? (envelope.value as { detail?: string } | null)?.detail || t('panelStopped')
-      : t('panelStopFailed', { message: envelope.error.message }))
+    setStopNote(stopNoteFor(await run('panel.stop', () => rpc('panel.stop', {})), t))
   }
 
   return (
@@ -202,14 +211,6 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
         onChange={port => updateSettings(current => ({ ...current, panel: { ...current.panel, port } }))}
       />
 
-      {status.panelRoot === undefined
-        ? null
-        : (
-            <Spec label={t('panelRootLabel')}>
-              <Code>{status.panelRoot}</Code>
-              {status.bootUnitName === undefined ? null : ` · ${status.bootUnitName}`}
-            </Spec>
-          )}
       {status.panelRootSource !== 'legacy' ? null : <Hint>{t('panelRootLegacy')}</Hint>}
 
       {instances.length <= 1
@@ -271,7 +272,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
             <div className="hh-note" role="alertdialog" aria-label={t('panelStopTitle')}>
               <div className="hh-note-body">
                 <strong>{t('panelStopTitle')}</strong>
-                <p>{t('panelStopBody', { id: status.defaultEntryId ?? 'dsh' })}</p>
+                <p>{t('panelStopBody')}</p>
                 <div className="hh-note-actions">
                   <Button onClick={() => setConfirmingStop(false)}>{t('confirmCancel')}</Button>
                   <Button
@@ -327,7 +328,10 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
         : null}
 
       <Details label={t('details')} open={uiStyle === 'detailed'}>
-        <Spec label={t('panelHome')}><Code>{panel.home}</Code></Spec>
+        <Spec label={t('panelHome')}>
+          <Code>{panel.home}</Code>
+          {status.bootUnitName === undefined ? null : <>{' · '}{status.bootUnitName}</>}
+        </Spec>
         <Spec label={t('panelUrl')}>
           {panel.url === null ? dash(panel.url) : <Link href={panel.url}>{panel.url}</Link>}
         </Spec>

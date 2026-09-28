@@ -14,6 +14,9 @@ import { run } from '../util/exec.js'
 import { readText } from '../util/fsx.js'
 import { bootUnitName } from '../util/paths.js'
 
+/** The artifact name every install wrote before it was per state root. */
+export const LEGACY_BOOT_UNIT_NAME = 'home-hosted'
+
 export interface CliLaunch {
   program: string
   /** Args that must precede the command, e.g. the CLI entry path. */
@@ -96,6 +99,8 @@ export function homeHostedEnv(facts: HomeHostedFacts, launch: CliLaunch, extra: 
 
 export interface BootSpecOptions {
   stateDir: string
+  /** The artifact name to write; defaults to the one this state root owns. */
+  unitName?: string
   marker?: string
 }
 
@@ -117,8 +122,8 @@ export function buildHomeHostedBootSpec(
     env: homeHostedEnv(facts, launch),
     marker: options.marker ?? 'managed by dsh-home-hosted',
     // One artifact per state root, so two plugin instances cannot overwrite or
-    // delete each other's entry. The default install keeps the historical name.
-    unitName: bootUnitName(options.stateDir),
+    // delete each other's entry. The machine-default install keeps the old name.
+    unitName: options.unitName ?? bootUnitName(options.stateDir),
     label: 'home-hosted control panel',
     logDir,
   }

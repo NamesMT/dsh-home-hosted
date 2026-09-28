@@ -76,9 +76,17 @@ replaced the first's boot entry. A panel root is now derived per instance: an
 explicit `$HHOSTED_HOME` still wins, and a panel already living at
 `~/.home-hosted` is adopted rather than abandoned (an upgrade must never make
 every server look like it vanished), but otherwise the root is the instance's own
-`<stateDir>/panel`. The boot unit name follows the state root (`home-hosted` for
-the default install, `home-hosted-<hash>` otherwise), so two instances cannot
-overwrite or delete each other's artifact.
+`<stateDir>/panel`. Only a root with a `servers.config.json` counts, or a
+`run.json` whose pid is alive — a killed panel leaves a runtime file behind, and
+adopting on that would point a fresh install at somebody's dead root.
+
+The boot artifact name follows the state root too, but keyed on the *machine*
+default: `home-hosted` only for `~/.dsh/dsh-home-hosted`, `home-hosted-<hash>`
+otherwise. Keying it on the running process's own `$DSH_HOME` would name every
+install's default state dir `home-hosted` and reintroduce the collision. An
+install that used to write the old name retires it once its own artifact is in
+place (an upgrade would otherwise autostart the panel twice), and only an
+artifact carrying this plugin's marker is ever removed.
 
 ## Agent tools are merged and on by default
 

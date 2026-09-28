@@ -42,13 +42,13 @@ function cliArgs(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): st
   return args
 }
 
-async function runCli(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): Promise<{ code: number | null, stdout: string, stderr: string }> {
+async function runCli(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): Promise<{ code: number | null, stdout: string, stderr: string, error: string | null }> {
   const args = cliArgs(deps, command)
   if (deps.exec !== undefined)
     return await deps.exec(args, deps.env)
   const launch = deps.launch
   if (launch === null)
-    return { code: null, stdout: '', stderr: 'no home-hosted CLI is available' }
+    return { code: null, stdout: '', stderr: 'no home-hosted CLI is available', error: null }
   return await run(launch.program, args, {
     env: deps.env,
     timeoutMs: deps.timeoutMs ?? 90_000,
@@ -77,7 +77,7 @@ export async function startPanel(deps: PanelControlDeps): Promise<PanelControlRe
 export async function stopPanel(deps: PanelControlDeps): Promise<PanelControlResult> {
   const result = await runCli(deps, 'down')
   if (result.code !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim() || `the CLI exited ${String(result.code)}`
+    const detail = result.error ?? (result.stderr.trim() || result.stdout.trim() || `the CLI exited ${String(result.code)}`)
     return { ok: false, detail: `the panel did not stop: ${detail}` }
   }
   return { ok: true, detail: 'the panel stopped; the servers it supervised stopped with it' }
