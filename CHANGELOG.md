@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.4.4
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.3...v0.4.4)
+
+### 🩹 Fixes
+
+- A panel root this instance already uses is never traded away ([eb4c7a8](https://github.com/NamesMT/dsh-home-hosted/commit/eb4c7a8))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.4.3
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.2...v0.4.3)
