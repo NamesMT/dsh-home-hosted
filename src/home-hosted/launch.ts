@@ -12,6 +12,7 @@ import process from 'node:process'
 import type { BootSpec } from '../boot/types.js'
 import { run } from '../util/exec.js'
 import { readText } from '../util/fsx.js'
+import { bootUnitName } from '../util/paths.js'
 
 export interface CliLaunch {
   program: string
@@ -115,7 +116,9 @@ export function buildHomeHostedBootSpec(
     cwd: facts.projectDir ?? facts.home,
     env: homeHostedEnv(facts, launch),
     marker: options.marker ?? 'managed by dsh-home-hosted',
-    unitName: 'home-hosted',
+    // One artifact per state root, so two plugin instances cannot overwrite or
+    // delete each other's entry. The default install keeps the historical name.
+    unitName: bootUnitName(options.stateDir),
     label: 'home-hosted control panel',
     logDir,
   }

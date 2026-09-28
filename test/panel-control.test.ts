@@ -8,6 +8,7 @@ import {
   installGlobal,
   spawnTakeover,
   startPanel,
+  stopPanel,
   takeoverHelperPath,
   writeTakeoverHelper,
 } from '../src/home-hosted/panel-control.js'
@@ -57,6 +58,21 @@ describe('panel control', () => {
   it('reports a failing CLI instead of claiming success', async () => {
     const { deps: d } = deps({ launch: null })
     const result = await startPanel(d)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('no home-hosted CLI')
+  })
+
+  it('stops the panel through the CLI down command', async () => {
+    const { deps: d, log } = deps()
+    const result = await stopPanel(d)
+    expect(result.ok).toBe(true)
+    expect(result.detail).toContain('servers it supervised stopped')
+    expect(fs.readFileSync(log, 'utf8')).toContain(`down --home ${d.home}`)
+  })
+
+  it('reports a stop it could not perform instead of claiming the panel is down', async () => {
+    const { deps: d } = deps({ launch: null })
+    const result = await stopPanel(d)
     expect(result.ok).toBe(false)
     expect(result.detail).toContain('no home-hosted CLI')
   })

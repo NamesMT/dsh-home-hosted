@@ -7,6 +7,7 @@ import {
   buildLauncherSource,
   dshLauncherPath,
   dshLauncherRecordPath,
+  dshSearchRoot,
   findCandidate,
   launcherPath,
   launcherRecordPath,
@@ -159,6 +160,34 @@ function dshHarness(version = '0.1.7'): DshHarness {
   return { state, dshHome, profile, entry: fakeDsh(profile, version) }
 }
 
+/** The reporter's machine: a local dsh, and a different one later on PATH. */
+function pinnedHarness(): { state: string, dshHome: string, clone: string, global: string, profile: string, pathValue: string } {
+  const home = tempDir()
+  scratch = home
+  const clone = path.join(home.path, 'Desktop', 'MMO', 'deepseek-harness')
+  fs.mkdirSync(path.join(clone, 'lib'), { recursive: true })
+  writeJsonFile(path.join(clone, 'package.json'), { name: 'dsh', version: '0.0.0-local' })
+  const cloneEntry = path.join(clone, 'lib', 'bin.js')
+  fs.writeFileSync(cloneEntry, 'console.log("local-build dsh " + process.argv.slice(2).join(" "))\n', 'utf8')
+
+  const globalDir = path.join(home.path, '.local', 'bin')
+  const profile = path.join(home.path, 'global', 'profiles', 'web')
+  const globalEntry = fakeDsh(profile, '9.9.9')
+  fs.mkdirSync(globalDir, { recursive: true })
+  // A package-manager shim dsh leaves on PATH: not a JS entry itself.
+  fs.writeFileSync(path.join(globalDir, 'dsh'), `# cmd-shim-target=${globalEntry}\n`, 'utf8')
+  fs.chmodSync(path.join(globalDir, 'dsh'), 0o755)
+
+  return {
+    state: path.join(home.path, 'state'),
+    dshHome: path.join(home.path, 'dsh'),
+    clone: cloneEntry,
+    global: globalEntry,
+    profile,
+    pathValue: [globalDir, path.dirname(process.execPath)].join(path.delimiter),
+  }
+}
+
 describe('dsh launcher', () => {
   it('writes an executable script and records the entry it resolved', () => {
     const h = dshHarness()
@@ -248,6 +277,78 @@ describe('dsh launcher', () => {
     expect(result.code).toBe(0)
     expect(result.stdout).toContain('fake-dsh 0.1.7 @' + h.entry)
     expect(result.stdout).not.toContain(other)
+  })
+
+  it('boots the pinned image over a higher-version copy on PATH', async () => {
+    const h = pinnedHarness()
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.clone, pinnedEntry: h.clone })
+
+    const result = await run(dshLauncherPath(h.state), ['web'], { env: { PATH: h.pathValue } })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('local-build dsh web')
+    expect(result.stdout).not.toContain('fake-dsh 9.9.9')
+  })
+
+  it('keeps a recorded pin when the plugin restarts behind its own launcher', async () => {
+    const h = pinnedHarness()
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.clone, pinnedEntry: h.clone })
+    // A process booted through the launcher resolves nothing local, so the
+    // rewrite must carry the pin forward — even when the caller offers the
+    // global copy it found on PATH instead.
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.global, pinnedEntry: h.global })
+
+    expect(readDshLauncherRecord(h.state)).toMatchObject({ pinned: h.clone })
+    const result = await run(dshLauncherPath(h.state), ['web'], { env: { PATH: h.pathValue } })
+    expect(result.stdout).toContain('local-build dsh web')
+    expect(result.stdout).not.toContain('fake-dsh 9.9.9')
+  })
+
+  it('adopts a new pin only when the caller is the running image', async () => {
+    const h = pinnedHarness()
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.clone, pinnedEntry: h.clone })
+    // A deliberate re-pin: this process *is* the other image.
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.global, pinnedEntry: h.global, repin: true })
+
+    expect(readDshLauncherRecord(h.state)).toMatchObject({ pinned: h.global })
+  })
+
+  it('falls back to a version sort once the pinned image is gone', async () => {
+    const h = pinnedHarness()
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.clone, pinnedEntry: h.clone })
+    fs.rmSync(h.clone)
+
+    const result = await run(dshLauncherPath(h.state), ['web'], { env: { PATH: h.pathValue } })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('fake-dsh 9.9.9')
+
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.global })
+    expect(readDshLauncherRecord(h.state)?.pinned ?? null).toBeNull()
+  })
+
+  it('does not let a package that merely has lib/bin.js outrank a real dsh', async () => {
+    const h = pinnedHarness()
+    // An unrelated package at the clone's root, reporting a much higher
+    // version: its build file matches by name only, so it must never be booted
+    // while a copy that is dsh by construction exists.
+    const impostorRoot = path.join(path.dirname(h.state), 'unrelated-project')
+    const impostor = path.join(impostorRoot, 'lib', 'bin.js')
+    fs.mkdirSync(path.dirname(impostor), { recursive: true })
+    fs.writeFileSync(impostor, 'console.log("impostor web")\n', 'utf8')
+    writeJsonFile(path.join(impostorRoot, 'package.json'), { name: 'unrelated', version: '99.0.0' })
+    // The real copy is not the recorded entry either, so the probe competes on
+    // version alone and must still lose to a copy that is dsh by construction.
+    writeDshLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: null, searchRoots: [impostorRoot, h.profile] })
+
+    const result = await run(dshLauncherPath(h.state), ['web'], { env: { PATH: h.pathValue } })
+    expect(result.code).toBe(0)
+    expect(result.stdout).not.toContain('impostor')
+    expect(result.stdout).toContain('fake-dsh 9.9.9')
+  })
+
+  it('takes the last pnpm store, not an earlier segment that merely looks like one', () => {
+    const root = path.join('/home', 'me', 'proj')
+    const store = path.join(root, 'node_modules', '.pnpm', '@deepseek-ai+dsh@0.1.7_abc')
+    expect(dshSearchRoot(path.join(store, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))).toBe(root)
   })
 
   it('never selects a directory that merely looks like dsh on PATH', async () => {

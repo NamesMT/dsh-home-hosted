@@ -26,12 +26,12 @@ import type { CliResolution } from './home-hosted/resolve.js'
 import { EXPECTED_RANGE, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
-import { installGlobal, spawnTakeover, startPanel as startPanelProcess } from './home-hosted/panel-control.js'
+import { installGlobal, spawnTakeover, startPanel as startPanelProcess, stopPanel as stopPanelProcess } from './home-hosted/panel-control.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
-import { dshHome } from './util/paths.js'
+import { bootUnitName, dshHome } from './util/paths.js'
 import type { RunResult } from './util/exec.js'
 import { run } from './util/exec.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
@@ -90,6 +90,8 @@ function foreignView(entry: ServerEntry): ServerEntryView {
 
 export interface HomeHostedServiceOptions {
   home: string
+  /** How that root was chosen: an explicit env var, an adopted legacy panel, or this instance's own. */
+  panelHomeSource?: 'env' | 'legacy' | 'instance'
   stateDir: string
   homeHostedCommand?: string
   defaultEntryId: string
@@ -411,6 +413,7 @@ export class HomeHostedService extends Service {
       projectDir,
       stateDir: this.options.stateDir,
       env: launch === null ? {} : homeHostedEnv({ home: this.options.home, projectDir }, launch),
+      exec: this.options.execCli,
     }
   }
 
@@ -1071,6 +1074,29 @@ export class HomeHostedService extends Service {
   }
 
   /**
+   * Stop the panel the plugin drives, and every server it supervises with it.
+   *
+   * Deliberately not a replacement for the takeover guard: stopping is safe to
+   * lose (an `autostart` entry comes back), while replacing is not. If this
+   * process is one of those servers the answer may never arrive, so the page
+   * treats a dropped call as "the panel is stopping" rather than a failure.
+   */
+  async stopPanelNow(): Promise<PanelControlResult> {
+    const { resolution } = await this.cli()
+    const runtime = this.runtime()
+    if (runtime === null || !await probePanel(runtime.url)) {
+      return { ok: true, detail: 'no panel is answering, so there was nothing to stop' }
+    }
+    const deps = await this.panelControlDeps()
+    if (deps.launch === null)
+      throw new HomeHostedError(resolution.status.detail, 'CLI_NOT_FOUND')
+    const result = await stopPanelProcess(deps)
+    this.clientCache = null
+    this.tokenProof = null
+    return result
+  }
+
+  /**
    * Replace an answering panel with the preferred copy.
    *
    * That stops the servers the old panel supervises — this process included — so
@@ -1221,6 +1247,9 @@ export class HomeHostedService extends Service {
     return {
       defaultEntryId: this.options.defaultEntryId,
       panel,
+      panelRoot: this.options.home,
+      panelRootSource: this.options.panelHomeSource ?? 'instance',
+      bootUnitName: bootUnitName(this.options.stateDir),
       instances: await this.instances(refresh),
       boot: await this.bootStatus(),
       // A deleted managed entry is put back here as well as at startup: whoever
@@ -1392,6 +1421,9 @@ export class HomeHostedService extends Service {
 
       case 'panel.start':
         return await this.startPanelNow()
+
+      case 'panel.stop':
+        return await this.stopPanelNow()
 
       case 'panel.takeover':
         return await this.takeoverPanel(input.force === true)

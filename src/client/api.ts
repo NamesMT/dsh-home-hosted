@@ -42,6 +42,7 @@ export interface EndpointResults {
   'entries.apply': ManagedEntryStatus[]
   'entries.remove': ManagedEntryStatus[]
   'panel.start': PanelControlResult
+  'panel.stop': PanelControlResult
   'panel.takeover': PanelControlResult
   'cli.installGlobal': CliInstallResult
   'boot.install': BootControlResult

@@ -19,7 +19,7 @@ import { dshHome as resolveDshHome, pluginStateDir } from '../util/paths.js'
 import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
 import { compareVersions } from './resolve.js'
-import { dshCandidatesUnder, dshLauncherPath, dshSearchRoot, writeDshLauncher } from './launcher.js'
+import { dshCandidatesUnder, dshLauncherPath, dshSearchRoot, readDshLauncherRecord, writeDshLauncher } from './launcher.js'
 
 /**
  * Which profile this process is running.
@@ -194,6 +194,10 @@ export async function resolveDshLaunch(options: ResolveDshLaunchOptions = {}): P
       stateDir,
       dshHome,
       resolvedEntry: local,
+      // The running image is the one a boot entry must keep running: a global
+      // copy that reports a higher version is not an upgrade of this install.
+      pinnedEntry: local,
+      repin: true,
       entryExtension: path.extname(local),
       // Where this install sits, so a rebuilt/moved copy is found next boot.
       searchRoots: [dshSearchRoot(local)].filter((root): root is string => root !== null),
@@ -201,8 +205,27 @@ export async function resolveDshLaunch(options: ResolveDshLaunchOptions = {}): P
     return { program: process.execPath, args: [local], cliEntry: local, shimPath: null, source: 'entry', launcherPath: launcher.path }
   }
 
+  // This process *is* the launcher's child. The launcher already decided which
+  // dsh to run and recorded it; resolving again could only produce a different
+  // answer (whatever `$DSH_HOME` or PATH happens to hold) and would then be
+  // baked into the row — the exact drift this launcher exists to prevent.
+  if (argv1 !== undefined && argv1 !== null && realPath(argv1) === realPath(dshLauncherPath(stateDir, path.extname(local ?? argv1)))) {
+    const pinned = readDshLauncherRecord(stateDir)?.pinned ?? null
+    if (pinned !== null) {
+      const launcher = dshLauncherPath(stateDir, path.extname(pinned))
+      const launch = resolveShimmedCli(pinned, process.execPath)
+      const cliEntry = launch?.cliEntry ?? pinned
+      // Re-assert the record for a launcher that was written before a pin
+      // existed; a carried pin is not re-chosen.
+      if (readDshLauncherRecord(stateDir)?.entry !== pinned)
+        writeDshLauncher({ stateDir, dshHome, resolvedEntry: cliEntry, pinnedEntry: pinned, entryExtension: path.extname(pinned) })
+      return { program: process.execPath, args: [launcher], cliEntry, shimPath: null, source: 'entry', launcherPath: launcher }
+    }
+  }
+
   // Not launched as an entry: a clone that is not on PATH still installs into
-  // the harness home, and that is a far better answer than "not found".
+  // the harness home, and that is a far better answer than "not found". An
+  // existing pin is the running image and outranks anything found here.
   const installed = findDshEntry(dshHome)
   if (installed !== null) {
     const launcher = writeDshLauncher({ stateDir, dshHome, resolvedEntry: installed, entryExtension: path.extname(installed) })
@@ -211,6 +234,11 @@ export async function resolveDshLaunch(options: ResolveDshLaunchOptions = {}): P
 
   const found = await (options.findOnPath ?? which)('dsh')
   if (found === null)
+    return null
+  // A launcher with no pin left is a decision for the user, not for this
+  // process: returning the PATH shape would rewrite the row to that absolute
+  // entry, and nothing would repair it once PATH changes again.
+  if (readDshLauncherRecord(stateDir)?.pinned != null)
     return null
   const launch = resolveShimmedCli(found, process.execPath)
   return launch === null ? null : { ...launch, launcherPath: null }
@@ -236,19 +264,39 @@ function entryScript(config: { command?: string, args?: string[] }): string | nu
 }
 
 /**
- * Re-point an entry that boots a local build directly at the stable launcher.
+ * Re-point an entry at the stable launcher for the pinned image.
  *
- * Only this shape qualifies: the entry runs the same script this process does,
- * and that script is not already the launcher. An upgrade cannot repair the
- * entry it created in an earlier release otherwise — the plugin never rewrites
- * an existing entry's command.
+ * Qualifying shapes, and only these: the entry runs the script this pattern
+ * pins (a local build recorded in an earlier release), reaches that script
+ * through a package-manager shim, or names a bare `dsh`/`dsh.cmd` that a later
+ * PATH lookup would answer with a different copy. An entry that runs a
+ * *different* dsh is somebody's deliberate choice and is never touched.
+ *
+ * An entry this process was booted through is also left alone: repairing it
+ * would point it at itself, since that is already the launcher.
  */
+export function pinnedScriptFor(launch: DshLaunch | null): string | null {
+  if (launch === null)
+    return null
+  const launcher = launch.launcherPath
+  if (launcher !== null && launcher.length > 0)
+    return launcher
+  return launch.cliEntry ?? launch.args.find(arg => path.isAbsolute(arg)) ?? null
+}
+
+/** Whether a stored command is a bare name PATH decides, not a path we know. */
+function isBareCommand(stored: string): boolean {
+  return !/[/\\]/.test(stored) && (stored === 'dsh' || /^dsh\.(?:cmd|exe)$/i.test(stored))
+}
+
 /**
  * Whether an entry *could* need that repair, without resolving anything.
  *
  * Resolving a local dsh walks the harness home, so the write path asks this
- * first: a global `dsh` on PATH, or an entry already on the launcher, is
- * settled here and never triggers the walk.
+ * first. Almost every shape can need one — an absolute command, an absolute
+ * first argument, a bare `dsh` — and the cheap answer is therefore "yes" here
+ * and a full comparison in `launcherRepair`, which is what decides whether
+ * anything is actually rewritten.
  */
 export function needsLauncherRepair(config: { command?: string, args?: string[] }): boolean {
   const program = config.command
@@ -256,25 +304,39 @@ export function needsLauncherRepair(config: { command?: string, args?: string[] 
     return false
   if (path.isAbsolute(program))
     return true
-  return (config.args ?? []).some((arg, index) => index === 0 && path.isAbsolute(arg))
+  if (isBareCommand(program))
+    return true
+  return (config.args ?? []).some(arg => path.isAbsolute(arg))
 }
 
 export function launcherRepair(
   config: { command?: string, args?: string[] },
   launch: DshLaunch | null,
 ): { command: string, args: string[] } | null {
-  if (launch?.launcherPath == null || launch.launcherPath.length === 0)
+  const pinned = pinnedScriptFor(launch)
+  if (pinned === null || launch === null)
     return null
-  const launcher = launch.launcherPath
   const stored = entryScript(config)
-  if (stored === null || stored === launcher)
+  if (stored === null || stored === pinned)
     return null
-  if (stored !== launch.cliEntry)
-    return null
-  // The old argv named the script as an absolute first argument; the launcher
-  // takes its place, so that one has to go and every app argument has to stay.
-  const rest = (config.args ?? []).filter((arg, index) => !(index === 0 && path.isAbsolute(arg)))
-  return { command: process.execPath, args: [launcher, ...rest] }
+  // A bare name is exactly the ambiguity this repair removes: PATH decides it,
+  // and PATH is what pointed at the copy that stopped working.
+  const bare = isBareCommand(stored)
+  if (!bare) {
+    // A shim is the same script reached another way; anything else has to be
+    // the script this plugin pins, or the entry is about a different dsh.
+    const target = resolveShimmedCli(stored, process.execPath)?.cliEntry ?? stored
+    if (target !== pinned && target !== launch.cliEntry)
+      return null
+  }
+  // A bare command carries no script argument at all, so nothing is dropped:
+  // an absolute app argument (`--home /Users/x/.dsh`) has to survive.
+  const args = config.args ?? []
+  const inline = bare ? -1 : args.findIndex(arg => path.isAbsolute(arg))
+  // The launcher takes the script's place, so an absolute leading script has to
+  // go; every app argument has to stay.
+  const rest = inline === -1 ? args : args.filter((_, index) => index !== inline)
+  return { command: process.execPath, args: [pinned, ...rest] }
 }
 
 export function buildDshEntry(facts: DshFacts): ServerEntry {

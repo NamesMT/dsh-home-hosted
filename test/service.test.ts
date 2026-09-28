@@ -307,6 +307,7 @@ describe('home-hosted service', () => {
   it('enrols a token through the CLI and adopts an existing entry over the API', async () => {
     const panel = await withPanel()
     const { service, settings, cliCalls } = await harness({ panel })
+    const state = path.join(scratch!.path, 'state')
 
     panel.servers.push({
       id: 'dsh',
@@ -342,8 +343,10 @@ describe('home-hosted service', () => {
     expect(live.onPortConflict).toBe('kill')
     expect(live.autostart).toBe(true)
     expect(live.stop).toEqual({ graceMs: 1000, killPortHolders: true })
-    expect(live.command).toBe('dsh')
-    expect(live.args).toEqual(['web'])
+    // The row named a bare `dsh`; the resolve pins it to the image this
+    // harness runs, so a later PATH change cannot redirect the boot.
+    expect(live.command).toBe(process.execPath)
+    expect(live.args).toEqual([path.join(state, 'bin', 'dsh.mjs'), 'web'])
 
     // The token was minted once, through the CLI, and never sent to the browser.
     expect(cliCalls).toHaveLength(1)
@@ -591,6 +594,24 @@ describe('panel lifecycle from the page', () => {
     // Without a panel the call degrades to a start, and the fake CLI answers nothing.
     expect(result.ok).toBe(true)
   })
+
+  it('stops the answering panel through the CLI down command', async () => {
+    const panel = await withPanel()
+    const { service, cliCalls } = await harness({ panel })
+    const result = await service.stopPanelNow()
+    expect(result.ok).toBe(true)
+    expect(result.detail).toContain('stopped')
+    expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
+  })
+
+  it('reports nothing to stop when no panel is answering', async () => {
+    const { service, cliCalls } = await harness()
+    const result = await service.stopPanelNow()
+    expect(result.ok).toBe(true)
+    expect(result.detail).toContain('nothing to stop')
+    // Nothing answered, so no CLI was asked to stop one.
+    expect(cliCalls.some(call => call.args.includes('down'))).toBe(false)
+  })
 })
 
 
@@ -782,7 +803,7 @@ describe('an entry that boots a clone directly', () => {
     expect(panel.servers[0]!.config.args).toEqual(['/state/bin/dsh.mjs', 'web', '--port', '3080'])
   })
 
-  it('leaves an entry alone when the harness came from PATH', async () => {
+  it('pins an entry that named a bare dsh, so PATH stops deciding it', async () => {
     const panel = await withPanel()
     const { service } = await harness({
       panel,
@@ -795,8 +816,10 @@ describe('an entry that boots a clone directly', () => {
 
     await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }] })
 
-    expect(panel.servers[0]!.config.command).toBe('dsh')
-    expect(panel.servers[0]!.config.args).toEqual(['web'])
+    // `dsh` is whatever PATH answers next boot; the resolved image is what
+    // actually runs this harness, so the row is pinned to it.
+    expect(panel.servers[0]!.config.command).toBe(process.execPath)
+    expect(panel.servers[0]!.config.args).toEqual(['/opt/dsh-clone/lib/bin.js', 'web'])
   })
 })
 

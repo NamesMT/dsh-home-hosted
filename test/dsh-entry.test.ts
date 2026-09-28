@@ -11,6 +11,18 @@ import type { TempDir } from './helpers/temp.js'
 
 const argv = (...rest: string[]): string[] => ['/usr/bin/node', '/opt/dsh/lib/bin.js', ...rest]
 
+/** Run with a temporary PATH: a bare `dsh` command is only knowable that way. */
+async function withEnv<T>(env: Record<string, string>, body: () => Promise<T> | T): Promise<T> {
+  const previous = process.env.PATH
+  process.env.PATH = env.PATH
+  try {
+    return await body()
+  }
+  finally {
+    process.env.PATH = previous
+  }
+}
+
 let scratch: TempDir | null = null
 
 afterEach(() => {
@@ -211,6 +223,40 @@ describe('resolving the running dsh', () => {
     expect(resolved?.launcherPath).toBeNull()
     expect(resolved?.args).toEqual([shim])
   })
+
+  it('pins the running image, and keeps the pin when booted behind its launcher', async () => {
+    scratch = tempDir()
+    // The reporter's shape: the clone the plugin was installed on carries its
+    // own build, and a different dsh answers on PATH.
+    const clone = path.join(scratch.path, 'Desktop', 'MMO', 'deepseek-harness')
+    fs.mkdirSync(path.join(clone, 'lib'), { recursive: true })
+    writeJsonFile(path.join(clone, 'package.json'), { name: 'dsh', version: '0.0.0-local' })
+    const entry = path.join(clone, 'lib', 'bin.js')
+    fs.writeFileSync(entry, 'console.log("local-build dsh web")\n', 'utf8')
+
+    const bin = path.join(scratch.path, 'bin')
+    const globalDir = path.join(scratch.path, 'global')
+    const global = fakeInstalled(globalDir, '0.1.9')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'dsh'), `#!/bin/sh\n# cmd-shim-target=${global}\nexec node "${global}" "$@"\n`, 'utf8')
+    fs.chmodSync(path.join(bin, 'dsh'), 0o755)
+
+    const dshHome = path.join(scratch.path, 'home')
+    const state = path.join(dshHome, 'dsh-home-hosted')
+    const findOnPath = async () => path.join(bin, 'dsh')
+
+    const first = await resolveDshLaunch({ stateDir: state, dshHome, argv1: entry, findOnPath })
+    expect(first?.cliEntry).toBe(entry)
+    expect(readDshLauncherRecord(state)).toMatchObject({ entry, pinned: entry })
+
+    // Next boot: the entry runs the launcher, so argv[1] is no longer the
+    // build. The launcher already chose, and there is a different dsh under the
+    // harness home and on PATH — the pin must survive both.
+    const second = await resolveDshLaunch({ stateDir: state, dshHome, argv1: dshLauncherPath(state), findOnPath })
+    expect(second?.cliEntry).toBe(entry)
+    expect(second?.launcherPath).toBe(dshLauncherPath(state))
+    expect(readDshLauncherRecord(state)).toMatchObject({ entry, pinned: entry })
+  })
 })
 
 describe('profile detection', () => {
@@ -257,11 +303,52 @@ describe('repairing an entry that boots a clone directly', () => {
     })
   })
 
-  it('leaves a global dsh on PATH alone', () => {
+  it('re-points an entry that named a bare dsh, so PATH stops deciding it', async () => {
+    // A bare `dsh` on PATH answers with a different copy than the one this
+    // plugin pins: that is the row the panel would start the wrong dsh from.
+    scratch = tempDir()
+    const bin = path.join(scratch.path, 'bin')
+    const global = fakeInstalled(path.join(scratch.path, 'global'), '0.1.9')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'dsh'), `#!/bin/sh\n# cmd-shim-target=${global}\nexec node "${global}" "$@"\n`, 'utf8')
+    fs.chmodSync(path.join(bin, 'dsh'), 0o755)
+    const pathValue = [bin, process.env.PATH ?? ''].join(path.delimiter)
+
+    await withEnv({ PATH: pathValue }, async () => {
+      expect(launcherRepair(
+        { command: 'dsh', args: ['web', '--port', '3080', '--no-open'] },
+        launch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
+      )).toEqual({
+        command: process.execPath,
+        args: ['/state/bin/dsh.mjs', 'web', '--port', '3080', '--no-open'],
+      })
+    })
+  })
+
+  it('keeps an absolute app argument when repairing a bare command', () => {
+    // A bare command has no script argument, so the "drop the leading script"
+    // rule must not eat `--home <path>`.
     expect(launcherRepair(
-      { command: 'dsh', args: ['web', '--port', '3080'] },
+      { command: 'dsh', args: ['web', '--home', '/Users/destiny/.dsh'] },
       launch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
-    )).toBeNull()
+    )).toEqual({
+      command: process.execPath,
+      args: ['/state/bin/dsh.mjs', 'web', '--home', '/Users/destiny/.dsh'],
+    })
+  })
+
+  it('re-points an entry stopped at a package-manager shim', () => {
+    const { entry, shim } = fakeProjectInstall()
+    const resolved = launch('/state/bin/dsh.mjs', entry)
+    expect(launcherRepair({ command: shim, args: ['web'] }, resolved)).toEqual({
+      command: process.execPath,
+      args: ['/state/bin/dsh.mjs', 'web'],
+    })
+    // The same shim as the leading argument of an absolute command.
+    expect(launcherRepair({ command: process.execPath, args: [shim, 'web'] }, resolved)).toEqual({
+      command: process.execPath,
+      args: ['/state/bin/dsh.mjs', 'web'],
+    })
   })
 
   it('does not rewrite the entry when it already runs the launcher', () => {
@@ -276,11 +363,15 @@ describe('repairing an entry that boots a clone directly', () => {
       { command: process.execPath, args: ['/other/dsh/lib/bin.js', 'web'] },
       launch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
     )).toBeNull()
+    expect(launcherRepair(
+      { command: '/other/bin/dsh', args: ['web'] },
+      launch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
+    )).toBeNull()
   })
 
   it('only asks for a resolve when the shape can need one', () => {
-    expect(needsLauncherRepair({ command: 'dsh', args: ['web'] })).toBe(false)
-    expect(needsLauncherRepair({ command: 'dsh', args: ['lib/bin.js', 'web'] })).toBe(false)
+    expect(needsLauncherRepair({ command: 'dsh', args: ['web'] })).toBe(true)
+    expect(needsLauncherRepair({ command: 'dsh.cmd', args: ['web'] })).toBe(true)
     expect(needsLauncherRepair({ command: process.execPath, args: ['/opt/dsh/lib/bin.js', 'web'] })).toBe(true)
     expect(needsLauncherRepair({ command: '/opt/bin/dsh', args: ['web'] })).toBe(true)
     expect(needsLauncherRepair({})).toBe(false)

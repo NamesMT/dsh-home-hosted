@@ -37,6 +37,49 @@ node_modules (flat or pnpm), then PATH — and forwards its argv, so the entry
 survives plugin upgrades and profile reinstalls. The plugin preflights the
 launcher the way the unit invokes it and shows the version it answers.
 
+## The dsh entry boots the image the plugin was installed on
+
+The panel starts `dsh web` from a server row, so a boot entry never runs dsh
+itself. That row points at a second generated launcher (`bin/dsh.mjs`), and the
+launcher has to answer "which dsh" without the plugin running. A local build is
+the obvious case and the one that broke: a user ran a source checkout while
+sharing the global `~/.dsh`, and the panel started a *different* global dsh that
+shared the same data directory and crashed on the version mismatch. Choosing by
+highest version, with the recorded path only as a tie-breaker, is what allowed
+that: an unrelated install that reports a bigger number won.
+
+So the record (`bin/dsh-resolved.json`) carries `pinned` — the image this plugin
+was installed on — and the launcher checks it before any version sort. A pin is
+carried, never guessed: only a caller that *is* the running image adopts a new
+one (`repin`), so an upgrade that lands elsewhere is adopted but a copy found on
+PATH never displaces the pin. A build whose path is genuinely gone falls back to
+its recorded roots, then to real dsh installs, then to a bare build file, and
+only then to PATH.
+
+Candidates are ordered by how they were found, not just by version: a dsh by
+construction (a manifest, `node_modules/dsh`, a pnpm store) beats a root that
+merely offers `lib/bin.js` (a clone), which beats a `dsh` on PATH. A clone has
+no manifest, so it is found by that build-file name — a guess that must never
+outrank a real install.
+
+The row's stored command is repaired to that launcher while the plugin runs
+(`launcherRepair`), including a row that names a bare `dsh`: PATH is exactly what
+pointed at the copy that stopped working. An entry that runs a different absolute
+dsh is somebody's deliberate choice and is never rewritten.
+
+## One panel root and one boot artifact per state root
+
+Two dsh installs share `~/.dsh` far more often than they should, and each one
+installing this plugin used to mean two plugins editing one `servers.config.json`
+and one autostart unit under one ownership marker — so the second install quietly
+replaced the first's boot entry. A panel root is now derived per instance: an
+explicit `$HHOSTED_HOME` still wins, and a panel already living at
+`~/.home-hosted` is adopted rather than abandoned (an upgrade must never make
+every server look like it vanished), but otherwise the root is the instance's own
+`<stateDir>/panel`. The boot unit name follows the state root (`home-hosted` for
+the default install, `home-hosted-<hash>` otherwise), so two instances cannot
+overwrite or delete each other's artifact.
+
 ## Agent tools are merged and on by default
 
 Six tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit`
@@ -104,7 +147,7 @@ channel).
 `onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and
 an older panel handed either key can refuse to *boot* from the config. The plugin
 used to consult the answering panel's version and refuse or drop them
-(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.6.6` and
+(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.6.7` and
 autostarts its own copy, so a panel older than those keys is only reachable by
 deliberately preferring an old global install — and this is pre-1.0. Supporting
 older panels again means bringing that check back from history, not re-deriving

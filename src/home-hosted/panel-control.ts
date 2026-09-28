@@ -14,9 +14,13 @@ import path from 'node:path'
 import process from 'node:process'
 import type { PanelControlResult } from '../shared/contracts.js'
 import { run } from '../util/exec.js'
+import type { RunResult } from '../util/exec.js'
 import { writeFileAtomic } from '../util/fsx.js'
 import type { CliLaunch } from './launch.js'
 import { launcherDir } from './launcher.js'
+
+/** How the panel's CLI is run: the resolved argv plus an environment. */
+export type PanelCliExec = (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
 
 export interface PanelControlDeps {
   /** The CLI to run, already resolved. */
@@ -27,6 +31,8 @@ export interface PanelControlDeps {
   /** Environment for the spawned CLI (absolute PATH, HOME, HHOSTED_HOME). */
   env: Record<string, string>
   timeoutMs?: number
+  /** Test seam: run the resolved CLI without spawning it. */
+  exec?: PanelCliExec
 }
 
 function cliArgs(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): string[] {
@@ -37,10 +43,13 @@ function cliArgs(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): st
 }
 
 async function runCli(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): Promise<{ code: number | null, stdout: string, stderr: string }> {
+  const args = cliArgs(deps, command)
+  if (deps.exec !== undefined)
+    return await deps.exec(args, deps.env)
   const launch = deps.launch
   if (launch === null)
     return { code: null, stdout: '', stderr: 'no home-hosted CLI is available' }
-  return await run(launch.program, cliArgs(deps, command), {
+  return await run(launch.program, args, {
     env: deps.env,
     timeoutMs: deps.timeoutMs ?? 90_000,
   })
@@ -55,6 +64,23 @@ export async function startPanel(deps: PanelControlDeps): Promise<PanelControlRe
   }
   const match = /https?:\/\/[^\s]+/.exec(result.stdout)
   return { ok: true, detail: 'the panel is answering', url: match?.[0] ?? null }
+}
+
+/**
+ * Stop the panel through its own CLI.
+ *
+ * The panel is the parent of every server it supervises, so this stops those
+ * too — including the dsh this plugin may be running in. That is the point of
+ * the button, not a hazard to hide: the caller's UI says so. An entry with
+ * `autostart` is started again on the next panel start; it is not restarted here.
+ */
+export async function stopPanel(deps: PanelControlDeps): Promise<PanelControlResult> {
+  const result = await runCli(deps, 'down')
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim() || `the CLI exited ${String(result.code)}`
+    return { ok: false, detail: `the panel did not stop: ${detail}` }
+  }
+  return { ok: true, detail: 'the panel stopped; the servers it supervised stopped with it' }
 }
 
 export function takeoverHelperPath(stateDir: string): string {

@@ -38,6 +38,7 @@ export type RpcEndpoint =
   | 'boot.uninstall'
   | 'boot.verify'
   | 'panel.start'
+  | 'panel.stop'
   | 'panel.takeover'
   | 'panel.reclaimToken'
   | 'cli.installGlobal'
@@ -123,6 +124,11 @@ export interface EndpointPayloads {
   'boot.verify': Record<string, never>
   /** Start the preferred CLI as a detached panel; refused while one already answers. */
   'panel.start': Record<string, never>
+  /**
+   * Stop the answering panel through its own CLI. The servers it supervises stop
+   * with it, which can include the dsh this plugin is running in.
+   */
+  'panel.stop': Record<string, never>
   /** Stop the answering panel and start the preferred copy instead. */
   'panel.takeover': { force?: boolean }
   /**
@@ -480,6 +486,12 @@ export interface HomeHostedStatus {
   /** The entry id this plugin manages; the page must not assume "dsh". */
   defaultEntryId: string
   panel: PanelStatus
+  /** The panel root this plugin instance drives, so a second install is visible. */
+  panelRoot?: string
+  /** How that root was chosen; `legacy` means an existing `~/.home-hosted` panel was adopted. */
+  panelRootSource?: 'env' | 'legacy' | 'instance'
+  /** The OS boot artifact name this state root owns. */
+  bootUnitName?: string
   /** Every home-hosted panel found on this machine, the managed one first. */
   instances?: InstanceView[]
   boot: BootStatus

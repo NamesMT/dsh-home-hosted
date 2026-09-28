@@ -95,6 +95,8 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
   const [confirming, setConfirming] = useState(false)
   const [installOutput, setInstallOutput] = useState<string | null>(null)
   const [tokenNote, setTokenNote] = useState<string | null>(null)
+  const [confirmingStop, setConfirmingStop] = useState(false)
+  const [stopNote, setStopNote] = useState<string | null>(null)
 
   const tokenWarning = tokenWarningKey(panel)
 
@@ -122,6 +124,17 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
 
   const regenerate = async (): Promise<void> => {
     setTokenNote(reclaimNote(await run('panel.reclaimToken', () => rpc('panel.reclaimToken', {})), t))
+  }
+
+  const stopPanel = async (): Promise<void> => {
+    setConfirmingStop(false)
+    // If this harness is one of the panel's servers, the answer may never
+    // arrive; say what is happening before asking, not after.
+    setStopNote(t('panelStopping'))
+    const envelope = await run('panel.stop', () => rpc('panel.stop', {}))
+    setStopNote(envelope.ok
+      ? (envelope.value as { detail?: string } | null)?.detail || t('panelStopped')
+      : t('panelStopFailed', { message: envelope.error.message }))
   }
 
   return (
@@ -189,6 +202,16 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
         onChange={port => updateSettings(current => ({ ...current, panel: { ...current.panel, port } }))}
       />
 
+      {status.panelRoot === undefined
+        ? null
+        : (
+            <Spec label={t('panelRootLabel')}>
+              <Code>{status.panelRoot}</Code>
+              {status.bootUnitName === undefined ? null : ` · ${status.bootUnitName}`}
+            </Spec>
+          )}
+      {status.panelRootSource !== 'legacy' ? null : <Hint>{t('panelRootLegacy')}</Hint>}
+
       {instances.length <= 1
         ? null
         : (
@@ -221,6 +244,17 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
                 {t('panelStart')}
               </Button>
             )}
+        {panel.reachable
+          ? (
+              <Button
+                variant="danger"
+                disabled={busy !== null}
+                onClick={() => setConfirmingStop(true)}
+              >
+                {t('panelStop')}
+              </Button>
+            )
+          : null}
         {needsReplace && !confirming
           ? (
               <Button variant="primary" onClick={() => setConfirming(true)}>
@@ -229,6 +263,29 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
             )
           : null}
       </div>
+
+      {stopNote === null ? null : <Hint>{stopNote}</Hint>}
+
+      {confirmingStop
+        ? (
+            <div className="hh-note" role="alertdialog" aria-label={t('panelStopTitle')}>
+              <div className="hh-note-body">
+                <strong>{t('panelStopTitle')}</strong>
+                <p>{t('panelStopBody', { id: status.defaultEntryId ?? 'dsh' })}</p>
+                <div className="hh-note-actions">
+                  <Button onClick={() => setConfirmingStop(false)}>{t('confirmCancel')}</Button>
+                  <Button
+                    variant="danger"
+                    busy={busy === 'panel.stop'}
+                    onClick={() => { void stopPanel() }}
+                  >
+                    {t('confirmStop')}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )
+        : null}
 
       {needsReplace && confirming
         ? (

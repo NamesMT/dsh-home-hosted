@@ -17,7 +17,7 @@ import { registerAuthNotice } from './home-hosted/web-notice.js'
 import { SettingsStore } from './settings.js'
 import { registerAgentTools } from './tools.js'
 import { ensureDir } from './util/fsx.js'
-import { homeHostedHome, pluginStateDir } from './util/paths.js'
+import { pluginStateDir, resolveHomeHostedHome } from './util/paths.js'
 
 export const name = 'dsh-home-hosted'
 
@@ -36,9 +36,14 @@ export function apply(ctx: Context, config?: ConfigShape): void {
   const stateDir = pluginStateDir(resolved.stateDir)
   ensureDir(stateDir, 0o700)
 
+  // Per state root, not per machine: a second dsh install must not adopt, edit
+  // or autostart the first one's panel. The page reports which root this is.
+  const panel = resolveHomeHostedHome(stateDir)
+
   const settings = new SettingsStore(path.join(stateDir, 'settings.json'), resolved.defaultEntryId)
   const service = new HomeHostedService(ctx, {
-    home: homeHostedHome(),
+    home: panel.home,
+    panelHomeSource: panel.source,
     stateDir,
     homeHostedCommand: resolved.homeHostedCommand,
     defaultEntryId: resolved.defaultEntryId,
