@@ -37,6 +37,8 @@ service manager, or restart the harness you are running in to "check" something.
 
 ## Rules that matter
 
+- Keep `README.md` and `docs/**` maintained as part of the change, in the same commit: an undocumented
+  behavior change is unfinished, and a doc that contradicts the code is a bug.
 - The plugin owns exactly `autostart`, `onPortConflict`, `persistent` and `stop.killPortHolders`
   (`OWNED_ENTRY_KEYS`); a patch never carries anything else from a person's entry.
 - Snapshot before adopting. `{ id }` alone is the marker for an entry this plugin created, so an
