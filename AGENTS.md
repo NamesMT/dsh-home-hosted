@@ -58,6 +58,9 @@ service manager, or restart the harness you are running in to "check" something.
   lists per endpoint, least invasive first.
 - Boot entries point at a generated stable launcher, never at a pnpm path; the marker proves ownership
   and uninstall/disable refuses an artifact this plugin did not write.
+- The `dsh` row stays a bare `dsh` when the project declares dsh: home-hosted resolves a bare command
+  through the row's cwd and its project dir (`node_modules/.bin`) before PATH, so the launcher is only
+  for an image a bare name cannot reach.
 - A mechanism stays selectable without privilege: stage the file and return the exact commands rather
   than hiding the option.
 - The client bundle is CJS with only `react`, `react-dom`, `react/jsx-runtime` external — never import

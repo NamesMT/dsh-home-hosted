@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from '../src/home-hosted/dsh-entry.js'
+import { buildDshEntry, detectProfile, launcherRepair, localDshCommand, needsLauncherRepair, resolveDshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { DshFacts, DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import { dshLauncherPath, dshLauncherRecordPath, readDshLauncherRecord } from '../src/home-hosted/launcher.js'
 import { run } from '../src/util/exec.js'
@@ -366,6 +366,59 @@ describe('repairing an entry that boots a clone directly', () => {
     expect(launcherRepair(
       { command: '/other/bin/dsh', args: ['web'] },
       launch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
+    )).toBeNull()
+  })
+
+  it('uses the project\'s own dsh by name when it declares one', async () => {
+    // home-hosted resolves a bare command through <cwd>/node_modules/.bin first,
+    // so a project that depends on dsh gets its own copy with no path baked in.
+    scratch = tempDir()
+    const project = path.join(scratch.path, 'proj')
+    const entry = path.join(project, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    fs.mkdirSync(path.dirname(entry), { recursive: true })
+    fs.writeFileSync(entry, 'console.log("local dsh")\n', 'utf8')
+    const bin = path.join(project, 'node_modules', '.bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'dsh'), `#!/bin/sh\n# cmd-shim-target=${entry}\nexec node "${entry}" "$@"\n`, 'utf8')
+    fs.chmodSync(path.join(bin, 'dsh'), 0o755)
+
+    expect(localDshCommand(project, entry)).toBe('dsh')
+    expect(localDshCommand(project, '/other/dsh/lib/bin.js')).toBeNull()
+
+    const generated = buildDshEntry(facts({
+      projectDir: project,
+      launch: launch('/state/bin/dsh.mjs', entry),
+      launcherPath: '/state/bin/dsh.mjs',
+    }))
+    expect(generated.command).toBe('dsh')
+    expect(generated.args).toEqual(['web', '--port', '{port}', '--host', '127.0.0.1', '--no-open', '--trusted-host', 'localhost:{port}'])
+    expect(generated.cwd).toBe(project)
+  })
+
+  it('re-points a row that runs some other dsh at the project\'s own', () => {
+    scratch = tempDir()
+    const project = path.join(scratch.path, 'proj')
+    const entry = path.join(project, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    fs.mkdirSync(path.dirname(entry), { recursive: true })
+    fs.writeFileSync(entry, 'console.log("local dsh")\n', 'utf8')
+    const bin = path.join(project, 'node_modules', '.bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'dsh'), `#!/bin/sh\n# cmd-shim-target=${entry}\nexec node "${entry}" "$@"\n`, 'utf8')
+    fs.chmodSync(path.join(bin, 'dsh'), 0o755)
+
+    // A row this plugin created, stopped at a global shim: it becomes the
+    // project's own copy, and every app argument survives.
+    expect(launcherRepair(
+      { command: '/Users/destiny/.local/bin/dsh', args: ['web', '--port', '3080'] },
+      launch('/state/bin/dsh.mjs', entry),
+      { ownedCommand: true, projectDir: project },
+    )).toEqual({ command: 'dsh', args: ['web', '--port', '3080'], cwd: project })
+
+    // An adopted row is still the person's choice, and is left alone.
+    expect(launcherRepair(
+      { command: '/Users/destiny/.local/bin/dsh', args: ['web'] },
+      launch('/state/bin/dsh.mjs', entry),
+      { projectDir: project },
     )).toBeNull()
   })
 

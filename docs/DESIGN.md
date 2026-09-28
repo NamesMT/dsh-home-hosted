@@ -62,10 +62,27 @@ merely offers `lib/bin.js` (a clone), which beats a `dsh` on PATH. A clone has
 no manifest, so it is found by that build-file name — a guess that must never
 outrank a real install.
 
-The row's stored command is repaired to that launcher while the plugin runs
-(`launcherRepair`), including a row that names a bare `dsh`: PATH is exactly what
-pointed at the copy that stopped working. An entry that runs a different absolute
-dsh is somebody's deliberate choice and is never rewritten.
+The row's stored command is repaired while the plugin runs (`launcherRepair`),
+including a row that names a bare `dsh`: PATH is exactly what pointed at the copy
+that stopped working. A row this plugin created has its command replaced; an
+adopted row that deliberately runs a different absolute dsh is left alone.
+
+### A project that depends on dsh keeps it, by name
+
+The launcher is the fallback, not the common case. `home-hosted` resolves a bare
+command itself (`resolveCommand(command, cwd, projectDir)` in its process
+provider) by checking `node_modules/.bin/<command>` under the row's cwd and then
+its own project directory, and only then PATH. So a row whose project installed
+dsh as a dependency is written as a bare `dsh` with that project as its cwd: it
+runs the copy the project's own lockfile chose, through the shim its own package
+manager wrote, with nothing absolute to move when the project or the store does.
+
+That is also why this plugin never shells out to a package manager for it:
+`npx dsh` falls back to the registry and to a global when the local bin is
+missing, `pnpm dsh` needs pnpm on the boot PATH, and `nlx --local` would add a
+global tool to a boot path for a lookup the panel already performs. The launcher
+is still what a row gets when a bare name would *not* reach the pinned image —
+a clone run without its own `.bin`, or a global-only machine.
 
 ## One panel root and one boot artifact per state root
 

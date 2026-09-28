@@ -20,7 +20,7 @@ import type { RawConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
 import type { DshLaunch } from './home-hosted/dsh-entry.js'
 import { canonicalPath, discoverInstances } from './home-hosted/instances.js'
-import { defaultIntent, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
+import { defaultIntent, isCreatedEntry, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
 import { buildHomeHostedBootSpec, homeHostedEnv, LEGACY_BOOT_UNIT_NAME } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
 import { EXPECTED_RANGE, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
@@ -106,8 +106,10 @@ export interface HomeHostedServiceOptions {
   execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
   /** Test seam: supply the boot ladder instead of probing the real OS. */
   createLadder?: () => BootLadderLike
+  /** The project the managed `dsh` row belongs to; defaults to this process's cwd. */
+  projectDir?: string
   /** Test seam: resolve the running harness instead of reading this process. */
-  resolveDsh?: (options: { dshHome: string, stateDir: string }) => Promise<DshLaunch | null>
+  resolveDsh?: (options: { dshHome: string, stateDir: string, projectDir?: string | null }) => Promise<DshLaunch | null>
 }
 
 interface CachedClient {
@@ -127,6 +129,8 @@ export class HomeHostedService extends Service {
   private tokenDetail = ''
   /** When a missing managed entry was last put back, so a poll cannot become a write loop. */
   private entryRecoveryAt = 0
+  /** When a managed row was last re-pointed at the pinned dsh, for the same reason. */
+  private commandRepairAt = 0
   /** The last panel inventory, so a model-step assembly never reads the disk. */
   private instanceCache: { at: number, list: InstanceView[] } | null = null
   private readonly snapshotsFile: string
@@ -136,10 +140,15 @@ export class HomeHostedService extends Service {
     this.snapshotsFile = path.join(options.stateDir, 'snapshots.json')
   }
 
-  private async resolveDsh(dshHome: string): Promise<DshLaunch | null> {
+  private projectDir(): string {
+    return this.options.projectDir ?? process.cwd()
+  }
+
+  private async resolveDsh(dshHome: string, projectDir: string | null = this.projectDir()): Promise<DshLaunch | null> {
     return await (this.options.resolveDsh ?? (options => resolveDshLaunch(options)))({
       dshHome,
       stateDir: this.options.stateDir,
+      projectDir,
     })
   }
 
@@ -669,6 +678,7 @@ export class HomeHostedService extends Service {
       dshHome: harnessHome,
       launch: dsh,
       launcherPath: dsh?.launcherPath ?? null,
+      projectDir: this.projectDir(),
     })
     return { ...generated, ...patch }
   }
@@ -684,7 +694,10 @@ export class HomeHostedService extends Service {
       return null
     const harnessHome = process.env.DSH_HOME ?? dshHome()
     const dsh = await this.resolveDsh(harnessHome)
-    return launcherRepair(live, dsh)
+    // A row this plugin created carries `{ id }` as its snapshot; one it merely
+    // adopted keeps the person's own command unless that command is a bare name.
+    const owned = isCreatedEntry(this.snapshots()[live.id])
+    return launcherRepair(live, dsh, { ownedCommand: owned, projectDir: this.projectDir() })
   }
 
   private async writeOwned(intent: EntryIntent): Promise<void> {
@@ -1181,6 +1194,7 @@ export class HomeHostedService extends Service {
     // stays "managed" in settings with nothing to manage, which is the state the
     // page reports as a missing entry. Recreate it — the toggle is the intent.
     await this.ensureManagedEntry()
+    await this.repairManagedCommand()
     await this.repairBootEntry()
     await this.migrateBootEntryName()
   }
@@ -1235,6 +1249,39 @@ export class HomeHostedService extends Service {
     }
     catch {
       // an unwritable config is reported by the status the page reads
+    }
+  }
+
+  /**
+   * Re-point a managed `dsh` row that runs the wrong dsh.
+   *
+   * A row created before the launcher existed, or by an older release that took
+   * whatever PATH answered, keeps starting that copy — and no click would fix
+   * it, because the plugin only writes the row when the toggle is applied. So
+   * the drift is repaired where the entry's existence is already checked, under
+   * the same throttle, and only for a row this plugin owns.
+   */
+  private async repairManagedCommand(): Promise<void> {
+    const id = this.options.defaultEntryId
+    if (!this.options.settings.get().manageDsh || !this.options.settings.intentFor(id).autostart)
+      return
+    const now = Date.now()
+    // Its own throttle: the entry-recovery one is claimed by every status read,
+    // so sharing it would mean this repair never gets a turn.
+    if (now - this.commandRepairAt < ENTRY_RECOVERY_INTERVAL_MS)
+      return
+    const live = (await this.liveEntries()).get(id)?.config ?? null
+    if (live === null || this.snapshots()[id] === undefined || !needsLauncherRepair(live))
+      return
+    const repair = await this.dshCommandRepair(live)
+    if (repair === null)
+      return
+    this.commandRepairAt = now
+    try {
+      await this.writeOwned({ ...this.options.settings.intentFor(id), autostart: true })
+    }
+    catch {
+      // reported by the status the page reads
     }
   }
 
@@ -1308,7 +1355,9 @@ export class HomeHostedService extends Service {
       boot: await this.bootStatus(),
       // A deleted managed entry is put back here as well as at startup: whoever
       // deleted it is looking at the page that reports it missing.
-      entries: await this.ensureManagedEntry().then(async () => await this.entriesStatus()),
+      entries: await this.ensureManagedEntry()
+        .then(async () => await this.repairManagedCommand())
+        .then(async () => await this.entriesStatus()),
       servers,
       settings: this.options.settings.get(),
       cli,

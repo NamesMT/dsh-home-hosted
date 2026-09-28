@@ -58,6 +58,8 @@ export interface DshFacts {
   port: number | null
   profile: string | null
   dshHome: string
+  /** The project this row belongs to; defaults to this process's cwd. */
+  projectDir?: string | null
   launch: CliLaunch | null
   /**
    * The stable launcher a local/clone entry must boot through, when one exists.
@@ -80,6 +82,8 @@ export interface ResolveDshLaunchOptions {
   argv1?: string | null
   /** Test seam: locate a command on PATH. */
   findOnPath?: (command: string) => Promise<string | null>
+  /** The project whose own dsh dependency should win; defaults to this process's cwd. */
+  projectDir?: string | null
 }
 
 /** The nearest package.json's version, for ordering clone candidates. */
@@ -171,6 +175,49 @@ function readdirNames(dir: string): string[] {
 }
 
 /**
+ * The dsh a project declares as its own dependency.
+ *
+ * A project that depends on dsh has already decided which dsh belongs to it, and
+ * running the global one there is how a build shares a data directory with a
+ * version it was not made for. Resolution stays inside the project: the
+ * package-manager shim it wrote, then the package layouts every manager
+ * produces, then the pnpm store.
+ *
+ * Nothing here shells out to `npx`/`pnpm`: a boot entry must not need one of
+ * them on PATH, must never fall back to downloading from the registry, and
+ * `node_modules` is the contract npm, pnpm, yarn (node-modules linker) and bun
+ * all keep.
+ */
+export function projectDshEntry(dir: string, depth = 4): string | null {
+  let current = resolveDir(dir)
+  for (let hop = 0; hop <= depth; hop += 1) {
+    const shim = path.join(current, 'node_modules', '.bin', 'dsh')
+    const shimmed = resolveShimmedCli(shim, process.execPath)
+    if (shimmed?.cliEntry != null && isEntry(shimmed.cliEntry))
+      return shimmed.cliEntry
+    const found = dshCandidatesUnder(current)
+      .map(entry => ({ entry, version: versionOf(entry) }))
+      .sort((a, b) => compareVersions(b.version ?? '0.0.0', a.version ?? '0.0.0'))
+    if (found[0] !== undefined)
+      return found[0].entry
+    const parent = path.dirname(current)
+    if (parent === current)
+      break
+    current = parent
+  }
+  return null
+}
+
+function resolveDir(dir: string): string {
+  try {
+    return fs.realpathSync(dir)
+  }
+  catch {
+    return path.resolve(dir)
+  }
+}
+
+/**
  * Where the running harness's own CLI entry is.
  *
  * A local clone's build path is not stable enough to bake into a boot entry, so
@@ -182,6 +229,23 @@ export async function resolveDshLaunch(options: ResolveDshLaunchOptions = {}): P
   const argv1 = options.argv1 === undefined ? process.argv[1] : options.argv1
   const dshHome = options.dshHome ?? resolveDshHome()
   const stateDir = options.stateDir ?? pluginStateDir()
+
+  // A project that declares its own dsh keeps it: whoever started this process,
+  // the panel must run the dsh that project installed, not one from PATH.
+  const projectDir = options.projectDir === undefined ? process.cwd() : options.projectDir
+  const declared = projectDir === null || projectDir.trim().length === 0 ? null : projectDshEntry(projectDir)
+  if (declared !== null && realPath(declared) !== realPath(launcherFor(stateDir, declared))) {
+    const launcher = writeDshLauncher({
+      stateDir,
+      dshHome,
+      resolvedEntry: declared,
+      pinnedEntry: declared,
+      repin: true,
+      entryExtension: path.extname(declared),
+      searchRoots: [dshSearchRoot(declared), projectDir].filter((root): root is string => typeof root === 'string' && root.length > 0),
+    })
+    return { program: process.execPath, args: [declared], cliEntry: declared, shimPath: null, source: 'entry', launcherPath: launcher.path }
+  }
 
   const local = typeof argv1 === 'string' && argv1.length > 0 ? launchedEntry(argv1) : null
   // A process already booted through the launcher is not a clone to snapshot:
@@ -244,6 +308,11 @@ export async function resolveDshLaunch(options: ResolveDshLaunchOptions = {}): P
   return launch === null ? null : { ...launch, launcherPath: null }
 }
 
+/** The launcher a given entry would boot through, whatever its extension. */
+function launcherFor(stateDir: string, entry: string): string {
+  return dshLauncherPath(stateDir, path.extname(entry))
+}
+
 function buildCommand(launch: CliLaunch, launcherPath: string | null): { command: string, entryArgs: string[] } {
   if (launcherPath !== null && launcherPath.length > 0)
     return { command: process.execPath, entryArgs: [launcherPath] }
@@ -275,13 +344,37 @@ function entryScript(config: { command?: string, args?: string[] }): string | nu
  * An entry this process was booted through is also left alone: repairing it
  * would point it at itself, since that is already the launcher.
  */
-export function pinnedScriptFor(launch: DshLaunch | null): string | null {
+/**
+ * Whether a bare `dsh` in this project reaches the image we mean.
+ *
+ * home-hosted resolves a bare command through `<cwd>/node_modules/.bin` first
+ * and only then PATH, so a project that installed dsh as a dependency gets its
+ * own copy by name — no absolute path to bake in, and it follows the package
+ * manager the project actually uses.
+ */
+export function localDshCommand(projectDir: string | null | undefined, entry: string | null): string | null {
+  if (typeof projectDir !== 'string' || projectDir.trim().length === 0 || entry === null)
+    return null
+  const shim = resolveShimmedCli(path.join(projectDir, 'node_modules', '.bin', 'dsh'))?.cliEntry ?? null
+  if (shim === null)
+    return null
+  return realPath(shim) === realPath(entry) ? 'dsh' : null
+}
+
+/**
+ * The script a boot row should run: `dsh` when this project's own shim reaches
+ * the pinned image, else the stable launcher for it.
+ */
+export function pinnedScriptFor(launch: DshLaunch | null, projectDir?: string | null): string | null {
   if (launch === null)
     return null
+  const entry = launch.cliEntry ?? launch.args.find(arg => path.isAbsolute(arg)) ?? null
+  if (localDshCommand(projectDir, entry) === 'dsh')
+    return 'dsh'
   const launcher = launch.launcherPath
   if (launcher !== null && launcher.length > 0)
     return launcher
-  return launch.cliEntry ?? launch.args.find(arg => path.isAbsolute(arg)) ?? null
+  return entry
 }
 
 /** Whether a stored command is a bare name PATH decides, not a path we know. */
@@ -309,34 +402,48 @@ export function needsLauncherRepair(config: { command?: string, args?: string[] 
   return (config.args ?? []).some(arg => path.isAbsolute(arg))
 }
 
+export interface LauncherRepairOptions {
+  /**
+   * True for a row this plugin created: its command is the plugin's to set, so a
+   * stored script that is neither the pinned one nor a shim to it is replaced
+   * rather than respected as somebody's choice.
+   */
+  ownedCommand?: boolean
+}
+
 export function launcherRepair(
   config: { command?: string, args?: string[] },
   launch: DshLaunch | null,
-): { command: string, args: string[] } | null {
-  const pinned = pinnedScriptFor(launch)
+  options: LauncherRepairOptions & { projectDir?: string | null } = {},
+): { command: string, args: string[], cwd?: string } | null {
+  const pinned = pinnedScriptFor(launch, options.projectDir)
   if (pinned === null || launch === null)
     return null
+  // Two different questions: what the row should run (`targetBare`), and where
+  // the old command kept its script (only a non-bare command inlined one).
+  const targetBare = pinned === 'dsh'
+  const storedBare = isBareCommand(entryScript(config) ?? '')
   const stored = entryScript(config)
   if (stored === null || stored === pinned)
     return null
-  // A bare name is exactly the ambiguity this repair removes: PATH decides it,
-  // and PATH is what pointed at the copy that stopped working.
-  const bare = isBareCommand(stored)
-  if (!bare) {
-    // A shim is the same script reached another way; anything else has to be
-    // the script this plugin pins, or the entry is about a different dsh.
+  if (!storedBare && options.ownedCommand !== true) {
+    // An entry this plugin did not create may be somebody's deliberate choice of
+    // dsh, so only the script this pattern pins or a shim to it qualifies.
     const target = resolveShimmedCli(stored, process.execPath)?.cliEntry ?? stored
-    if (target !== pinned && target !== launch.cliEntry)
+    if (target !== launch.cliEntry && target !== pinned)
       return null
   }
-  // A bare command carries no script argument at all, so nothing is dropped:
-  // an absolute app argument (`--home /Users/x/.dsh`) has to survive.
+  // A bare stored command carries no script argument, so nothing is dropped: an
+  // absolute app argument (`--home /Users/x/.dsh`) has to survive. Any other
+  // shape loses its inlined script, wherever in the argv it sits.
   const args = config.args ?? []
-  const inline = bare ? -1 : args.findIndex(arg => path.isAbsolute(arg))
-  // The launcher takes the script's place, so an absolute leading script has to
-  // go; every app argument has to stay.
-  const rest = inline === -1 ? args : args.filter((_, index) => index !== inline)
-  return { command: process.execPath, args: [pinned, ...rest] }
+  const script = storedBare ? -1 : args.findIndex(arg => path.isAbsolute(arg) || arg === pinned)
+  const rest = script === -1 ? args : args.filter((_, index) => index !== script)
+  // A bare command is only local-first with the right cwd, so the row carries
+  // the project it was resolved from.
+  return targetBare
+    ? { command: 'dsh', args: rest, ...(typeof options.projectDir === 'string' && options.projectDir.length > 0 ? { cwd: options.projectDir } : {}) }
+    : { command: process.execPath, args: [pinned, ...rest] }
 }
 
 export function buildDshEntry(facts: DshFacts): ServerEntry {
@@ -354,7 +461,12 @@ export function buildDshEntry(facts: DshFacts): ServerEntry {
   }
 
   const launcherArgs = profile === 'web' ? ['web'] : ['--profile', profile]
-  const generated = launch === null
+  // A project that declares dsh gets its own copy by name: home-hosted resolves
+  // a bare command through the row's cwd and its own project dir before PATH, so
+  // there is no absolute path to bake in and nothing to move when the project does.
+  const projectDir = facts.projectDir === undefined || facts.projectDir === null ? process.cwd() : facts.projectDir
+  const local = launch === null ? null : localDshCommand(projectDir, launch.cliEntry)
+  const generated = launch === null || local === 'dsh'
     ? { command: 'dsh', entryArgs: [] as string[] }
     : buildCommand(launch, facts.launcherPath ?? null)
 
@@ -367,7 +479,7 @@ export function buildDshEntry(facts: DshFacts): ServerEntry {
     args: [...generated.entryArgs, ...launcherArgs, ...appArgs],
     bind: 'local',
     port: facts.port,
-    cwd: process.cwd(),
+    cwd: projectDir,
     env: {},
     dataEnvs: { DSH_HOME: facts.dshHome },
     onPortConflict: 'kill',

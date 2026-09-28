@@ -74,6 +74,8 @@ async function harness(options: {
   otherPanels?: string[]
   /** Replaces the boot ladder, for tests about what was written or retired. */
   ladder?: BootLadderLike
+  /** The project the managed row belongs to; defaults to this process's cwd. */
+  projectDir?: string
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -110,6 +112,7 @@ async function harness(options: {
     settings,
     createLadder: () => options.ladder ?? ladder,
     resolveDsh: options.resolveDsh,
+    projectDir: options.projectDir,
     execCli: options.execCli ?? (async (args, env): Promise<RunResult> => {
       cliCalls.push({ args, env })
       if (env.HHOSTED_TOKEN === undefined)
@@ -889,6 +892,47 @@ describe('an entry that boots a clone directly', () => {
 
     expect(panel.servers[0]!.config.command).toBe(process.execPath)
     expect(panel.servers[0]!.config.args).toEqual(['/state/bin/dsh.mjs', 'web', '--port', '3080'])
+  })
+
+  it('re-points a managed row that runs a global dsh at the project own copy', async () => {
+    // The reported shape: cwd is the project, and the row still runs the global
+    // shim. The project declares its own dsh, so that is what the row must run.
+    const projectDir = tempDir()
+    const project = path.join(projectDir.path, 'proj')
+    const entry = path.join(project, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    fs.mkdirSync(path.dirname(entry), { recursive: true })
+    fs.writeFileSync(entry, 'console.log("local dsh")\n', 'utf8')
+    const bin = path.join(project, 'node_modules', '.bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(bin, 'dsh'), `#!/bin/sh\n# cmd-shim-target=${entry}\nexec node "${entry}" "$@"\n`, 'utf8')
+    fs.chmodSync(path.join(bin, 'dsh'), 0o755)
+
+    const panel = await withPanel()
+    const { home, state, service, settings } = await harness({
+      panel,
+      projectDir: project,
+      resolveDsh: async () => cloneLaunch('/state/bin/dsh.mjs', entry),
+    })
+    panel.servers.push({
+      id: 'dsh',
+      config: { id: 'dsh', command: '/Users/destiny/.local/bin/dsh', args: ['web', '--port', '3080'], autostart: true, onPortConflict: 'follow', stop: { killPortHolders: true } },
+    })
+    settings.update({
+      manageDsh: true,
+      entries: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true, persistent: true }],
+    })
+    // `{ id }` alone is the marker for a row this plugin created, whose command
+    // is therefore the plugin's to set.
+    writeJsonFile(path.join(state, 'snapshots.json'), { dsh: { id: 'dsh' } })
+    expect(home).toBeTruthy()
+
+    // The page's own status read heals it, so no click is needed.
+    await service.status()
+
+    const live = panel.servers[0]!.config
+    expect(live.command).toBe('dsh')
+    expect(live.args).toEqual(['web', '--port', '3080'])
+    projectDir.cleanup()
   })
 
   it('pins an entry that named a bare dsh, so PATH stops deciding it', async () => {

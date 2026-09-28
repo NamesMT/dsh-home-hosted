@@ -62,6 +62,18 @@ export function ownedDrift(live: ServerEntry | null, intent: EntryIntent): strin
  * adopted entry with nothing explicit has to be distinguishable from it — or
  * "stop managing" deletes a server the person wrote.
  */
+/**
+ * Whether a snapshot marks an entry this plugin created rather than adopted.
+ *
+ * `{ id }` alone is that marker: a created entry carried nothing else when the
+ * plugin first saw it, so its command is the plugin's to set.
+ */
+export function isCreatedEntry(snapshot: ServerEntry | undefined): boolean {
+  if (snapshot === undefined)
+    return false
+  return Object.keys(snapshot).length === 1 && typeof snapshot.id === 'string'
+}
+
 export function snapshotOwned(live: ServerEntry): ServerEntry {
   const killPortHolders = (live.stop as Record<string, unknown> | undefined)?.killPortHolders
   return {
