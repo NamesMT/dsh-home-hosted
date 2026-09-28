@@ -51,6 +51,11 @@ export function resolveHomeHostedHome(
   if (configured)
     return { home: resolveUnder(configured, homeDir), source: 'env' }
   const state = resolveUnder(stateDir, homeDir)
+  const own = path.join(state, 'panel')
+  // Once this instance has a root of its own, it stays there: a root it has
+  // already used is never traded for the machine-wide one.
+  if (fs.existsSync(own))
+    return { home: own, source: 'instance' }
   // The machine-wide panel is only this instance's to adopt when this instance
   // is the machine's own harness home, or when it has run before (its settings
   // are there). A home created fresh — a scratch `DSH_HOME`, a test project —
@@ -58,7 +63,7 @@ export function resolveHomeHostedHome(
   const legacy = path.join(homeDir, '.home-hosted')
   if (isEstablishedInstance(state, homeDir) && hasLivePanel(legacy))
     return { home: legacy, source: 'legacy' }
-  return { home: path.join(state, 'panel'), source: 'instance' }
+  return { home: own, source: 'instance' }
 }
 
 /** Whether this state dir is the machine's own install, or one that has run before. */

@@ -53,8 +53,13 @@ describe('which panel root one plugin instance drives', () => {
     // panel — reaching over would edit a config this instance was never given.
     expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: path.join(state, 'panel'), source: 'instance' })
 
-    // The same home once it has run the plugin: then the panel is its own.
+    // A home that already uses its own root never trades it for the machine one.
+    fs.mkdirSync(path.join(state, 'panel'), { recursive: true })
     writeJsonFile(path.join(state, 'settings.json'), { version: 1 })
+    expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: path.join(state, 'panel'), source: 'instance' })
+
+    // Only a home with no root of its own, that has run before, adopts it.
+    fs.rmSync(path.join(state, 'panel'), { recursive: true, force: true })
     expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: legacy, source: 'legacy' })
 
     // An install whose state dir is the machine default adopts it either way.
