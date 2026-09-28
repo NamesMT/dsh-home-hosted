@@ -24,11 +24,6 @@ export const EXPECTED_RANGE = '^0.6.6'
 /** Oldest release whose API and config schema this plugin relies on. */
 export const MIN_SUPPORTED_VERSION = '0.4.1'
 
-/** Oldest release whose config schema accepts `onPortConflict: kill`. */
-export const MIN_KILL_VERSION = '0.6.0'
-/** `persistent` (the nanny that keeps an entry alive across panel restarts). */
-export const MIN_PERSISTENT_VERSION = '0.6.3'
-
 export type CliPreference = 'pinned' | 'global'
 
 export interface CliResolution {

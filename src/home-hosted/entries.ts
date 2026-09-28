@@ -26,29 +26,19 @@ export function defaultIntent(id: string, platform: NodeJS.Platform = process.pl
   }
 }
 
-/**
- * The owned keys as a patch, preserving any sibling keys inside `stop`.
- *
- * `persistent` is omitted unless the panel that would parse the write knows the
- * key: an older schema drops it and warns, so writing one is noise at best.
- */
-export function ownedPatch(intent: EntryIntent, live?: ServerEntry | null, options: { persistent?: boolean } = {}): ServerEntryPatch {
+/** The owned keys as a patch, preserving any sibling keys inside `stop`. */
+export function ownedPatch(intent: EntryIntent, live?: ServerEntry | null): ServerEntryPatch {
   const stop = (live?.stop ?? {}) as Record<string, unknown>
   return {
     autostart: intent.autostart,
     onPortConflict: intent.onPortConflict,
-    ...(options.persistent === false ? {} : { persistent: intent.persistent }),
+    persistent: intent.persistent,
     stop: { ...stop, killPortHolders: intent.stopKillPortHolders },
   }
 }
 
-/**
- * Owned keys whose live value differs from the intent.
- *
- * The intent keeps what the person asked for; a key the panel cannot parse is
- * not drift, or every entry would report one on an older panel.
- */
-export function ownedDrift(live: ServerEntry | null, intent: EntryIntent, options: { persistent?: boolean } = {}): string[] {
+/** Owned keys whose live value differs from the intent. */
+export function ownedDrift(live: ServerEntry | null, intent: EntryIntent): string[] {
   if (live === null)
     return ['missing entry']
   const drift: string[] = []
@@ -56,7 +46,7 @@ export function ownedDrift(live: ServerEntry | null, intent: EntryIntent, option
     drift.push('autostart')
   if (live.onPortConflict !== intent.onPortConflict)
     drift.push('onPortConflict')
-  if (options.persistent !== false && (live.persistent ?? false) !== intent.persistent)
+  if ((live.persistent ?? false) !== intent.persistent)
     drift.push('persistent')
   const killPortHolders = (live.stop as Record<string, unknown> | undefined)?.killPortHolders
   if (killPortHolders !== intent.stopKillPortHolders)

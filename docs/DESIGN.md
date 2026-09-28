@@ -45,6 +45,14 @@ carries create/update/delete, `autostart_manage` carries install/uninstall, and
 They are registered on by default; what gates a mutating call is the session's
 own permission mode, not a plugin-level default.
 
+Structured tool parameters are declared as objects, never as `type: 'json'`: an
+author-only `json` node projects to a schema with no `type` at all, and a real
+session then delivers something the handler cannot read — `create`/`update` were
+unusable because of it, while every test passed, since tests call the handler
+directly. A declared object is validated by the runtime before the handler, so a
+wrong shape is rejected with the parameter named and an absent one is reported as
+absent.
+
 ## The dsh entry is the only entry the page manages
 
 The page shows one toggle: manage `dsh` as a home-hosted entry, or not. Adding
@@ -79,10 +87,7 @@ is passed through untouched rather than fought over. `authNotice` turns it off;
 
 A managed entry asks for `persistent: true`: home-hosted then runs it under its
 nanny, which owns the child and outlives `stopAll()`/`dispose()` — so restarting
-or stopping the *panel* no longer ends a prompt mid-flight. The key arrived in
-home-hosted 0.6.3, so the write and the drift check both consult the panel's
-version: an older panel gets no such key (it would only be dropped and warned),
-while the stored intent keeps what the person asked for.
+or stopping the *panel* no longer ends a prompt mid-flight.
 
 ## Approvals follow the session's sandbox
 
@@ -94,15 +99,84 @@ about. Below full access the tool still asks and still fails closed, and the
 refusal names the mode and the remedy (Full access, or an answerable approval
 channel).
 
-## Config compatibility
+## Config compatibility was dropped, deliberately
 
-`onPortConflict: kill` did not exist before home-hosted 0.6.0, and an older panel
-that is handed it refuses to *boot* (its config schema rejects the value) — a
-plugin must never brick the panel it manages. So the policy is checked before any
-write against the version whose schema will parse it: the answering panel, or the
-CLI that will parse it next. Below 0.6.0 the write is refused with
-`KILL_UNSUPPORTED` and the page offers the fix it already has — replace the panel
-with the preferred copy, or choose another policy.
+`onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and
+an older panel handed either key can refuse to *boot* from the config. The plugin
+used to consult the answering panel's version and refuse or drop them
+(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.6.6` and
+autostarts its own copy, so a panel older than those keys is only reachable by
+deliberately preferring an old global install — and this is pre-1.0. Supporting
+older panels again means bringing that check back from history, not re-deriving
+it.
+
+## Several panels on one machine
+
+`home-hosted` is not one panel per machine: it can be installed per project, and
+one install can run several panels from different `--home` roots. This plugin
+drives exactly one of them — the state root it resolved — so a person with two
+panels used to be indistinguishable from a person with one.
+
+Discovery is bounded, never a scan of the disk: the managed root (always listed,
+even before its first start), `$HHOSTED_HOME`, the operator's `instanceRoots`,
+and the `~/.home-hosted*` siblings. Another root counts only when it holds a
+`servers.config.json` or a `run.json`. The inventory is cached
+(`INSTANCES_CACHE_MS`); the prompt path re-measures a stale cache in place
+(`instancesNow()`), because a provider that only read a snapshot would never
+notice a panel started while this dsh was already running.
+
+The agent is told rather than left to guess: with more than one panel found, the
+`instancesNotice` setting contributes one runtime-context line naming the managed
+panel and the others (`ctx.systemPrompt.context`, `instances-notice.ts`). Every
+tool also takes an optional `instance` (a state root or URL); a mutating call
+that names none asks the user which panel it means, through `ctx.userQuestions`,
+after the approval gate so a call the session may not make prompts for nothing.
+The question is asked only when a human channel can answer — no answerer, or a
+delegated child — and an unexpected ask failure is refused rather than treated as
+consent, because changing a panel the user never confirmed is the outcome this
+exists to prevent. Its wording is English like every other host-side message: the
+locale service is a browser-side seat, and first-party host plugins ask in English
+too.
+
+The page shows the same inventory under the panel details, including which panel
+hosts this dsh, and the Agent-tools section carries the `instancesNotice` toggle.
+
+A call that names another panel is no dead end. The plugin asks the user how to
+reach it, offering every way that endpoint has, least invasive first:
+
+- `file` edits that panel's `servers.config.json` — no credential, but no live
+  status either, and a running panel applies a changed definition at that
+  entry's next start;
+- `cli` runs the home-hosted CLI against its state root — the only runtime path
+  the panel itself offers (`start`/`stop`; a restart is a stop then a start,
+  because the CLI has no server restart);
+- `api` mints a token for that panel, enrols it and uses its HTTP API — the only
+  way to get live status, and it replaces any token that panel had, which the
+  question says outright.
+
+The endpoint's first mechanism is the default when a caller names none, so a
+host that cannot reach a person still does the least invasive thing. A read is
+the one silent upgrade: with a token this plugin already holds for that panel it
+uses the API, because that carries live status and mints nothing. Every such
+result ends by naming the panel and the mechanism it used.
+
+A config edit reaches a running panel through its file watcher, so a newly added
+`autostart` entry is written disabled and then flipped — the same two-phase add
+the managed path uses.
+
+The credential for another panel lives beside the managed one, under its own slot
+(`panel-tokens/<slot>.token`, 0600), minted on first use of that mechanism and
+never shared with the managed panel's token.
+
+Machine-wide and self-referential endpoints are the exception: `home_hosted_status`
+describes the panel this plugin manages (its payload already lists the others),
+and the OS boot entry is one entry for that same panel. Those refuse a `home`
+rather than ignoring it, so a caller is never left believing it aimed a boot
+entry at a panel it did not.
+
+The settings stamp moved to 3 for `instancesNotice`, while the tool-name
+migration stays bound to the release that merged the tools: a stamp bump must
+never re-read a current file's explicit two-tool allowlist as "nobody chose".
 
 ## macOS: agent or daemon
 

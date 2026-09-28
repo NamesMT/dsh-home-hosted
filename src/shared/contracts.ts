@@ -52,22 +52,67 @@ export interface SettingsPatch {
   panel?: Partial<PluginSettings['panel']>
   authNotice?: boolean
   reclaimToken?: boolean
+  instancesNotice?: boolean
   uiStyle?: UiStyle
   agentTools?: Partial<PluginSettings['agentTools']>
   cli?: Partial<PluginSettings['cli']>
 }
 
+/**
+ * A state root to act on instead of the panel this plugin manages. Only a panel
+ * discovery reports is accepted, and only on the endpoints {@link FOREIGN_MECHANISMS}
+ * lists.
+ */
+export interface ForeignTarget {
+  /** A discovered panel's `--home`; omitted means the panel this plugin manages. */
+  home?: string
+  /**
+   * How to reach it; omitted means the endpoint's first mechanism. Only a value
+   * {@link FOREIGN_MECHANISMS} lists for that endpoint is accepted.
+   */
+  via?: ForeignMechanism
+}
+
+/**
+ * How this plugin can act on a panel it does not manage.
+ *
+ * `file` edits that panel's `servers.config.json`, `cli` runs the home-hosted
+ * CLI against its state root, and `api` enrols a token for it and drives its own
+ * HTTP API — the only way to reach some operations, and the only one that gives
+ * live status.
+ */
+export type ForeignMechanism = 'file' | 'cli' | 'api'
+
+/**
+ * Which ways each endpoint has to reach another panel, least invasive first (the
+ * first entry is the default when a caller names no mechanism). A config edit
+ * needs no credential, the CLI needs none either, and `api` mints one.
+ *
+ * Anything absent here is about this machine or about the managed panel itself
+ * and is never aimed elsewhere.
+ */
+export const FOREIGN_MECHANISMS: Partial<Record<RpcEndpoint, readonly ForeignMechanism[]>> = {
+  'servers.list': ['file', 'api'],
+  'servers.create': ['file', 'api'],
+  'servers.update': ['file', 'api'],
+  'servers.delete': ['file', 'api'],
+  'servers.start': ['cli', 'api'],
+  'servers.stop': ['cli', 'api'],
+  'servers.restart': ['cli', 'api'],
+  'ui.manage': ['cli'],
+}
+
 export interface EndpointPayloads {
-  /** `refresh` is accepted and ignored: every status call re-reads live state. */
+  /** `refresh` bypasses the short panel-inventory cache; status is live either way. */
   'status': { refresh?: boolean }
-  'servers.list': Record<string, never>
+  'servers.list': ForeignTarget
   'servers.get': { id: string }
-  'servers.create': { entry: ServerEntry }
-  'servers.update': { id: string, patch: ServerEntryPatch }
-  'servers.delete': { id: string }
-  'servers.start': { id: string }
-  'servers.stop': { id: string }
-  'servers.restart': { id: string }
+  'servers.create': ForeignTarget & { entry: ServerEntry }
+  'servers.update': ForeignTarget & { id: string, patch: ServerEntryPatch }
+  'servers.delete': ForeignTarget & { id: string }
+  'servers.start': ForeignTarget & { id: string }
+  'servers.stop': ForeignTarget & { id: string }
+  'servers.restart': ForeignTarget & { id: string }
   'servers.freePort': { id: string }
   'entries.apply': { intents: EntryIntent[] }
   /** Stop managing an entry: restore what it was, or remove it when we created it. */
@@ -88,7 +133,7 @@ export interface EndpointPayloads {
   /** Install the pinned range as a global CLI, so the `global` preference can use it. */
   'cli.installGlobal': Record<string, never>
   /** Drive the panel's own UI: status, update, revert, or switch to a local build. */
-  'ui.manage': { action: UiAction, file?: string }
+  'ui.manage': ForeignTarget & { action: UiAction, file?: string }
   'settings.update': { patch: SettingsPatch }
 }
 
@@ -246,6 +291,41 @@ export interface CliStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Panels on this machine
+// ---------------------------------------------------------------------------
+
+/**
+ * `home-hosted` is not one panel per machine: a person can install it per
+ * project, or run several panels from one install with different `--home`
+ * roots. The plugin drives exactly one of them — the root it resolved.
+ */
+export type InstanceSource = 'managed' | 'env' | 'sibling' | 'configured'
+
+/** One home-hosted panel: its state root, and the facts readable from it. */
+export interface InstanceView {
+  /** The state root itself: what `--home` / `$HHOSTED_HOME` names. */
+  home: string
+  /**
+   * The panel this plugin drives. Every tool call targets it unless the call
+   * names another panel, and the plugin never writes to another one.
+   */
+  managed: boolean
+  /** This dsh process runs as one of this panel's entries (`HHOSTED_SERVER_ID`). */
+  hosting: boolean
+  url: string | null
+  port: number | null
+  pid: number | null
+  version: string | null
+  /** A `run.json` whose pid is still alive. */
+  running: boolean
+  projectDir: string | null
+  /** Entries in that panel's `servers.config.json`; `null` when it is unreadable. */
+  servers: number | null
+  /** How discovery found this root. */
+  source: InstanceSource
+}
+
+// ---------------------------------------------------------------------------
 // Boot autostart
 // ---------------------------------------------------------------------------
 
@@ -324,7 +404,7 @@ export const MUTATING_AGENT_TOOLS: readonly AgentToolName[] = [
 ]
 
 /** The shape this release writes; a file without it was written by 0.1.x. */
-export const SETTINGS_VERSION = 2
+export const SETTINGS_VERSION = 3
 
 export type UiStyle = 'detailed' | 'compact'
 
@@ -356,6 +436,12 @@ export interface PluginSettings {
    * cleared it, or minted their own) should not keep an agent tool from working.
    */
   reclaimToken: boolean
+  /**
+   * Tell the agent how many home-hosted panels exist on this machine, and ask
+   * the user which one to act on when there is more than one. On by default: a
+   * plugin that owns one panel must not look like the only one there is.
+   */
+  instancesNotice: boolean
   /** `detailed` shows cards and open disclosures; `compact` folds both away. */
   uiStyle: UiStyle
   cli: {
@@ -385,6 +471,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   panel: { port: null },
   authNotice: true,
   reclaimToken: true,
+  instancesNotice: true,
   uiStyle: 'detailed',
   cli: { prefer: 'pinned' },
 }
@@ -393,6 +480,8 @@ export interface HomeHostedStatus {
   /** The entry id this plugin manages; the page must not assume "dsh". */
   defaultEntryId: string
   panel: PanelStatus
+  /** Every home-hosted panel found on this machine, the managed one first. */
+  instances?: InstanceView[]
   boot: BootStatus
   entries: ManagedEntryStatus[]
   servers: ServerEntryView[]

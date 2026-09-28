@@ -2,10 +2,10 @@ import { Context } from '@deepseek-ai/cordis'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import type { BootStatus, HomeHostedStatus } from '../src/shared/contracts.js'
-import { readConfig } from '../src/home-hosted/config-file.js'
-import { readStoredToken, storeToken } from '../src/home-hosted/token.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BootStatus, HomeHostedStatus, ServerEntryView } from '../src/shared/contracts.js'
+import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
+import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
@@ -70,6 +70,8 @@ async function harness(options: {
   execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
   /** Replaces the running-harness probe, so a clone can be expressed from a test. */
   resolveDsh?: (options: { dshHome: string, stateDir: string }) => Promise<DshLaunch | null>
+  /** Names of extra panels to create under the scratch dir and declare. */
+  otherPanels?: string[]
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -85,6 +87,12 @@ async function harness(options: {
   if (options.panel !== undefined)
     writeJsonFile(runtimeFile(home), { version: options.panelVersion ?? '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
 
+  const otherPanels = (options.otherPanels ?? []).map((name) => {
+    const dir = path.join(scratch!.path, name)
+    writeJsonFile(configFile(dir), { meta: { writtenBy: '0.6.6' }, servers: [{ id: 'web' }] })
+    return dir
+  })
+
   const cliCalls: Harness['cliCalls'] = []
   const settings = new SettingsStore(path.join(state, 'settings.json'), 'dsh')
   const service = new HomeHostedService(new Context(), {
@@ -92,6 +100,11 @@ async function harness(options: {
     stateDir: state,
     homeHostedCommand: fakeCli,
     defaultEntryId: 'dsh',
+    instanceRoots: otherPanels,
+    // Pinned: the machine's own `$HHOSTED_HOME` and home directory must not
+    // leak into a test.
+    envHome: null,
+    homeDir: scratch.path,
     settings,
     createLadder: () => ladder,
     resolveDsh: options.resolveDsh,
@@ -131,6 +144,166 @@ describe('home-hosted service', () => {
     expect(fs.existsSync(path.join(state, 'settings.json'))).toBe(false)
   })
 
+  it('reports every panel it knows about, the managed one first', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+
+    const status = await service.status()
+    expect(status.instances?.map(instance => [instance.home, instance.managed, instance.servers])).toEqual([
+      [home, true, 0],
+      [other, false, 1],
+    ])
+    expect(status.instances?.[0]?.source).toBe('managed')
+    expect(status.instances?.[1]?.source).toBe('configured')
+  })
+
+  it('re-measures a stale inventory, and reuses one that is still fresh', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+    // A declared root without state is not a panel yet; giving it one is what a
+    // first start looks like from here.
+    fs.rmSync(configFile(other))
+    expect((await service.instances()).map(instance => instance.home)).toEqual([home])
+
+    writeJsonFile(configFile(other), { meta: { writtenBy: '0.6.6' }, servers: [] })
+    // Inside the cache window nothing is re-read, so the prompt provider cannot
+    // turn a fresh measure into a per-step disk scan.
+    expect(service.instancesNow().map(instance => instance.home)).toEqual([home])
+
+    // Expired: the synchronous path a prompt provider takes re-measures in place,
+    // so a panel started while this dsh runs reaches the next model step.
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(Date.now() + 11_000)
+      expect(service.instancesNow().map(instance => instance.home)).toEqual([home, other])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('edits another panel through its config file, leaving this panel alone', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+
+    const created = await service.call('servers.create', {
+      entry: { id: 'notes', command: 'sleep', autostart: true },
+      home: other,
+    }) as { id: string, status: string }
+    expect(created).toMatchObject({ id: 'notes', status: 'unknown' })
+    // The two-phase add leaves the entry in place with the autostart it asked for.
+    expect(findEntry(readConfig(other).raw!, 'notes')).toMatchObject({ command: 'sleep', autostart: true })
+    // The panel this plugin manages was not touched.
+    expect(fs.existsSync(configFile(home))).toBe(false)
+
+    await service.call('servers.update', { id: 'notes', patch: { port: 6001 }, home: other })
+    expect(findEntry(readConfig(other).raw!, 'notes')).toMatchObject({ port: 6001 })
+
+    await service.call('servers.delete', { id: 'notes', home: other })
+    expect(findEntry(readConfig(other).raw!, 'notes')).toBeNull()
+  })
+
+  it('starts and stops another panel through its own CLI', async () => {
+    const { service, home, cliCalls } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+
+    const started = await service.call('servers.start', { id: 'web', home: other })
+    expect(started).toMatchObject({ id: 'web', action: 'start', via: 'cli', home: other })
+    expect(cliCalls[0]?.args).toEqual(['start', 'web', '--home', other])
+    expect(cliCalls[0]?.env.HHOSTED_HOME).toBe(other)
+
+    // The CLI has no server restart: it is a stop followed by a start.
+    await service.call('servers.restart', { id: 'web', home: other })
+    expect(cliCalls.slice(1).map(call => call.args)).toEqual([
+      ['stop', 'web', '--home', other],
+      ['start', 'web', '--home', other],
+    ])
+  })
+
+  it('rejects a panel it does not report, and refuses a target on an endpoint that has none', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    await expect(service.call('servers.delete', { id: 'x', home: '/nowhere' }))
+      .rejects.toMatchObject({ code: 'INSTANCE_UNKNOWN' })
+    await expect(service.call('boot.verify', { home: path.join(path.dirname(home), 'other-panel') } as never))
+      .rejects.toMatchObject({ code: 'INSTANCE_UNSUPPORTED' })
+  })
+
+  it('keeps a foreign entry found by its id, and refuses an impossible write', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+
+    // A patch never renames: the entry stays where it was found.
+    await service.call('servers.update', { id: 'web', patch: { id: 'renamed', port: 6002 }, home: other })
+    expect(findEntry(readConfig(other).raw!, 'web')).toMatchObject({ id: 'web', port: 6002 })
+    expect(findEntry(readConfig(other).raw!, 'renamed')).toBeNull()
+
+    await expect(service.call('servers.create', { entry: { id: 'web', command: 'sleep' }, home: other }))
+      .rejects.toMatchObject({ code: 'DUPLICATE_SERVER' })
+    await expect(service.call('servers.delete', { id: 'missing', home: other }))
+      .rejects.toMatchObject({ code: 'UNKNOWN_SERVER' })
+    await expect(service.call('servers.list', { home: '/tmp' }))
+      .rejects.toMatchObject({ code: 'INSTANCE_UNKNOWN' })
+    await expect(service.call('servers.list', { home: 42 } as never))
+      .rejects.toMatchObject({ code: 'INSTANCE_INVALID' })
+
+    // A config that is not there is refused, never created from a list call.
+    fs.rmSync(configFile(other))
+    await expect(service.call('servers.list', { home: other }))
+      .rejects.toMatchObject({ code: 'CONFIG_UNREADABLE' })
+    expect(fs.existsSync(configFile(other))).toBe(false)
+  })
+
+  it('mints a token and drives another panel through its own API', async () => {
+    const panel = await withPanel()
+    const { service, home, cliCalls } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+    // A running panel at that state root: its run.json names the listener.
+    writeJsonFile(runtimeFile(other), { version: '0.6.6', pid: process.pid, url: panel.url, port: 1234 })
+    panel.servers.push({ id: 'web', status: 'running', pid: 7, config: { id: 'web', command: 'sleep' } })
+
+    const listed = await service.call('servers.list', { home: other, via: 'api' }) as ServerEntryView[]
+    expect(listed.map(entry => [entry.id, entry.status])).toEqual([['web', 'running']])
+    // The token was enrolled through the CLI against that state root, and kept
+    // under its own slot, not the managed panel's.
+    expect(cliCalls[0]?.args).toEqual(['--home', other, 'set-token'])
+    expect(readStoredToken(path.join(path.dirname(home), 'state'), tokenSlot(other))).not.toBeNull()
+    expect(fs.existsSync(path.join(path.dirname(home), 'state', 'panel-token'))).toBe(false)
+  })
+
+  it('reads another panel through a token it already holds, minting nothing', async () => {
+    const panel = await startStubPanel({ token: 'foreign-stub-token' })
+    panels.push(panel)
+    const { service, home, cliCalls } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+    writeJsonFile(runtimeFile(other), { version: '0.6.6', pid: process.pid, url: panel.url, port: 1234 })
+    panel.servers.push({ id: 'web', status: 'running', pid: 7, config: { id: 'web', command: 'sleep' } })
+    storeToken(path.join(path.dirname(home), 'state'), 'foreign-stub-token', tokenSlot(other))
+
+    // No mechanism named: a read uses what it holds rather than minting one.
+    const listed = await service.call('servers.list', { home: other }) as ServerEntryView[]
+    expect(listed.map(entry => [entry.id, entry.status])).toEqual([['web', 'running']])
+    expect(cliCalls).toHaveLength(0)
+  })
+
+  it('refuses an API target with no running panel, and an unknown mechanism', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+    await expect(service.call('servers.list', { home: other, via: 'api' }))
+      .rejects.toMatchObject({ code: 'PANEL_UNAVAILABLE' })
+    await expect(service.call('servers.list', { home: other, via: 'telepathy' } as never))
+      .rejects.toMatchObject({ code: 'MECHANISM_UNSUPPORTED' })
+    // ui.manage has no API mechanism at all.
+    await expect(service.call('ui.manage', { action: 'status', home: other, via: 'api' } as never))
+      .rejects.toMatchObject({ code: 'MECHANISM_UNSUPPORTED' })
+  })
+
+  it('reads another panel from its config, with no live status', async () => {
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+    const listed = await service.call('servers.list', { home: other }) as ServerEntryView[]
+    expect(listed).toEqual([{ id: 'web', status: 'unknown', pid: null, url: null, config: { id: 'web' } }])
+  })
+
   it('enrols a token through the CLI and adopts an existing entry over the API', async () => {
     const panel = await withPanel()
     const { service, settings, cliCalls } = await harness({ panel })
@@ -145,8 +318,7 @@ describe('home-hosted service', () => {
     const status = await service.status()
     expect(status.panel.reachable).toBe(true)
     expect(status.panel.writeVia).toBe('api')
-    // This panel predates the persistence support, so that key is not tracked here.
-    expect(status.entries[0]?.drift).toEqual(['autostart', 'onPortConflict', 'stop.killPortHolders'])
+    expect(status.entries[0]?.drift).toEqual(['autostart', 'onPortConflict', 'persistent', 'stop.killPortHolders'])
 
     const entries = await service.call('entries.apply', {
       intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }],
@@ -421,63 +593,7 @@ describe('panel lifecycle from the page', () => {
   })
 })
 
-describe('config compatibility', () => {
-  it('refuses to write a kill policy the answering panel cannot parse', async () => {
-    const panel = await withPanel()
-    const { service } = await harness({ panel, panelVersion: '0.5.0' })
-    await expect(service.call('entries.apply', {
-      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }],
-    })).rejects.toMatchObject({ code: 'KILL_UNSUPPORTED' })
-    // Nothing was written to the panel.
-    expect(panel.servers).toHaveLength(0)
-  })
 
-  it('allows it once the panel is new enough', async () => {
-    const panel = await withPanel()
-    const { service } = await harness({ panel, panelVersion: '0.6.1' })
-    const entries = await service.call('entries.apply', {
-      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }],
-    }) as Array<{ intent: { id: string } }>
-    expect(entries[0]?.intent.id).toBe('dsh')
-    expect(panel.servers[0]?.config.onPortConflict).toBe('kill')
-  })
-
-  it('allows a policy that needs nothing from the panel', async () => {
-    const panel = await withPanel()
-    const { service } = await harness({ panel, panelVersion: '0.5.0' })
-    await service.call('entries.apply', {
-      intents: [{ id: 'dsh', autostart: true, onPortConflict: 'reclaim', stopKillPortHolders: false }],
-    })
-    expect(panel.servers[0]?.config.onPortConflict).toBe('reclaim')
-  })
-})
-
-describe('persistence needs the release that has it', () => {
-  it('keeps the key when the panel is new enough', async () => {
-    const panel = await withPanel()
-    const { service, settings } = await harness({ panel, panelVersion: '0.6.3' })
-    panel.servers.push({ id: 'other', status: 'stopped', pid: null, config: { id: 'other', command: 'sleep' } })
-
-    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true }] })
-
-    expect(settings.intentFor('other').persistent).toBe(true)
-    expect(panel.servers[0]?.config.persistent).toBe(true)
-  })
-
-  it('drops the key instead of writing one an older panel cannot parse', async () => {
-    const panel = await withPanel()
-    const { service, settings } = await harness({ panel, panelVersion: '0.6.1' })
-    panel.servers.push({ id: 'other', status: 'stopped', pid: null, config: { id: 'other', command: 'sleep' } })
-
-    await service.call('entries.apply', { intents: [{ id: 'other', autostart: true }] })
-
-    expect(settings.intentFor('other').persistent).toBe(true)
-    expect(panel.servers[0]?.config.persistent).toBeUndefined()
-    // Not writing the key is not drift, or every entry would report one here.
-    const reported = (await service.status()).entries.find(entry => entry.intent.id === 'other')
-    expect(reported?.drift).toEqual([])
-  })
-})
 
 describe('panel token verification', () => {
   it('measures a token the panel refuses as stale, and says how it was measured', async () => {

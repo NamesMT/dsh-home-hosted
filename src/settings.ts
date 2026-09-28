@@ -48,6 +48,14 @@ function isLegacyDefaultAllowlist(names: readonly string[]): boolean {
   return names.length === 2 && names.includes('status') && names.includes('servers_list')
 }
 
+/**
+ * The release that merged the split tools and introduced `manageDsh`. The
+ * migration bound is that release, never the current `SETTINGS_VERSION`: bumping
+ * the stamp for an unrelated field must not re-run a "nobody chose" reading over
+ * a file that already speaks the current shape.
+ */
+const PRE_MERGE_SETTINGS_VERSION = 2
+
 const BOOT_MECHANISMS: readonly string[] = ['auto', 'systemd-user', 'systemd-system', 'launchd-agent', 'launchd-daemon', 'xdg-autostart', 'windows-run', 'windows-task', 'container', 'unsupported']
 
 function isBootMechanism(value: unknown): value is PluginSettings['autostart']['mechanism'] {
@@ -62,7 +70,7 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
   // Only a file written before the version stamp needs translating: the release
   // that wrote it named tools this one merged, and dropping those names silently
   // would turn every tool off on upgrade.
-  const legacyFile = (typeof raw?.version === 'number' ? raw.version : 1) < SETTINGS_VERSION
+  const legacyFile = (typeof raw?.version === 'number' ? raw.version : 1) < PRE_MERGE_SETTINGS_VERSION
   const migrated = declared === null
     ? null
     : [...new Set(declared.map(name => (legacyFile ? LEGACY_TOOL_NAMES[name] ?? name : name)).filter(knownTool))] as AgentToolName[]
@@ -93,6 +101,8 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
     authNotice: raw?.authNotice === undefined ? DEFAULT_SETTINGS.authNotice : raw.authNotice === true,
     // Absent means on: a stale token is a fault to repair, not a setting to opt into.
     reclaimToken: raw?.reclaimToken === undefined ? DEFAULT_SETTINGS.reclaimToken : raw.reclaimToken === true,
+    // Absent means on: a plugin that owns one panel should say so by default.
+    instancesNotice: raw?.instancesNotice === undefined ? DEFAULT_SETTINGS.instancesNotice : raw.instancesNotice === true,
     uiStyle: raw?.uiStyle === 'compact' ? 'compact' : 'detailed',
     agentTools: {
       // Absent means the default (on), and so does the pair the previous
@@ -139,6 +149,7 @@ export class SettingsStore {
       panel: { ...this.current.panel, ...(patch.panel ?? {}) },
       authNotice: patch.authNotice ?? this.current.authNotice,
       reclaimToken: patch.reclaimToken ?? this.current.reclaimToken,
+      instancesNotice: patch.instancesNotice ?? this.current.instancesNotice,
       uiStyle: patch.uiStyle ?? this.current.uiStyle,
       agentTools: { ...this.current.agentTools, ...(patch.agentTools ?? {}) },
       cli: { ...this.current.cli, ...(patch.cli ?? {}) },

@@ -11,23 +11,25 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { BootMechanism, BootStatus, EntryIntent, HomeHostedStatus, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult } from './shared/contracts.js'
-import { isOnPortConflict, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import type { BootMechanism, BootStatus, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult } from './shared/contracts.js'
+import { FOREIGN_MECHANISMS, isOnPortConflict, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootSpec } from './boot/types.js'
 import { createBootLadder } from './boot/index.js'
 import { findEntry, patchControl, patchEntry, readConfig, removeEntry as removeConfigEntry, upsertEntry, writeConfig } from './home-hosted/config-file.js'
+import type { RawConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
 import type { DshLaunch } from './home-hosted/dsh-entry.js'
+import { canonicalPath, discoverInstances } from './home-hosted/instances.js'
 import { defaultIntent, ownedDrift, ownedPatch, restorePatch, snapshotOwned } from './home-hosted/entries.js'
 import { buildHomeHostedBootSpec, homeHostedEnv } from './home-hosted/launch.js'
 import type { CliResolution } from './home-hosted/resolve.js'
-import { compareVersions, EXPECTED_RANGE, MIN_KILL_VERSION, MIN_PERSISTENT_VERSION, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
+import { EXPECTED_RANGE, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
 import { installGlobal, spawnTakeover, startPanel as startPanelProcess } from './home-hosted/panel-control.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
-import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken } from './home-hosted/token.js'
+import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
 import { dshHome } from './util/paths.js'
 import type { RunResult } from './util/exec.js'
@@ -41,6 +43,9 @@ const TOKEN_PROBE_TIMEOUT_MS = 3000
 
 /** How often a deleted managed entry may be put back from the status read. */
 const ENTRY_RECOVERY_INTERVAL_MS = 30_000
+
+/** How long a panel inventory stands before the next read re-scans the disk. */
+const INSTANCES_CACHE_MS = 10_000
 
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
 function pluginRoot(): string | null {
@@ -78,11 +83,22 @@ export class HomeHostedError extends Error {
   }
 }
 
+/** An entry another panel's config holds: no live status without that panel's API. */
+function foreignView(entry: ServerEntry): ServerEntryView {
+  return { id: entry.id, status: 'unknown', pid: null, url: null, config: entry }
+}
+
 export interface HomeHostedServiceOptions {
   home: string
   stateDir: string
   homeHostedCommand?: string
   defaultEntryId: string
+  /** Other home-hosted state roots to report as panels; discovery finds the rest. */
+  instanceRoots?: readonly string[]
+  /** Test seam: this process's `$HHOSTED_HOME`; defaults to the environment. */
+  envHome?: string | null
+  /** Test seam: where `~/.home-hosted*` siblings are looked for; defaults to the user's home. */
+  homeDir?: string
   settings: SettingsStore
   /** Test seam: run the home-hosted CLI without spawning it. */
   execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
@@ -109,6 +125,8 @@ export class HomeHostedService extends Service {
   private tokenDetail = ''
   /** When a missing managed entry was last put back, so a poll cannot become a write loop. */
   private entryRecoveryAt = 0
+  /** The last panel inventory, so a model-step assembly never reads the disk. */
+  private instanceCache: { at: number, list: InstanceView[] } | null = null
   private readonly snapshotsFile: string
 
   constructor(ctx: Context, private readonly options: HomeHostedServiceOptions) {
@@ -121,6 +139,213 @@ export class HomeHostedService extends Service {
       dshHome,
       stateDir: this.options.stateDir,
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // Panels on this machine
+  // -------------------------------------------------------------------------
+
+  /**
+   * The panel inventory, cached for a short while: the page polls status and
+   * the prompt provider reads it at every assembly. `refresh` (or an expired
+   * cache) re-reads the disk.
+   */
+  async instances(refresh = false): Promise<InstanceView[]> {
+    if (refresh || this.instanceCache === null || Date.now() - this.instanceCache.at >= INSTANCES_CACHE_MS)
+      return this.measureInstances()
+    return this.instanceCache.list
+  }
+
+  /**
+   * The inventory for a caller that cannot await — a prompt provider runs
+   * synchronously before a model step. Discovery is synchronous too, so this
+   * re-measures a stale cache in place and never blocks the step.
+   */
+  instancesNow(): InstanceView[] {
+    if (this.instanceCache !== null && Date.now() - this.instanceCache.at < INSTANCES_CACHE_MS)
+      return this.instanceCache.list
+    return this.measureInstances()
+  }
+
+  private measureInstances(): InstanceView[] {
+    const now = Date.now()
+    try {
+      this.instanceCache = {
+        at: now,
+        list: discoverInstances({
+          managedHome: this.options.home,
+          extraRoots: this.options.instanceRoots,
+          envHome: this.options.envHome === undefined ? process.env.HHOSTED_HOME ?? null : this.options.envHome,
+          homeDir: this.options.homeDir,
+          hostingEntryId: this.selfEntryId(),
+        }),
+      }
+    }
+    catch {
+      // An unreadable machine is an empty inventory, never a failed model step.
+      this.instanceCache = { at: now, list: [] }
+    }
+    return this.instanceCache.list
+  }
+
+  /** The inventory as last measured, without touching the disk. */
+  instancesSnapshot(): InstanceView[] {
+    return this.instanceCache?.list ?? []
+  }
+
+  // -------------------------------------------------------------------------
+  // Acting on another panel
+  // -------------------------------------------------------------------------
+
+  /**
+   * The state root a call targets: the managed one unless it names another panel
+   * discovery reported. A caller-supplied path is never acted on directly, so a
+   * stray string cannot become a way to write anywhere on the disk.
+   */
+  private async targetHome(requested: unknown): Promise<{ home: string, foreign: boolean }> {
+    if (requested === undefined || requested === null || requested === '')
+      return { home: this.options.home, foreign: false }
+    if (typeof requested !== 'string')
+      throw new HomeHostedError('a panel target must be a state root path', 'INSTANCE_INVALID')
+    if (requested.trim().length === 0)
+      return { home: this.options.home, foreign: false }
+    const home = canonicalPath(requested)
+    if (home === canonicalPath(this.options.home))
+      return { home: this.options.home, foreign: false }
+    const instances = await this.instances()
+    if (!instances.some(instance => instance.home === home && !instance.managed))
+      throw new HomeHostedError(`"${requested}" is not a home-hosted panel this machine reports`, 'INSTANCE_UNKNOWN')
+    return { home, foreign: true }
+  }
+
+  /**
+   * How a call reaches another panel. `via` names it; without one the endpoint's
+   * least invasive mechanism is used, which is the order the shared list keeps.
+   */
+  private mechanismFor(endpoint: RpcEndpoint, requested: unknown): ForeignMechanism {
+    const allowed = FOREIGN_MECHANISMS[endpoint]
+    if (allowed === undefined)
+      throw new HomeHostedError(`"${endpoint}" cannot be aimed at another panel`, 'INSTANCE_UNSUPPORTED')
+    if (requested === undefined || requested === null)
+      return allowed[0] as ForeignMechanism
+    if (typeof requested === 'string' && (allowed as readonly string[]).includes(requested))
+      return requested as ForeignMechanism
+    throw new HomeHostedError(
+      `"${String(requested)}" is not a way to reach another panel for ${endpoint}; use one of ${allowed.join(', ')}`,
+      'MECHANISM_UNSUPPORTED',
+    )
+  }
+
+  /** Whether a token this plugin already holds for a panel still works. */
+  private async foreignTokenWorks(home: string): Promise<boolean> {
+    const runtime = readRuntime(home)
+    if (runtime === null || runtime.url.length === 0)
+      return false
+    const stored = readStoredToken(this.options.stateDir, tokenSlot(home))
+    return stored !== null && await verifyToken(runtime.url, stored)
+  }
+
+  /**
+   * A client for another panel: the plugin's own credential for that state root,
+   * minted and enrolled the first time it is needed, proved against the panel,
+   * and replaced when the panel no longer accepts it.
+   *
+   * home-hosted keeps only a hash, so an existing token this plugin does not hold
+   * can only be replaced — which is what choosing this mechanism means.
+   */
+  private async foreignClient(home: string): Promise<PanelClient> {
+    const runtime = readRuntime(home)
+    if (runtime === null || runtime.url.length === 0)
+      throw new HomeHostedError(`no panel is running at ${home}, so its API cannot be used`, 'PANEL_UNAVAILABLE')
+    const slot = tokenSlot(home)
+    const exec = async (args: string[], env: Record<string, string | undefined>) => await this.cliExec(args, env)
+    const stored = readStoredToken(this.options.stateDir, slot)
+    if (stored !== null && await verifyToken(runtime.url, stored))
+      return new PanelClient({ baseUrl: runtime.url, token: stored })
+
+    const enrolled = stored !== null || apiTokenEnrolled(home)
+      ? await reclaimToken({ home, stateDir: this.options.stateDir, exec, slot })
+      : await ensureToken({ home, stateDir: this.options.stateDir, exec, slot })
+    if (enrolled.token === null)
+      throw new HomeHostedError(enrolled.detail, 'TOKEN_UNAVAILABLE')
+    return new PanelClient({ baseUrl: runtime.url, token: enrolled.token })
+  }
+
+  /** Another panel's own config, refusing anything that is not a readable one. */
+  private readForeignConfig(home: string): RawConfig {
+    const read = readConfig(home)
+    if (read.error !== null || read.raw === null)
+      throw new HomeHostedError(read.error ?? `no servers config in ${home}`, 'CONFIG_UNREADABLE')
+    return read.raw
+  }
+
+  /** Another panel's entries as its config holds them: live status needs its API token. */
+  private listForeign(home: string): ServerEntryView[] {
+    return (this.readForeignConfig(home).servers ?? []).map(entry => foreignView(entry))
+  }
+
+  private createForeign(home: string, entry: ServerEntry): ServerEntryView {
+    const raw = this.readForeignConfig(home)
+    if (findEntry(raw, entry.id) !== null)
+      throw new HomeHostedError(`"${entry.id}" already exists in ${home}/servers.config.json`, 'DUPLICATE_SERVER')
+    // The same two-phase add the managed path uses: that panel's watcher starts a
+    // newly added `autostart` entry at once, while a changed definition is only
+    // applied at that entry's next start.
+    writeConfig(home, upsertEntry(raw, { ...entry, autostart: false }), this.writtenBy(home))
+    const added = this.readForeignConfig(home)
+    writeConfig(home, patchEntry(added, entry.id, { autostart: entry.autostart === true }), this.writtenBy(home))
+    return this.writtenForeignEntry(home, entry.id)
+  }
+
+  private updateForeign(home: string, id: string, patch: ServerEntryPatch): ServerEntryView {
+    const raw = this.readForeignConfig(home)
+    if (findEntry(raw, id) === null)
+      throw new HomeHostedError(`no server "${id}" exists in ${home}/servers.config.json`, 'UNKNOWN_SERVER')
+    // A patch never renames: the id is the key it was found by.
+    const next = patchEntry(raw, id, { ...patch, id })
+    writeConfig(home, next, this.writtenBy(home))
+    return this.writtenForeignEntry(home, id)
+  }
+
+  /** What a write actually left on disk, never what it was asked to write. */
+  private writtenForeignEntry(home: string, id: string): ServerEntryView {
+    const entry = findEntry(this.readForeignConfig(home), id)
+    if (entry === null)
+      throw new HomeHostedError(`the write to ${home}/servers.config.json did not take`, 'FOREIGN_WRITE_LOST')
+    return foreignView(entry)
+  }
+
+  private deleteForeign(home: string, id: string): { id: string, home: string, via: 'file' } {
+    const raw = this.readForeignConfig(home)
+    if (findEntry(raw, id) === null)
+      throw new HomeHostedError(`no server "${id}" exists in ${home}/servers.config.json`, 'UNKNOWN_SERVER')
+    writeConfig(home, removeConfigEntry(raw, id), this.writtenBy(home))
+    return { id, home, via: 'file' }
+  }
+
+  /**
+   * Start, stop or restart one entry through that panel's own CLI: this plugin
+   * holds no API token for a panel it does not manage, and a config edit cannot
+   * start anything. The CLI has no server restart, so a restart is a stop
+   * followed by a start — a stop that is not followed by one is reported.
+   */
+  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string): Promise<{ home: string, id: string, action: string, via: 'cli' }> {
+    const once = async (command: string): Promise<void> => {
+      const result = await this.cliExec([command, id, '--home', home], { ...process.env, HHOSTED_HOME: home })
+      if (result.code !== 0) {
+        const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
+        throw new HomeHostedError(output.length > 0 ? output : `home-hosted ${command} ${id} exited ${String(result.code)}`, 'CLI_FAILED')
+      }
+    }
+
+    if (action === 'restart') {
+      await once('stop')
+      await once('start')
+    }
+    else {
+      await once(action)
+    }
+    return { home, id, action, via: 'cli' }
   }
 
   // -------------------------------------------------------------------------
@@ -138,8 +363,8 @@ export class HomeHostedService extends Service {
   }
 
   /** What the config's `meta.writtenBy` names: the panel release when we can read it. */
-  private writtenBy(): string {
-    return this.runtime()?.version ?? 'dsh-home-hosted'
+  private writtenBy(home = this.options.home): string {
+    return readRuntime(home)?.version ?? 'dsh-home-hosted'
   }
 
   private webServer(): { port: number | null } {
@@ -467,7 +692,7 @@ export class HomeHostedService extends Service {
       this.saveSnapshots(snapshots)
     }
 
-    const patch = ownedPatch(intent, live?.config ?? null, { persistent: await this.supportsPersistent() })
+    const patch = ownedPatch(intent, live?.config ?? null)
     const repair = intent.id === this.options.defaultEntryId ? await this.dshCommandRepair(live?.config ?? null) : null
     const client = await this.tryClient()
     if (client !== null) {
@@ -518,40 +743,6 @@ export class HomeHostedService extends Service {
     return runtime !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url))
   }
 
-  /**
-   * The version whose schema will parse what we write: the answering panel, or
-   * the CLI that will parse it next. `kill` did not exist before 0.6.0, and an
-   * older panel refuses to *boot* with it — so this is checked before any write.
-   */
-  private async configVersion(): Promise<string | null> {
-    const runtime = this.runtime()
-    if (runtime !== null && runtime.version !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url)))
-      return runtime.version
-    const { resolution } = await this.cli()
-    return resolution.status.version
-  }
-
-  /** Whether the panel whose schema parses our write knows `persistent`. */
-  private async supportsPersistent(): Promise<boolean> {
-    const version = await this.configVersion()
-    return version !== null && compareVersions(version, MIN_PERSISTENT_VERSION) >= 0
-  }
-
-  private async assertPolicySupported(intent: EntryIntent): Promise<void> {
-    if (intent.onPortConflict !== 'kill')
-      return
-    const version = await this.configVersion()
-    if (version === null || compareVersions(version, MIN_KILL_VERSION) >= 0)
-      return
-    const { resolution } = await this.cli()
-    throw new HomeHostedError(
-      `the home-hosted that would parse this config is ${version}, which has no "kill" policy `
-      + `(added in ${MIN_KILL_VERSION}); replace it with ${resolution.status.version ?? 'the pinned copy'} from this page, `
-      + 'or set the entry\'s on-port-conflict policy to block',
-      'KILL_UNSUPPORTED',
-    )
-  }
-
   private async applyIntents(intents: EntryIntent[]): Promise<ManagedEntryStatus[]> {
     for (const raw of intents) {
       if (!ENTRY_ID_PATTERN.test(raw.id))
@@ -570,7 +761,6 @@ export class HomeHostedService extends Service {
         stopKillPortHolders: raw.stopKillPortHolders ?? fallback.stopKillPortHolders,
         persistent: raw.persistent ?? fallback.persistent,
       }
-      await this.assertPolicySupported(intent)
       await this.writeOwned(intent)
       const current = this.options.settings.get()
       const entries = current.entries.filter(entry => entry.id !== intent.id)
@@ -646,15 +836,16 @@ export class HomeHostedService extends Service {
   }
 
   /** Drive the panel's own UI through its CLI, and report what is installed. */
-  async uiManage(action: UiAction, file?: string): Promise<UiResult> {
+  async uiManage(action: UiAction, file?: string, target?: string): Promise<UiResult> {
+    const home = target ?? this.options.home
     const cli = action === 'status' ? null : await this.cli()
 
     const runUi = async (args: string[]): Promise<{ code: number | null, output: string }> => {
       const launch = cli?.resolution.launch ?? null
       if (launch === null)
         throw new HomeHostedError(cli?.resolution.status.detail ?? 'no home-hosted CLI could be resolved', 'CLI_NOT_FOUND')
-      const result = await run(launch.program, [...launch.args, ...args, '--home', this.options.home], {
-        env: { ...process.env, HHOSTED_HOME: this.options.home },
+      const result = await run(launch.program, [...launch.args, ...args, '--home', home], {
+        env: { ...process.env, HHOSTED_HOME: home },
         timeoutMs: 300_000,
       })
       // A CLI that never started has no stdout to show, so its spawn error is the
@@ -665,7 +856,7 @@ export class HomeHostedService extends Service {
 
     interface ActiveUi { name: string | null, version: string | null, repo: string | null, tag: string | null }
     const active = (): ActiveUi | null => {
-      const meta = readJson<{ name?: string, version?: string | null, repo?: string, tag?: string }>(path.join(this.options.home, '.ui', 'ui.json'))
+      const meta = readJson<{ name?: string, version?: string | null, repo?: string, tag?: string }>(path.join(home, '.ui', 'ui.json'))
       return meta === null ? null : { name: meta.name ?? null, version: meta.version ?? null, repo: meta.repo ?? null, tag: meta.tag ?? null }
     }
 
@@ -728,7 +919,6 @@ export class HomeHostedService extends Service {
     const settings = this.options.settings.get()
     const live = await this.liveEntries()
     const snapshots = this.snapshots()
-    const persistent = await this.supportsPersistent()
     const ids = new Set<string>([this.options.defaultEntryId, ...settings.entries.map(entry => entry.id)])
     return [...ids].map((id) => {
       const intent = this.options.settings.intentFor(id)
@@ -737,7 +927,7 @@ export class HomeHostedService extends Service {
         intent,
         exists: entry !== null,
         managed: snapshots[id] !== undefined,
-        drift: entry === null ? ['missing entry'] : ownedDrift(entry.config, intent, { persistent }),
+        drift: entry === null ? ['missing entry'] : ownedDrift(entry.config, intent),
         live: entry?.view ?? null,
         snapshot: snapshots[id] ?? null,
       }
@@ -996,7 +1186,7 @@ export class HomeHostedService extends Service {
   // Status
   // -------------------------------------------------------------------------
 
-  async status(): Promise<HomeHostedStatus> {
+  async status(refresh = false): Promise<HomeHostedStatus> {
     // Resolve the client first: enrolling a token changes which write path is
     // available, and the page should see the state after that, not before.
     const client = await this.tryClient()
@@ -1031,6 +1221,7 @@ export class HomeHostedService extends Service {
     return {
       defaultEntryId: this.options.defaultEntryId,
       panel,
+      instances: await this.instances(refresh),
       boot: await this.bootStatus(),
       // A deleted managed entry is put back here as well as at startup: whoever
       // deleted it is looking at the page that reports it missing.
@@ -1048,9 +1239,17 @@ export class HomeHostedService extends Service {
 
   async call(endpoint: RpcEndpoint, payload: unknown): Promise<unknown> {
     const input = (payload ?? {}) as Record<string, unknown>
+    // A target names a panel; an endpoint with no way to reach another one must
+    // refuse it rather than quietly act somewhere else.
+    if (typeof input.home === 'string' && input.home.trim().length > 0 && FOREIGN_MECHANISMS[endpoint] === undefined) {
+      throw new HomeHostedError(
+        `"${endpoint}" is about the panel this plugin manages and cannot be aimed at another one`,
+        'INSTANCE_UNSUPPORTED',
+      )
+    }
     switch (endpoint) {
       case 'status':
-        return await this.status()
+        return await this.status(input.refresh === true)
 
       case 'settings.update': {
         const patch = (input.patch ?? {}) as Parameters<SettingsStore['update']>[0]
@@ -1058,8 +1257,17 @@ export class HomeHostedService extends Service {
         return await this.status()
       }
 
-      case 'servers.list':
-        return await (await this.requireClient()).listServers()
+      case 'servers.list': {
+        const target = await this.targetHome(input.home)
+        if (!target.foreign)
+          return await (await this.requireClient()).listServers()
+        const via = this.mechanismFor('servers.list', input.via)
+        // A read never mints a credential: it uses one this plugin already holds
+        // for that panel, and otherwise reads the config file it can always read.
+        if (via === 'api' || (input.via === undefined && await this.foreignTokenWorks(target.home)))
+          return await (await this.foreignClient(target.home)).listServers()
+        return this.listForeign(target.home)
+      }
 
       case 'servers.get':
         return await (await this.requireClient()).getServer(String(input.id))
@@ -1068,14 +1276,33 @@ export class HomeHostedService extends Service {
         const entry = input.entry as ServerEntry
         if (typeof entry?.id !== 'string' || !ENTRY_ID_PATTERN.test(entry.id))
           throw new HomeHostedError('a server entry needs an id matching ^[a-z0-9][a-z0-9_-]*$', 'INVALID_ID')
-        return await (await this.requireClient()).createServer(entry)
+        const target = await this.targetHome(input.home)
+        if (!target.foreign)
+          return await (await this.requireClient()).createServer(entry)
+        return this.mechanismFor('servers.create', input.via) === 'api'
+          ? await (await this.foreignClient(target.home)).createServer(entry)
+          : this.createForeign(target.home, entry)
       }
 
-      case 'servers.update':
-        return await (await this.requireClient()).updateServer(String(input.id), (input.patch ?? {}) as ServerEntryPatch)
+      case 'servers.update': {
+        const target = await this.targetHome(input.home)
+        const id = String(input.id)
+        const patch = (input.patch ?? {}) as ServerEntryPatch
+        if (!target.foreign)
+          return await (await this.requireClient()).updateServer(id, patch)
+        return this.mechanismFor('servers.update', input.via) === 'api'
+          ? await (await this.foreignClient(target.home)).updateServer(id, patch)
+          : this.updateForeign(target.home, id, patch)
+      }
 
       case 'servers.delete': {
         const id = String(input.id)
+        const target = await this.targetHome(input.home)
+        if (target.foreign) {
+          return this.mechanismFor('servers.delete', input.via) === 'api'
+            ? await (await this.foreignClient(target.home)).deleteServer(id).then(() => ({ id, home: target.home, via: 'api' as const }))
+            : this.deleteForeign(target.home, id)
+        }
         if (id === this.selfEntryId()) {
           throw new HomeHostedError(
             `"${id}" is the entry this very process runs as, and deleting it stops this session; `
@@ -1087,17 +1314,47 @@ export class HomeHostedService extends Service {
         return { id }
       }
 
-      case 'servers.start':
-        await (await this.requireClient()).startServer(String(input.id))
+      case 'servers.start': {
+        const target = await this.targetHome(input.home)
+        const id = String(input.id)
+        if (target.foreign) {
+          if (this.mechanismFor('servers.start', input.via) === 'api') {
+            await (await this.foreignClient(target.home)).startServer(id)
+            return { home: target.home, id, action: 'start', via: 'api' }
+          }
+          return await this.lifecycleForeign(target.home, 'start', id)
+        }
+        await (await this.requireClient()).startServer(id)
         return await this.entriesStatus()
+      }
 
-      case 'servers.stop':
-        await (await this.requireClient()).stopServer(String(input.id))
+      case 'servers.stop': {
+        const target = await this.targetHome(input.home)
+        const id = String(input.id)
+        if (target.foreign) {
+          if (this.mechanismFor('servers.stop', input.via) === 'api') {
+            await (await this.foreignClient(target.home)).stopServer(id)
+            return { home: target.home, id, action: 'stop', via: 'api' }
+          }
+          return await this.lifecycleForeign(target.home, 'stop', id)
+        }
+        await (await this.requireClient()).stopServer(id)
         return await this.entriesStatus()
+      }
 
-      case 'servers.restart':
-        await (await this.requireClient()).restartServer(String(input.id))
+      case 'servers.restart': {
+        const target = await this.targetHome(input.home)
+        const id = String(input.id)
+        if (target.foreign) {
+          if (this.mechanismFor('servers.restart', input.via) === 'api') {
+            await (await this.foreignClient(target.home)).restartServer(id)
+            return { home: target.home, id, action: 'restart', via: 'api' }
+          }
+          return await this.lifecycleForeign(target.home, 'restart', id)
+        }
+        await (await this.requireClient()).restartServer(id)
         return await this.entriesStatus()
+      }
 
       case 'servers.freePort':
         return await (await this.requireClient()).freePort(String(input.id))
@@ -1113,8 +1370,16 @@ export class HomeHostedService extends Service {
       case 'entries.restore':
         return await this.restoreEntry(String(input.id))
 
-      case 'ui.manage':
-        return await this.uiManage(input.action as UiAction, typeof input.file === 'string' ? input.file : undefined)
+      case 'ui.manage': {
+        const target = await this.targetHome(input.home)
+        if (target.foreign)
+          this.mechanismFor('ui.manage', input.via)
+        return await this.uiManage(
+          input.action as UiAction,
+          typeof input.file === 'string' ? input.file : undefined,
+          target.foreign ? target.home : undefined,
+        )
+      }
 
       case 'boot.install':
         return await this.installBoot(input.mechanism as BootMechanism | undefined)

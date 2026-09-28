@@ -90,6 +90,7 @@ function PortField({ value, label, hint, invalidLabel, placeholder, disabled, on
 export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: SectionProps) {
   const panel = status.panel
   const cli = status.cli
+  const instances = status.instances ?? []
   const preferred = cli?.prefer ?? status.settings.cli?.prefer ?? 'pinned'
   const [confirming, setConfirming] = useState(false)
   const [installOutput, setInstallOutput] = useState<string | null>(null)
@@ -187,6 +188,26 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
         disabled={panel.reachable || busy !== null}
         onChange={port => updateSettings(current => ({ ...current, panel: { ...current.panel, port } }))}
       />
+
+      {instances.length <= 1
+        ? null
+        : (
+            <Details label={t('panelInstances', { count: instances.length })} open={uiStyle === 'detailed'}>
+              {instances.map(instance => (
+                <Spec
+                  key={instance.home}
+                  label={instance.managed ? t('panelInstanceManaged') : t('panelInstanceOther')}
+                >
+                  <Code>{instance.home}</Code>
+                  {instance.url === null ? null : <>{' · '}<Link href={instance.url}>{instance.url}</Link></>}
+                  {` · ${instance.running ? t('stateAnswering') : t('stateNotAnswering')}`}
+                  {instance.version === null ? null : ` · ${instance.version}`}
+                  {instance.hosting ? ` · ${t('panelInstanceHosts')}` : null}
+                </Spec>
+              ))}
+              <Hint>{t('panelInstancesHint')}</Hint>
+            </Details>
+          )}
 
       <div className="hh-btn-row">
         {panel.reachable

@@ -43,6 +43,15 @@ export function AgentsSection({ t, status, updateSettings, busy, uiStyle }: Sect
         />
         <Hint>{t('reclaimAutoHint')}</Hint>
       </div>
+      <div className="hh-field-block">
+        <Switch
+          label={t('instancesNoticeLabel')}
+          checked={status.settings.instancesNotice !== false}
+          disabled={busy === 'settings'}
+          onChange={checked => updateSettings(current => ({ ...current, instancesNotice: checked }))}
+        />
+        <Hint>{t('instancesNoticeHint')}</Hint>
+      </div>
       <Hint>{t('agentApproval')}</Hint>
 
       {uiStyle === 'detailed'

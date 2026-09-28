@@ -9,7 +9,7 @@
  * The plaintext lives 0600 under the plugin state directory and is never logged,
  * rendered, or sent to the browser.
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import type { RunResult } from '../util/exec.js'
 import { readJson, readText, writeFileAtomic } from '../util/fsx.js'
@@ -21,6 +21,8 @@ export interface EnsureTokenOptions {
   home: string
   stateDir: string
   exec: CliExecutor
+  /** Which panel this credential is for; omitted is the panel the plugin manages. */
+  slot?: string
 }
 
 export interface EnsureTokenResult {
@@ -34,6 +36,7 @@ export interface ReclaimTokenOptions {
   home: string
   stateDir: string
   exec: CliExecutor
+  slot?: string
 }
 
 export interface ReclaimTokenResult {
@@ -41,17 +44,24 @@ export interface ReclaimTokenResult {
   detail: string
 }
 
-export function storedTokenPath(stateDir: string): string {
-  return path.join(stateDir, 'panel-token')
+/** A stable, unguessable file name for one state root's credential. */
+export function tokenSlot(home: string): string {
+  return createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16)
 }
 
-export function readStoredToken(stateDir: string): string | null {
-  const text = readText(storedTokenPath(stateDir))?.trim()
+export function storedTokenPath(stateDir: string, slot?: string): string {
+  return slot === undefined
+    ? path.join(stateDir, 'panel-token')
+    : path.join(stateDir, 'panel-tokens', `${slot}.token`)
+}
+
+export function readStoredToken(stateDir: string, slot?: string): string | null {
+  const text = readText(storedTokenPath(stateDir, slot))?.trim()
   return text !== undefined && text.length > 0 ? text : null
 }
 
-export function storeToken(stateDir: string, token: string): void {
-  writeFileAtomic(storedTokenPath(stateDir), `${token}\n`, 0o600)
+export function storeToken(stateDir: string, token: string, slot?: string): void {
+  writeFileAtomic(storedTokenPath(stateDir, slot), `${token}\n`, 0o600)
 }
 
 export function generateToken(): string {
@@ -75,8 +85,8 @@ export function apiTokenEnrolled(home: string): boolean {
  */
 const queue = new Map<string, Promise<unknown>>()
 
-function serialised<T>(stateDir: string, work: () => Promise<T>): Promise<T> {
-  const key = path.resolve(stateDir)
+function serialised<T>(stateDir: string, slot: string | undefined, work: () => Promise<T>): Promise<T> {
+  const key = `${path.resolve(stateDir)}\u0000${slot ?? ''}`
   const previous = queue.get(key) ?? Promise.resolve()
   // Run even when the previous operation rejected: that failure is its caller's.
   const next = previous.then(work, work)
@@ -89,7 +99,7 @@ function serialised<T>(stateDir: string, work: () => Promise<T>): Promise<T> {
 }
 
 export async function ensureToken(options: EnsureTokenOptions): Promise<EnsureTokenResult> {
-  return await serialised(options.stateDir, async () => await enrollToken(options))
+  return await serialised(options.stateDir, options.slot, async () => await enrollToken(options))
 }
 
 /**
@@ -103,7 +113,7 @@ export async function ensureToken(options: EnsureTokenOptions): Promise<EnsureTo
  * nothing, so the previous plaintext is kept.
  */
 export async function reclaimToken(options: ReclaimTokenOptions): Promise<ReclaimTokenResult> {
-  return await serialised(options.stateDir, async () => await enrollFreshToken(options))
+  return await serialised(options.stateDir, options.slot, async () => await enrollFreshToken(options))
 }
 
 interface CliAttempt {
@@ -129,7 +139,7 @@ async function runCli(exec: CliExecutor, args: string[], env: Record<string, str
 
 /** Mint a token when none is enrolled. */
 async function enrollToken(options: EnsureTokenOptions): Promise<EnsureTokenResult> {
-  const stored = readStoredToken(options.stateDir)
+  const stored = readStoredToken(options.stateDir, options.slot)
   if (stored !== null)
     return { token: stored, enrolled: false, detail: 'using the stored panel token' }
 
@@ -152,7 +162,7 @@ async function enrollToken(options: EnsureTokenOptions): Promise<EnsureTokenResu
     }
   }
 
-  storeToken(options.stateDir, token)
+  storeToken(options.stateDir, token, options.slot)
   return { token, enrolled: true, detail: 'enrolled a new panel API token' }
 }
 
@@ -172,6 +182,6 @@ async function enrollFreshToken(options: ReclaimTokenOptions): Promise<ReclaimTo
     }
   }
 
-  storeToken(options.stateDir, token)
+  storeToken(options.stateDir, token, options.slot)
   return { token, detail: 'enrolled a fresh panel API token' }
 }

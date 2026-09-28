@@ -46,14 +46,16 @@ service manager, or restart the harness you are running in to "check" something.
   the panel's current one, while a stale stamp stops the panel booting.
 - Writes go through the authenticated panel API when it answers and the token proves itself,
   otherwise straight to `servers.config.json` (atomic write, schema-shaped).
-- Whatever the plugin writes into the panel's config must be parseable by the panel that will boot
-  from it: check `configVersion()` and either refuse (`MIN_KILL_VERSION` → `KILL_UNSUPPORTED`) or drop
-  the key (`MIN_PERSISTENT_VERSION`).
 - The settings file is versioned (`SETTINGS_VERSION`). Migrate on **read**, never in `update()`; an
-  explicit empty allowlist means "no tools", and the old default pair means "nobody chose".
+  explicit empty allowlist means "no tools", and the old default pair means "nobody chose" — bound to
+  the release that merged the tools (`PRE_MERGE_SETTINGS_VERSION`), never to the current stamp.
 - A mutating agent tool asks for approval only when the calling session is not `danger-full-access`,
   and fails closed when the sandbox cannot be read. Renaming a tool needs a `LEGACY_TOOL_NAMES` entry,
   or an upgrade silently disables it.
+- A panel is a state root: the plugin drives exactly one, discovery names the others, and a call naming
+  another asks the user first, then reaches it by editing that panel's config file, running the CLI
+  against its state root, or minting a token and using its API — the three ways `FOREIGN_MECHANISMS`
+  lists per endpoint, least invasive first.
 - Boot entries point at a generated stable launcher, never at a pnpm path; the marker proves ownership
   and uninstall/disable refuses an artifact this plugin did not write.
 - A mechanism stays selectable without privilege: stage the file and return the exact commands rather
@@ -80,12 +82,16 @@ service manager, or restart the harness you are running in to "check" something.
   repairs an entry that exists — it never installs one.
 - An entry this process runs as is never deleted (the panel is told to stop it); "stop managing" pauses
   or restores it instead.
+- Only the `home-hosted` this plugin pins is supported (`^0.6.6`): the `kill`/`persistent` version
+  guards were dropped pre-1.0, so an older panel handed those keys can refuse to boot — see DESIGN.
 
 ## Where to extend
 
 - **Endpoint**: `contracts.ts` (endpoint + payload) → `service.ts` dispatch → `src/client/api.ts` when
   the page needs it.
 - **Agent tool**: `contracts.ts` (`AgentToolName`, mutating set) → a spec in `tools.ts` → locale labels.
+- **Panel inventory**: `src/home-hosted/instances.ts` (which roots exist) → `service.instances()`
+  (cache) → `instances-notice.ts` (what the agent is told) · `tools.ts` (which panel a call may hit).
 - **Boot mechanism**: a provider in `src/boot/<mechanism>.ts` → the list in `ladder.ts` → `test/boot`.
 - **Page**: a `src/client/section-*.tsx` → wire it in `page.tsx` → locales (both languages).
 

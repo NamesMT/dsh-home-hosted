@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, storeToken, storedTokenPath } from '../src/home-hosted/token.js'
+import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, storeToken, storedTokenPath, tokenSlot } from '../src/home-hosted/token.js'
 import { secretsFile } from '../src/util/paths.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
@@ -195,5 +195,25 @@ describe('reclaiming a refused panel token', () => {
 
     expect(order).toEqual(['set', 'set'])
     expect(readStoredToken(state)).not.toBeNull()
+  })
+})
+
+describe('per-panel token slots', () => {
+  it('keeps one panel\'s credential out of another\'s file', () => {
+    const scratch = tempDir()
+    const managed = storedTokenPath(scratch.path)
+    const other = storedTokenPath(scratch.path, tokenSlot('/srv/other'))
+
+    expect(other).not.toBe(managed)
+    expect(other).toContain('panel-tokens')
+    storeToken(scratch.path, 'managed-token')
+    storeToken(scratch.path, 'other-token', tokenSlot('/srv/other'))
+
+    expect(readStoredToken(scratch.path)).toBe('managed-token')
+    expect(readStoredToken(scratch.path, tokenSlot('/srv/other'))).toBe('other-token')
+    // Two roots never share a slot, and a slot is stable for one root.
+    expect(tokenSlot('/srv/other')).not.toBe(tokenSlot('/srv/another'))
+    expect(tokenSlot('/srv/other/')).toBe(tokenSlot('/srv/other'))
+    scratch.cleanup()
   })
 })

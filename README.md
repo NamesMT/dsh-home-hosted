@@ -78,6 +78,7 @@ running.
 | 📦 **Ships its own panel** | The pinned `home-hosted` is a dependency, so boot runs the version this plugin is tested against. |
 | 🖥️ **Server control** | Add, edit, start, stop and restart entries — written through the panel's API, so nothing restarts behind your back. |
 | 🧭 **Token warnings that mean something** | A missing or refused API token is called out on the page, with one click to mint a working one. |
+| 🪟 **Knows the other panels** | Several panels on one machine? The agent is told which one this plugin manages, and asks before touching another. |
 | 🤖 **Agent tools** | On by default, session permissions still gate every write. |
 
 ## 🤖 Agent tools
@@ -93,6 +94,7 @@ running.
 
 A tool that changes something asks for approval **only** when the session is not already Full access.
 <sub>A refused token is re-enrolled on the spot and the tool retries — see **automatic regeneration** below.</sub>
+<sub>Every tool takes an optional `instance` (a panel's `--home` or URL). Omit it for the panel this plugin manages; with several panels found the call asks which one you mean, and naming another panel asks first too — then reaches it by editing its config file, running the CLI against it, or minting a token and using its API.</sub>
 
 ## 🧩 Depth
 

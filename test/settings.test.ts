@@ -21,17 +21,43 @@ describe('settings store', () => {
   it('starts with autostart off, every tool on, and the pinned CLI', () => {
     const s = store()
     expect(s.get()).toEqual({
-      version: 2,
+      version: 3,
       autostart: { enabled: false, mechanism: 'auto' },
       manageDsh: false,
       entries: [],
       panel: { port: null },
       authNotice: true,
       reclaimToken: true,
+      instancesNotice: true,
       uiStyle: 'detailed',
       agentTools: { enabled: true, allow: ['status', 'servers_list', 'servers_lifecycle', 'servers_edit', 'autostart_manage', 'ui_manage'] },
       cli: { prefer: 'pinned' },
     })
+  })
+
+  it('defaults the panel notice on, and persists an explicit off', () => {
+    const s = store()
+    expect(s.get().instancesNotice).toBe(true)
+
+    s.update({ instancesNotice: false })
+    expect(new SettingsStore(s.file, 'dsh').get().instancesNotice).toBe(false)
+    // A settings write that leaves it out keeps the choice.
+    s.update({ autostart: { enabled: true } })
+    expect(s.get().instancesNotice).toBe(false)
+  })
+
+  it('does not re-read a current-version allowlist as "nobody chose"', () => {
+    // The pair the pre-0.2.0 release wrote for "unset" is also a legitimate
+    // choice, and only a file older than that release may be read that way.
+    scratch = tempDir()
+    const file = path.join(scratch.path, 'settings.json')
+    writeJsonFile(file, {
+      version: 2,
+      agentTools: { enabled: true, allow: ['status', 'servers_list'] },
+    })
+    const s = new SettingsStore(file, 'dsh')
+    expect(s.get().agentTools.allow).toEqual(['status', 'servers_list'])
+    expect(s.get().instancesNotice).toBe(true)
   })
 
   it('defaults the token reclaim on, and persists an explicit off', () => {

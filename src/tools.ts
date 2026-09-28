@@ -9,10 +9,11 @@
  * Full-access run fail against an auto-rejecting approval channel.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
+import type { ParameterPropertySpec, ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { AgentToolName, HomeHostedStatus, RpcEndpoint, UiAction } from './shared/contracts.js'
-import { MUTATING_AGENT_TOOLS } from './shared/contracts.js'
+import type { AgentToolName, ForeignMechanism, HomeHostedStatus, InstanceView, RpcEndpoint, UiAction } from './shared/contracts.js'
+import { FOREIGN_MECHANISMS, MUTATING_AGENT_TOOLS, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import { canonicalPath, describeInstance } from './home-hosted/instances.js'
 import type { HomeHostedService } from './service.js'
 import type { SettingsStore } from './settings.js'
 
@@ -22,6 +23,21 @@ interface ApprovalLike {
 
 interface SandboxPolicyLike {
   resolve?: (input: { session?: unknown }) => { mode?: string } | undefined
+}
+
+/** The subset of `ctx.userQuestions` this uses; absent on a host without a UI. */
+interface UserQuestionsLike {
+  ask: (request: {
+    questions: Array<{
+      id: string
+      header?: string
+      question: string
+      detail?: string
+      options?: Array<{ label: string, description?: string }>
+    }>
+    agent?: unknown
+    signal?: unknown
+  }) => Promise<{ answers: Array<{ id: string, selected: string[], custom?: string }> }>
 }
 
 /** The calling session's file-sandbox mode, or null when nothing can report it. */
@@ -40,14 +56,32 @@ function sandboxMode(ctx: Context, exec: unknown): string | null {
 
 type Input = Record<string, unknown>
 
+/** A payload carrying the panel a call targets and how to reach it. */
+function withTarget(payload: unknown, home: string, via: ForeignMechanism | null): unknown {
+  const target = via === null ? { home } : { home, via }
+  return typeof payload === 'object' && payload !== null ? { ...payload, ...target } : target
+}
+
 function stringArg(input: Input, key: string): string | null {
   const value = input[key]
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
+/**
+ * A structured argument. `entry`/`patch` are declared as objects, so the runtime
+ * validates them before this runs; what remains is the absent case, which the
+ * caller reports as such rather than as an unusable value.
+ */
 function jsonArg(input: Input, key: string): Record<string, unknown> | null {
   const value = input[key]
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+/** Why a structured argument was unusable, naming the type that arrived. */
+function jsonArgError(input: Input, key: string, purpose: string): Error {
+  const value = input[key]
+  const received = value === undefined ? 'missing' : Array.isArray(value) ? 'array' : typeof value
+  return new Error(`${key} must be a JSON object ${purpose} (received: ${received})`)
 }
 
 interface ToolSpec {
@@ -57,20 +91,76 @@ interface ToolSpec {
   run: (input: Input) => { endpoint: RpcEndpoint, payload: unknown }
 }
 
+/**
+ * Every tool takes the same optional panel selector. Omitting it means the panel
+ * this plugin manages; naming another panel is neither ignored nor silently
+ * retargeted — this plugin asks the user first, then reaches that panel the only
+ * way it can: its config file, or its own CLI.
+ */
+const INSTANCE_PARAM = {
+  type: 'string',
+  description: 'Home-hosted panel to act on: a state root (--home) or URL reported by home_hosted_status. Omit for the panel this plugin manages; naming another panel asks the user how to reach it before it changes anything.',
+} as const satisfies ParameterPropertySpec
+
+/**
+ * A home-hosted server entry, as one object parameter.
+ *
+ * Declared field by field rather than as `type: 'json'`: an author-only `json`
+ * node projects to a schema with no `type`, and the model then has nothing to
+ * aim at — the same mistake that made `create`/`update` unusable. Only the keys
+ * this plugin understands are named; the panel accepts more, so unknown keys
+ * stay allowed.
+ */
+const ENTRY_FIELDS: ParameterSchemaSpec = {
+  id: { type: 'string', required: true, description: 'Entry id, ^[a-z0-9][a-z0-9_-]*$' },
+  command: { type: 'string', description: 'Executable to run' },
+  args: { type: 'array', items: { type: 'string' }, description: 'Arguments' },
+  cwd: { type: 'string', description: 'Working directory' },
+  label: { type: 'string', description: 'Human label' },
+  enabled: { type: 'boolean', description: 'Whether the entry may run' },
+  autostart: { type: 'boolean', description: 'Start it when the panel starts' },
+  // The panel's schema is `1..65535 | null`, and a patch that clears a port sends it.
+  port: { oneOf: [{ type: 'number' }, { type: 'null' }], description: 'Port the panel tracks for this entry, or null' },
+  bind: { type: 'string', description: 'Bind host or local/lan' },
+  onPortConflict: { type: 'string', enum: [...ON_PORT_CONFLICT_POLICIES], description: 'Policy when the port is taken' },
+  stop: { type: 'object', additionalProperties: true, description: 'Stop policy, e.g. killPortHolders' },
+  health: { type: 'object', additionalProperties: true, description: 'Health check block' },
+  restart: { type: 'object', additionalProperties: true, description: 'Restart policy block' },
+  env: { type: 'object', additionalProperties: true, description: 'Environment variables' },
+  dataEnvs: { type: 'object', additionalProperties: true, description: 'Environment entries the panel fills in' },
+}
+
+const ENTRY_PARAM = {
+  type: 'object',
+  additionalProperties: true,
+  description: 'A home-hosted server entry: at least id and command',
+  properties: ENTRY_FIELDS,
+} as const satisfies ParameterPropertySpec
+
+const PATCH_PARAM = {
+  type: 'object',
+  additionalProperties: true,
+  description: 'Fields to change on an existing entry; only the given keys are touched',
+  // The same fields, none required and without `id`: the entry patched is the one
+  // the `id` argument names, and the panel rejects a patch that carries an id.
+  properties: Object.fromEntries(Object.entries(ENTRY_FIELDS).filter(([key]) => key !== 'id')),
+} as const satisfies ParameterPropertySpec
+
 const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
   status: {
-    description: 'Report the home-hosted panel state, its boot-autostart entry, and the entries this plugin manages.',
-    parameters: {},
+    description: 'Report the home-hosted panel state, every home-hosted panel found on this machine, its boot-autostart entry, and the entries this plugin manages. This describes the managed panel only; its payload lists the others.',
+    parameters: { instance: INSTANCE_PARAM },
     run: () => ({ endpoint: 'status', payload: {} }),
   },
   servers_list: {
-    description: 'List every server home-hosted supervises, with status, pid and url.',
-    parameters: {},
+    description: 'List every server home-hosted supervises, with status, pid and url. A named panel is read from its config file, or through its API when this plugin already holds a token for that panel; naming the API mechanism mints one.',
+    parameters: { instance: INSTANCE_PARAM },
     run: () => ({ endpoint: 'servers.list', payload: {} }),
   },
   servers_lifecycle: {
-    description: 'Start, stop or restart a server supervised by home-hosted. Restarting the entry this session runs as ends the session.',
+    description: 'Start, stop or restart a server supervised by home-hosted. Restarting the entry this session runs as ends the session. A named panel is driven through the home-hosted CLI aimed at its state root, or through its API, and a CLI restart is a stop then a start.',
     parameters: {
+      instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'start, stop or restart' },
       id: { type: 'string', required: true, description: 'Server entry id' },
     },
@@ -85,27 +175,32 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   servers_edit: {
-    description: 'Create, update or delete a home-hosted server entry. Delete is refused for the entry this session runs as.',
+    description: 'Create, update or delete a home-hosted server entry. Delete is refused for the entry this session runs as. A named panel is edited through its servers.config.json, or through its API with a token this plugin mints.',
     parameters: {
+      instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'create, update or delete' },
       id: { type: 'string', description: 'Server entry id (update, delete)' },
-      entry: { type: 'json', description: 'A full home-hosted server entry, including its id and command (create)' },
-      patch: { type: 'json', description: 'Fields to change (update)' },
+      entry: ENTRY_PARAM,
+      patch: PATCH_PARAM,
     },
     run: (input) => {
       const action = stringArg(input, 'action')
       if (action === 'create') {
         const entry = jsonArg(input, 'entry')
         if (entry === null)
-          throw new Error('entry is required to create a server')
+          throw jsonArgError(input, 'entry', 'to create a server')
         return { endpoint: 'servers.create', payload: { entry } }
       }
       if (action === 'update') {
         const id = stringArg(input, 'id')
         const patch = jsonArg(input, 'patch')
-        if (id === null || patch === null)
-          throw new Error('id and patch are required to update a server')
-        return { endpoint: 'servers.update', payload: { id, patch } }
+        if (id === null)
+          throw new Error('id is required to update a server')
+        if (patch === null)
+          throw jsonArgError(input, 'patch', 'to update a server')
+        // A caller may echo the id back; it is the key, not a field to change.
+        const { id: _key, ...fields } = patch
+        return { endpoint: 'servers.update', payload: { id, patch: fields } }
       }
       if (action === 'delete') {
         const id = stringArg(input, 'id')
@@ -117,8 +212,9 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   autostart_manage: {
-    description: 'Install or remove the OS entry that starts home-hosted at boot or login.',
+    description: 'Install or remove the OS entry that starts home-hosted at boot or login. The entry is machine-wide and always starts the panel this plugin manages.',
     parameters: {
+      instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'install or uninstall' },
       mechanism: { type: 'string', description: 'Explicit mechanism, e.g. launchd-daemon or systemd-system; omit to use the plugin setting' },
     },
@@ -131,8 +227,9 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   ui_manage: {
-    description: 'Inspect or change the home-hosted panel\'s own web UI: status, update, revert to stock, or switch to a local zip.',
+    description: 'Inspect or change the home-hosted panel\'s own web UI: status, update, revert to stock, or switch to a local zip. A named panel\'s UI is driven through the home-hosted CLI aimed at its state root.',
     parameters: {
+      instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'status, update, revert or switch' },
       file: { type: 'string', description: 'Absolute path to a UI zip (switch)' },
     },
@@ -156,6 +253,327 @@ export function toolNameFor(name: AgentToolName): string {
  */
 const READ_ONLY_ACTIONS: Partial<Record<AgentToolName, (input: Input) => boolean>> = {
   ui_manage: input => stringArg(input, 'action') === 'status',
+}
+
+/**
+ * Which panel a call lands on, and whether the user still has to agree to it.
+ *
+ * The plugin drives one state root; a person may run several. A call that names
+ * another panel is neither silently retargeted nor refused outright: the plugin
+ * asks the user, names the way it would reach that panel (its config file, or
+ * its own CLI), and only then changes it. A call that names none is the managed
+ * panel by definition, unless several exist and the `instancesNotice` setting is
+ * on, in which case the user is asked which panel was meant.
+ */
+type TargetPlan =
+  | { ok: false, text: string }
+  /** `home: null` is the managed panel; a null `ask` means nothing to confirm. */
+  | { ok: true, home: string | null, ask: null }
+  | { ok: true, home: null, ask: 'which', mechanisms: readonly ForeignMechanism[] }
+  | { ok: true, home: string, ask: 'foreign', mechanisms: readonly ForeignMechanism[] }
+
+/** The plan a question settled on: the panel and how to reach it, or why not. */
+type TargetDecision = { ok: true, home: string | null, via: ForeignMechanism | null } | { ok: false, text: string }
+
+const CANCEL_LABEL = 'Cancel'
+
+/**
+ * `userQuestions.ask` failures that mean no human could be reached: a host with
+ * no answerer, and a delegated child (whose answers never reach a person).
+ */
+const NO_ANSWERER_CODES = new Set(['NO_PROVIDER', 'DELEGATED_CALLER', 'CALLER_NOT_LIVE'])
+
+/** How each mechanism is offered to a person, and how the result names it. */
+const MECHANISM_WORDING: Record<ForeignMechanism, { option: string, phrase: string }> = {
+  file: { option: 'Edit its config file', phrase: 'by editing its servers.config.json' },
+  cli: { option: 'Run the home-hosted CLI', phrase: 'by running the home-hosted CLI against its state root' },
+  api: { option: 'Generate a token and use its API', phrase: 'by enrolling a token for it and using its API' },
+}
+
+/** Why an endpoint cannot be aimed at another panel, when it cannot. */
+const NO_FOREIGN_REASON: Partial<Record<RpcEndpoint, string>> = {
+  'status': 'home_hosted_status describes the panel this plugin manages, and it already lists every panel found on the machine.',
+  'boot.install': 'the OS boot entry starts the panel this plugin manages; it is one machine-wide entry and cannot be aimed at another panel.',
+  'boot.uninstall': 'the OS boot entry is one machine-wide entry and belongs to the panel this plugin manages.',
+}
+
+/** The panel inventory, when the host can produce one. */
+async function inventoryOf(service: HomeHostedService): Promise<InstanceView[]> {
+  const reader = (service as unknown as { instances?: () => Promise<InstanceView[]> }).instances
+  if (typeof reader !== 'function')
+    return []
+  try {
+    return await reader.call(service)
+  }
+  catch {
+    return []
+  }
+}
+
+/** The instance a caller named by state root, URL or project dir. */
+function matchInstance(instances: readonly InstanceView[], wanted: string): InstanceView | null {
+  const target = wanted.trim()
+  if (target.length === 0)
+    return null
+  const asPath = canonicalPath(target)
+  return instances.find(instance =>
+    instance.home === asPath
+    || instance.url === target
+    || (instance.projectDir !== null && instance.projectDir === target),
+  ) ?? null
+}
+
+function inventoryText(instances: readonly InstanceView[]): string {
+  return instances.map(instance => `${instance.managed ? 'managed: ' : ''}${describeInstance(instance)}`).join('; ')
+}
+
+function refusalForUnknownPanel(instances: readonly InstanceView[], wanted: string): string {
+  return `refused: no home-hosted panel at "${wanted}" was found on this machine. `
+    + `Panels found: ${inventoryText(instances)}. `
+    + 'Ask the user which panel they mean, or read home_hosted_status for the inventory.'
+}
+
+function refusalForUnreachablePanel(instances: readonly InstanceView[], target: InstanceView, endpoint: RpcEndpoint): string {
+  const reason = NO_FOREIGN_REASON[endpoint] ?? `this plugin has no way to change another panel's state for ${endpoint}`
+  return `refused: ${describeInstance(target)} is another home-hosted panel, and ${reason} `
+    + `Panels found: ${inventoryText(instances)}.`
+}
+
+/** Read an answer's option labels; a UI may also return free text. */
+function answerOf(answer: { answers?: Array<{ id: string, selected: string[], custom?: string }> }, id: string): { selected: string[], custom: string | null } {
+  const item = (Array.isArray(answer?.answers) ? answer.answers : []).find(entry => entry.id === id)
+  return {
+    selected: Array.isArray(item?.selected) ? item.selected : [],
+    custom: typeof item?.custom === 'string' && item.custom.trim().length > 0 ? item.custom.trim() : null,
+  }
+}
+
+/**
+ * Which panel the call lands on, validated before anything is asked. The
+ * questions themselves run after the approval gate, so a call the session may
+ * not make never puts a question to the user.
+ */
+async function planTarget(
+  service: HomeHostedService,
+  settings: SettingsStore,
+  endpoint: RpcEndpoint,
+  requested: string | null,
+  mutating: boolean,
+): Promise<TargetPlan> {
+  const instances = await inventoryOf(service)
+  if (instances.length === 0) {
+    // An unverifiable target must not become the managed panel by default: that
+    // is the silent retarget this whole check exists to prevent.
+    return requested === null
+      ? { ok: true, home: null, ask: null }
+      : { ok: false, text: `refused: this host could not list the home-hosted panels on this machine, so "${requested}" cannot be checked; ask the user, or call without instance to act on the panel this plugin manages.` }
+  }
+  const managed = instances.find(instance => instance.managed)
+  const mechanisms = FOREIGN_MECHANISMS[endpoint]
+
+  if (requested !== null) {
+    const target = matchInstance(instances, requested)
+    if (target === null)
+      return { ok: false, text: refusalForUnknownPanel(instances, requested) }
+    if (target.managed)
+      return { ok: true, home: null, ask: null }
+    if (mechanisms === undefined)
+      return { ok: false, text: refusalForUnreachablePanel(instances, target, endpoint) }
+    return mutating ? { ok: true, home: target.home, ask: 'foreign', mechanisms } : { ok: true, home: target.home, ask: null }
+  }
+
+  // Asking which panel is only worth it when this call could reach more than one.
+  if (!mutating || !settings.get().instancesNotice || managed === undefined || mechanisms === undefined || instances.length < 2)
+    return { ok: true, home: null, ask: null }
+  return { ok: true, home: null, ask: 'which', mechanisms }
+}
+
+/** One ask, returning the answered option labels or how it failed. */
+async function ask(
+  ctx: Context,
+  exec: unknown,
+  questions: UserQuestionsLike,
+  item: { id: string, question: string, detail?: string, options: Array<{ label: string, description: string }> },
+): Promise<{ ok: true, selected: string[], custom: string | null } | { ok: false, code: string | null, error: unknown }> {
+  try {
+    const answer = await questions.ask({
+      questions: [{ id: item.id, header: 'home-hosted', question: item.question, detail: item.detail, options: item.options }],
+      agent: (exec as { agent?: unknown } | undefined)?.agent,
+      signal: (exec as { signal?: unknown } | undefined)?.signal,
+    })
+    const { selected, custom } = answerOf(answer, item.id)
+    return { ok: true, selected, custom }
+  }
+  catch (error) {
+    return { ok: false, code: errorCode(error), error }
+  }
+}
+
+/**
+ * Confirm a change to a panel the plugin does not manage, and how to reach it.
+ *
+ * Every mechanism that endpoint has is offered, least invasive first, so the
+ * person chooses whether the plugin edits that panel's config, runs the
+ * home-hosted CLI against it, or mints a token and uses its API. A host that
+ * cannot reach a person proceeds on the mechanism the caller would have used
+ * anyway; the tool result then says which one it was.
+ */
+async function askForeignPanel(
+  ctx: Context,
+  exec: unknown,
+  instances: readonly InstanceView[],
+  target: InstanceView,
+  mechanisms: readonly ForeignMechanism[],
+): Promise<TargetDecision> {
+  const questions = ctx.get('userQuestions') as UserQuestionsLike | undefined
+  const first = mechanisms[0] as ForeignMechanism
+  if (typeof questions?.ask !== 'function')
+    return { ok: true, home: target.home, via: first }
+
+  const answer = await ask(ctx, exec, questions, {
+    id: 'home-hosted-foreign-panel',
+    question: `${target.home} is not a panel this plugin manages. How should it be changed?`,
+    detail: inventoryText(instances),
+    options: [
+      ...mechanisms.map(mechanism => ({
+        label: MECHANISM_WORDING[mechanism].option,
+        description: `${MECHANISM_WORDING[mechanism].phrase}${
+          mechanism === 'api' ? '; that mints a token for it, replacing any it had' : '; this plugin holds no API token for that panel'}`,
+      })),
+      { label: CANCEL_LABEL, description: 'Change nothing; say which panel you meant instead.' },
+    ],
+  })
+
+  if (!answer.ok) {
+    if (answer.code === 'ASK_ABORTED')
+      return { ok: false, text: 'cancelled: the user dismissed the panel question to speak instead; stop and wait for their message.' }
+    if (answer.code !== null && NO_ANSWERER_CODES.has(answer.code))
+      return { ok: true, home: target.home, via: first }
+    return { ok: false, text: `refused: the panel question could not be asked (${messageOf(answer.error)}); ask the user before changing another panel.` }
+  }
+
+  // Cancel settles it: an answer that cancels, or cancels and types something,
+  // must never be read as consent.
+  if (answer.selected.includes(CANCEL_LABEL))
+    return { ok: false, text: `cancelled: the user did not confirm changing ${target.home}; ask which panel they meant.` }
+  const chosen = answer.selected.find(label => label !== CANCEL_LABEL)
+  if (chosen !== undefined) {
+    const mechanism = mechanisms.find(candidate => MECHANISM_WORDING[candidate].option === chosen)
+    if (mechanism !== undefined)
+      return { ok: true, home: target.home, via: mechanism }
+  }
+  if (chosen === undefined && answer.custom !== null) {
+    const mechanism = mechanisms.find(candidate => matchesMechanism(answer.custom as string, candidate))
+    if (mechanism !== undefined)
+      return { ok: true, home: target.home, via: mechanism }
+  }
+  return { ok: false, text: `cancelled: the user did not confirm changing ${target.home}; ask which panel they meant.` }
+}
+
+/** Whether free text names a mechanism, so a typed answer is honoured. */
+function matchesMechanism(text: string, mechanism: ForeignMechanism): boolean {
+  const value = text.toLowerCase()
+  if (mechanism === 'file')
+    return /file|config/.test(value)
+  if (mechanism === 'cli')
+    return /cli|command|terminal/.test(value)
+  return /api|token/.test(value)
+}
+
+/**
+ * Ask which panel a call that named none should hit, when more than one could
+ * take it. The managed panel is the default, so a host with no answerer proceeds
+ * there; the others are only offered when this call knows how to reach them.
+ */
+async function askWhichPanel(
+  ctx: Context,
+  exec: unknown,
+  instances: readonly InstanceView[],
+  managed: InstanceView,
+  others: readonly InstanceView[],
+  mechanisms: readonly ForeignMechanism[],
+): Promise<TargetDecision> {
+  const questions = ctx.get('userQuestions') as UserQuestionsLike | undefined
+  if (typeof questions?.ask !== 'function')
+    return { ok: true, home: null, via: null }
+
+  const answer = await ask(ctx, exec, questions, {
+    id: 'home-hosted-instance',
+    question: `${instances.length} home-hosted panels were found on this machine. Act on the panel this plugin manages?`,
+    detail: inventoryText(instances),
+    options: [
+      { label: managed.home, description: `managed by this plugin${managed.url === null ? '' : ` · ${managed.url}`}` },
+      ...others.map(instance => ({
+        label: instance.home,
+        description: `not managed by this plugin${instance.url === null ? '' : ` · ${instance.url}`}`
+          + ` · ${mechanisms.map(candidate => MECHANISM_WORDING[candidate].phrase).join(', or ')}`,
+      })),
+      { label: CANCEL_LABEL, description: 'Do nothing; say which panel you meant instead.' },
+    ],
+  })
+
+  if (!answer.ok) {
+    if (answer.code === 'ASK_ABORTED')
+      return { ok: false, text: 'cancelled: the user dismissed the panel question to speak instead; stop and wait for their message.' }
+    if (answer.code !== null && NO_ANSWERER_CODES.has(answer.code))
+      return { ok: true, home: null, via: null }
+    return { ok: false, text: `refused: the panel question could not be asked (${messageOf(answer.error)}); ask the user which panel they mean before acting.` }
+  }
+
+  if (answer.selected.includes(CANCEL_LABEL))
+    return { ok: false, text: 'cancelled: the user chose not to pick a panel; ask them which one they mean.' }
+  const chosen = answer.selected.find(label => label !== CANCEL_LABEL)
+  if (chosen !== undefined) {
+    const instance = matchInstance(instances, chosen)
+    if (instance === null)
+      return { ok: false, text: `cancelled: the answer "${chosen}" names no panel; ask the user which panel they mean.` }
+    return instance.managed ? { ok: true, home: null, via: null } : { ok: true, home: instance.home, via: null }
+  }
+  if (answer.custom !== null) {
+    const instance = matchInstance(instances, answer.custom)
+    if (instance?.managed === true)
+      return { ok: true, home: null, via: null }
+    if (instance !== null)
+      return { ok: true, home: instance.home, via: null }
+    return { ok: false, text: `cancelled: the user answered "${answer.custom}", which names no panel; ask them which panel they mean.` }
+  }
+  return { ok: false, text: 'cancelled: the panel question was not answered; ask the user which panel they mean before acting.' }
+}
+
+/**
+ * Run the questions a plan called for, and settle on the panel and mechanism.
+ *
+ * A call that named another panel is asked about the mechanism straight away; a
+ * call that named none is asked which panel first, and when that answer is
+ * another panel it is asked how to reach it — one decision per question.
+ */
+async function confirmPlan(
+  ctx: Context,
+  exec: unknown,
+  service: HomeHostedService,
+  plan: Extract<TargetPlan, { ok: true }>,
+): Promise<TargetDecision> {
+  if (plan.ask === null)
+    return { ok: true, home: plan.home, via: null }
+  const instances = await inventoryOf(service)
+  const managed = instances.find(instance => instance.managed)
+  if (plan.ask === 'foreign') {
+    const target = instances.find(instance => instance.home === plan.home)
+    // A panel that vanished between validation and here is not worth a question.
+    return target === undefined
+      ? { ok: false, text: refusalForUnknownPanel(instances, plan.home) }
+      : await askForeignPanel(ctx, exec, instances, target, plan.mechanisms)
+  }
+  if (managed === undefined)
+    return { ok: true, home: null, via: null }
+  const others = instances.filter(instance => !instance.managed)
+  const picked = await askWhichPanel(ctx, exec, instances, managed, others, plan.mechanisms)
+  if (!picked.ok || picked.home === null)
+    return picked
+  const chosen = instances.find(instance => instance.home === picked.home)
+  if (chosen === undefined || chosen.managed)
+    return picked
+  return await askForeignPanel(ctx, exec, instances, chosen, plan.mechanisms)
 }
 
 /** Error codes that mean the panel refused the plugin's credential. */
@@ -233,10 +651,26 @@ function registerOne(ctx: Context, service: HomeHostedService, settings: Setting
     },
     async execute(args, exec) {
       const input = (args ?? {}) as Input
+      // Argument handling is not a panel call: a bad input is reported as-is,
+      // never "repaired" by minting a token.
+      let request: { endpoint: RpcEndpoint, payload: unknown }
+      try {
+        request = spec.run(input)
+      }
+      catch (error) {
+        return failureText(error)
+      }
+
       const mode = sandboxMode(ctx, exec)
-      // Fail closed: only a positively identified read-only action skips the gate,
-      // and an unknown action still asks.
+      // Fail closed: only a positively identified read-only action skips the
+      // gate; an unknown action is rejected by the argument check above.
       const mutating = mutatingTool && !(READ_ONLY_ACTIONS[name]?.(input) ?? false)
+      // The panel is settled before permission is asked: a refusal here changes
+      // nothing, and no question is put to the user for a call that will not run.
+      const plan = await planTarget(service, settings, request.endpoint, stringArg(input, 'instance'), mutating)
+      if (!plan.ok)
+        return plan.text
+
       if (mutating && mode !== 'danger-full-access') {
         const remedy = 'Set the session to Full access (danger-full-access), or use a session where approvals can be answered.'
         const approval = ctx.get('approval') as ApprovalLike | undefined
@@ -251,21 +685,26 @@ function registerOne(ctx: Context, service: HomeHostedService, settings: Setting
           return `refused: approval answered "${outcome}" (session sandbox: ${mode ?? 'unknown'}). ${remedy}`
       }
 
-      // Argument handling is not a panel call: a bad input is reported as-is,
-      // never "repaired" by minting a token.
-      let request: { endpoint: RpcEndpoint, payload: unknown }
-      try {
-        request = spec.run(input)
-      }
-      catch (error) {
-        return failureText(error)
-      }
+      const target = await confirmPlan(ctx, exec, service, plan)
+      if (!target.ok)
+        return target.text
+      const payload = target.home === null
+        ? request.payload
+        : withTarget(request.payload, target.home, target.via ?? FOREIGN_MECHANISMS[request.endpoint]?.[0] ?? null)
+      // What another panel's result must carry: the model may not have been the
+      // one that chose it, and a config edit has no page to show.
+      const landing = target.home === null
+        ? ''
+        : `\n\nhome-hosted: ${plan.ask === null ? 'read from' : 'acted on'} ${target.home}, not the panel this plugin manages`
+          + `${target.via === null ? '' : `, ${MECHANISM_WORDING[target.via].phrase}`}.`
 
       try {
-        return JSON.stringify(await service.call(request.endpoint, request.payload), null, 2)
+        return `${JSON.stringify(await service.call(request.endpoint, payload), null, 2)}${landing}`
       }
       catch (error) {
-        if (!settings.get().reclaimToken || !(await tokenRefused(service, error)))
+        // A foreign call carries its own credential; repairing this plugin's
+        // managed token would churn it and still fail the retry.
+        if (target.home !== null || !settings.get().reclaimToken || !(await tokenRefused(service, error)))
           return failureText(error)
 
         // One repair, one retry. The reclaim is a write, but it repairs this
@@ -278,7 +717,7 @@ function registerOne(ctx: Context, service: HomeHostedService, settings: Setting
           return `${failureText(error)} (token reclaim failed: ${messageOf(reclaimError)})`
         }
         try {
-          return JSON.stringify(await service.call(request.endpoint, request.payload), null, 2)
+          return `${JSON.stringify(await service.call(request.endpoint, payload), null, 2)}${landing}`
         }
         catch (retryError) {
           return failureText(retryError)
