@@ -45,10 +45,29 @@ describe('which panel root one plugin instance drives', () => {
     expect(resolveHomeHostedHome(other, {}, home).home).not.toBe(path.join(state, 'panel'))
   })
 
+  it('never adopts the machine-wide panel for a home that has not run this plugin', () => {
+    const { state, home } = roots()
+    const legacy = path.join(home, '.home-hosted')
+    writeJsonFile(path.join(legacy, 'servers.config.json'), { servers: [] })
+    // A scratch `DSH_HOME` or a test project: its own root, not somebody else's
+    // panel — reaching over would edit a config this instance was never given.
+    expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: path.join(state, 'panel'), source: 'instance' })
+
+    // The same home once it has run the plugin: then the panel is its own.
+    writeJsonFile(path.join(state, 'settings.json'), { version: 1 })
+    expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: legacy, source: 'legacy' })
+
+    // An install whose state dir is the machine default adopts it either way.
+    const machine = path.join(home, '.dsh', 'dsh-home-hosted')
+    expect(resolveHomeHostedHome(machine, {}, home)).toEqual({ home: legacy, source: 'legacy' })
+  })
+
   it('adopts a legacy panel that is really there, not a stale runtime file', () => {
     const { state, home } = roots()
     const legacy = path.join(home, '.home-hosted')
     writeJsonFile(path.join(legacy, 'servers.config.json'), { servers: [] })
+    // Established by its own settings, so the machine-wide panel is its to keep.
+    writeJsonFile(path.join(state, 'settings.json'), { version: 1 })
     expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: legacy, source: 'legacy' })
 
     // A `run.json` alone survives a crash, so a dead pid is not a panel.

@@ -50,10 +50,27 @@ export function resolveHomeHostedHome(
   const configured = env.HHOSTED_HOME?.trim()
   if (configured)
     return { home: resolveUnder(configured, homeDir), source: 'env' }
+  const state = resolveUnder(stateDir, homeDir)
+  // The machine-wide panel is only this instance's to adopt when this instance
+  // is the machine's own harness home, or when it has run before (its settings
+  // are there). A home created fresh — a scratch `DSH_HOME`, a test project —
+  // never reaches over and drives the panel some other install owns.
   const legacy = path.join(homeDir, '.home-hosted')
-  if (hasLivePanel(legacy))
+  if (isEstablishedInstance(state, homeDir) && hasLivePanel(legacy))
     return { home: legacy, source: 'legacy' }
-  return { home: path.join(resolveUnder(stateDir, homeDir), 'panel'), source: 'instance' }
+  return { home: path.join(state, 'panel'), source: 'instance' }
+}
+
+/** Whether this state dir is the machine's own install, or one that has run before. */
+function isEstablishedInstance(stateDir: string, homeDir: string): boolean {
+  if (stateDir === path.join(homeDir, '.dsh', 'dsh-home-hosted'))
+    return true
+  try {
+    return fs.statSync(path.join(stateDir, 'settings.json')).isFile()
+  }
+  catch {
+    return false
+  }
 }
 
 /**

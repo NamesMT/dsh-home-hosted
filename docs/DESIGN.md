@@ -95,7 +95,10 @@ explicit `$HHOSTED_HOME` still wins, and a panel already living at
 every server look like it vanished), but otherwise the root is the instance's own
 `<stateDir>/panel`. Only a root with a `servers.config.json` counts, or a
 `run.json` whose pid is alive — a killed panel leaves a runtime file behind, and
-adopting on that would point a fresh install at somebody's dead root.
+adopting on that would point a fresh install at somebody's dead root. Adoption is
+also limited to an instance that already exists: the machine's own harness home,
+or a state dir that already holds settings. A scratch `DSH_HOME` or a test
+project must not reach over and drive the panel some other install owns.
 
 The boot artifact name follows the state root too, but keyed on the *machine*
 default: `home-hosted` only for `~/.dsh/dsh-home-hosted`, `home-hosted-<hash>`
