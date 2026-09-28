@@ -175,7 +175,7 @@ channel).
 `onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and
 an older panel handed either key can refuse to *boot* from the config. The plugin
 used to consult the answering panel's version and refuse or drop them
-(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.6.7` and
+(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.6.8` and
 autostarts its own copy, so a panel older than those keys is only reachable by
 deliberately preferring an old global install — and this is pre-1.0. Supporting
 older panels again means bringing that check back from history, not re-deriving

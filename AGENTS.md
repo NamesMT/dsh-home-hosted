@@ -85,7 +85,7 @@ service manager, or restart the harness you are running in to "check" something.
   repairs an entry that exists — it never installs one.
 - An entry this process runs as is never deleted (the panel is told to stop it); "stop managing" pauses
   or restores it instead.
-- Only the `home-hosted` this plugin pins is supported (`^0.6.6`): the `kill`/`persistent` version
+- Only the `home-hosted` this plugin pins is supported (`^0.6.8`): the `kill`/`persistent` version
   guards were dropped pre-1.0, so an older panel handed those keys can refuse to boot — see DESIGN.
 
 ## Where to extend
