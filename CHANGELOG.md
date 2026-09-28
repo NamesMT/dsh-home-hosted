@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.4.3
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.2...v0.4.3)
+
+### 🩹 Fixes
+
+- Never adopt the machine-wide panel from a home that never ran this plugin ([0bbff6b](https://github.com/NamesMT/dsh-home-hosted/commit/0bbff6b))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.4.2
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.1...v0.4.2)
