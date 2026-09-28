@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.4.1
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.0...v0.4.1)
+
+### 🩹 Fixes
+
+- Name the boot artifact per install, and finish the stop button ([9eabae8](https://github.com/NamesMT/dsh-home-hosted/commit/9eabae8))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.4.0
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.3.3...v0.4.0)
