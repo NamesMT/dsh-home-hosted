@@ -193,15 +193,16 @@ home-hosted 0.7 made a workspace the ownership boundary: each has its own
 `run.json` stay at `.hh/`. A server id is therefore only unique *inside* a
 workspace, and every call has to say which one it means.
 
-The plugin manages exactly one workspace — the `workspace` setting, default
-`default` — because its intent (the `dsh` entry, snapshots, reconcile) is a
-promise about one entry in one place. The page and the agent tools are not
+The plugin manages exactly one workspace — **the panel's `default`**, fixed —
+because its intent (the `dsh` entry, snapshots, reconcile) is a promise about one
+entry in one place. Making that a setting bought nothing but a way to write into
+the wrong workspace, so it is a constant. The page and the agent tools are not
 limited to it: they list every workspace the panel serves
 (`workspaces.list`, `/api/workspaces` when it answers, the registry plus the
 workspace files when it does not) and act on any of them by naming it
 (`workspace` on the payload, `?workspace=` on the API, `.hh/<workspace>/…` on
-disk). Only the managed workspace is *reconciled*; another one is managed the way
-a person would manage it.
+disk). Only `default` is *reconciled*; another workspace is managed the way a
+person would manage it.
 
 A pre-0.7 root is not read or written at all. It is recognised (a `legacyRoot`
 flag on the status), refused on every write, and fixed through one action that

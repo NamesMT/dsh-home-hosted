@@ -103,8 +103,8 @@ describe('the workspace picker', () => {
     expect(markup).toContain('edge')
     expect(markup).toContain(en.workspacesManagedTag)
     expect(markup).toContain(t('workspacesCounts', { servers: 2, running: 1 }))
-    // The managed workspace is the value the setting select carries.
-    expect(markup).toMatch(/<option value="default" selected=""/)
+    // The managed workspace is marked, never chosen: it is the panel's default.
+    expect(markup).not.toContain('Workspace the plugin manages')
   })
 
   it('says a file-sourced list is not live state', () => {

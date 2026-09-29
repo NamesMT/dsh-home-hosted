@@ -29,8 +29,7 @@ export const en = {
   uiStyleCompact: 'Compact',
 
   workspacesTitle: 'Workspaces',
-  workspacesHint:
-    'Every workspace this panel serves. Viewing one decides what this page lists; the plugin manages exactly one for reconcile, the {id} entry and boot autostart.',
+  workspacesHint: 'Every workspace this panel serves. Viewing one decides what this page lists.',
   workspacesViewLabel: 'Workspace to view',
   workspacesEmpty: 'The panel reports no workspaces yet.',
   workspacesManagedTag: 'managed by the plugin',
@@ -39,9 +38,6 @@ export const en = {
   workspacesCountsFile: '{servers} in the config files',
   workspacesDegraded:
     'The panel is not answering, so these counts — and the entry list below — come from the workspace config files, not from live state.',
-  workspaceManagedLabel: 'Workspace the plugin manages',
-  workspaceManagedHint:
-    'Reconcile, the {id} entry and boot autostart apply to this workspace alone. Viewing another one never changes it.',
   workspaceLegacyTitle: 'This state root still uses the pre-0.7 layout',
   workspaceLegacyBody:
     'The plugin cannot read or write its files until they move into .hh. Starting the panel once does the same move; this runs it directly.',
@@ -277,7 +273,7 @@ export const zh: Record<keyof typeof en, string> = {
   uiStyleCompact: '紧凑',
 
   workspacesTitle: '工作区',
-  workspacesHint: '此面板提供的所有工作区。查看哪一个决定本页列出什么；插件只管理其中一个，用于协调、{id} 条目和开机自启。',
+  workspacesHint: '此面板提供的所有工作区。查看哪个就列出哪个。',
   workspacesViewLabel: '要查看的工作区',
   workspacesEmpty: '面板尚未报告任何工作区。',
   workspacesManagedTag: '由插件管理',
@@ -285,8 +281,6 @@ export const zh: Record<keyof typeof en, string> = {
   workspacesCounts: '{servers} 个服务器 · {running} 个运行中',
   workspacesCountsFile: '配置文件中 {servers} 个',
   workspacesDegraded: '面板没有响应，因此这些计数——以及下方的条目列表——来自工作区配置文件，而不是实时状态。',
-  workspaceManagedLabel: '插件管理的工作区',
-  workspaceManagedHint: '协调、{id} 条目和开机自启只作用于这个工作区。查看其他工作区不会改变它。',
   workspaceLegacyTitle: '该状态目录仍是 0.7 之前的布局',
   workspaceLegacyBody: '在文件移入 .hh 之前，插件无法读取或写入它们。启动一次面板即可完成同样的迁移；此按钮直接执行该命令。',
   workspaceMigrate: '迁移状态目录',

@@ -149,9 +149,14 @@ export class HomeHostedService extends Service {
     return this.options.projectDir ?? process.cwd()
   }
 
-  /** The workspace this plugin manages; server ids are only unique inside one. */
+  /**
+   * The workspace this plugin manages. Fixed to the panel's own default: one
+   * workspace is what its intent (reconcile, the harness entry, snapshots) is
+   * about, and a setting for it bought nothing but a way to write into the wrong
+   * one. Every other workspace is still reachable per call.
+   */
   private managedWorkspace(): string {
-    return this.options.settings.get().workspace
+    return DEFAULT_WORKSPACE
   }
 
   private async resolveDsh(dshHome: string, projectDir: string | null = this.projectDir()): Promise<DshLaunch | null> {

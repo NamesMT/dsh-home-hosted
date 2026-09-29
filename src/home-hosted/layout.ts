@@ -8,9 +8,11 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { DEFAULT_WORKSPACE } from '../shared/contracts.js'
+
+export { DEFAULT_WORKSPACE }
 
 export const HH_DIR = '.hh'
-export const DEFAULT_WORKSPACE = 'default'
 
 export function hhDir(home: string): string {
   return path.join(home, HH_DIR)

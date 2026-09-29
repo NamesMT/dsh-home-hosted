@@ -1076,32 +1076,32 @@ describe('a managed entry someone deleted', () => {
 })
 
 describe('the managed workspace', () => {
-  it('writes a managed entry into the chosen workspace, never into `default`', async () => {
-    const { home, service, settings } = await harness()
-    // A registry with more than one workspace: the setting decides which is ours.
+  it('writes the managed entry into the panel\'s default workspace', async () => {
+    const { home, service } = await harness()
     makeHhHome(home, { workspaces: ['default', 'alpha'] })
-    settings.update({ workspace: 'alpha' })
 
     await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }] })
 
-    expect(findEntry(readConfig(home, 'alpha').raw!, 'dsh')).toMatchObject({ onPortConflict: 'kill' })
-    expect(fs.existsSync(serversFile(home, 'default'))).toBe(false)
-    expect((await service.status()).workspace).toBe('alpha')
+    expect(findEntry(readConfig(home, 'default').raw!, 'dsh')).toMatchObject({ onPortConflict: 'kill' })
+    // Another workspace is not the plugin's to reconcile into.
+    expect(fs.existsSync(serversFile(home, 'alpha'))).toBe(false)
+    expect((await service.status()).workspace).toBe('default')
   })
 
-  it('carries the managed workspace into every panel API call', async () => {
+  it('carries the named workspace into a panel API call, defaulting to `default`', async () => {
     const panel = await withPanel()
-    const { home, service, settings } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    const { home, service } = await harness({ panel, onEnroll: token => { panel.token = token } })
     makeHhHome(home, { workspaces: ['default', 'alpha'] })
-    settings.update({ workspace: 'alpha' })
 
     await service.call('servers.create', { entry: { id: 'notes', command: 'sleep' } })
+    expect(panel.requests.find(request => request.method === 'POST' && request.path === '/api/servers')?.workspace).toBe('default')
 
-    const created = panel.requests.find(request => request.method === 'POST' && request.path === '/api/servers')
-    expect(created?.workspace).toBe('alpha')
-    expect(panel.servers.find(entry => entry.id === 'notes')?.workspace).toBe('alpha')
-    // A server id is only unique inside a workspace, so the default one is untouched.
-    expect(panel.servers.some(entry => (entry.workspace ?? 'default') === 'default')).toBe(false)
+    // A call that names another workspace acts there, and only there.
+    await service.call('servers.create', { workspace: 'alpha', entry: { id: 'alpha-notes', command: 'sleep' } })
+    const posts = panel.requests.filter(request => request.method === 'POST' && request.path === '/api/servers')
+    expect(posts.at(-1)?.workspace).toBe('alpha')
+    expect(panel.servers.find(entry => entry.id === 'notes')?.workspace).toBe('default')
+    expect(panel.servers.find(entry => entry.id === 'alpha-notes')?.workspace).toBe('alpha')
   })
 
   it('names a workspace the panel would reject, instead of deriving a path from it', async () => {

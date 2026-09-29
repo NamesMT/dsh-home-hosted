@@ -1,18 +1,18 @@
 /**
- * Which workspace the page looks at, and which one the plugin manages.
+ * Which workspace the page looks at.
  *
- * The two are deliberately separate controls: the view moves freely across every
- * workspace the panel serves, while the setting is the one workspace the plugin's
- * intent (reconcile, the harness entry, boot autostart) applies to.
+ * The view moves freely across every workspace the panel serves; the one the
+ * plugin's intent (reconcile, the harness entry, boot autostart) applies to is
+ * the panel's default, and it is marked rather than chosen.
  */
 import { useState } from 'react'
 import type { WorkspaceSummary } from '../shared/contracts.js'
-import { isWorkspaceId } from '../shared/contracts.js'
+import { DEFAULT_WORKSPACE } from '../shared/contracts.js'
 import { rpc } from './api.js'
 import type { TranslateFn } from './context.js'
 import { IconLayers } from './icons.js'
 import type { WorkspacesSectionProps } from './props.js'
-import { Button, Chip, Hint, Note, Option, Section, Select, Tag } from './ui.js'
+import { Button, Chip, Hint, Note, Option, Section, Tag } from './ui.js'
 
 /** `id`, or `id — label` when the registry carries a distinct human label. */
 function workspaceLabel(workspace: WorkspaceSummary): string {
@@ -27,24 +27,15 @@ function countsText(workspace: WorkspaceSummary, t: TranslateFn): string {
     : t('workspacesCounts', { servers: workspace.servers, running: workspace.running })
 }
 
-export function WorkspacesSection({ t, status, run, updateSettings, busy, viewing, onView }: WorkspacesSectionProps) {
+export function WorkspacesSection({ t, status, run, busy, viewing, onView }: WorkspacesSectionProps) {
   const workspaces = status.workspaces ?? []
-  const managedId = status.settings.workspace
+  const managedId = status.workspace ?? DEFAULT_WORKSPACE
   const entryId = status.defaultEntryId ?? 'dsh'
   // `legacyRoot` is the host's own word for it; the error text is the fallback for
   // a host that predates the field but still refuses the write.
   const migratable = status.legacyRoot === true || (status.lastError ?? '').includes('pre-0.7')
   const degraded = workspaces.some(workspace => workspace.source === 'file')
   const [migrateNote, setMigrateNote] = useState<string | null>(null)
-
-  // The managed workspace may be unlisted (a panel that is down, a root without a
-  // registry yet), and it must stay selectable — the setting still names it.
-  const managedOptions = workspaces.map(workspace => ({
-    value: workspace.id,
-    label: workspaceLabel(workspace),
-  }))
-  if (!managedOptions.some(option => option.value === managedId) && isWorkspaceId(managedId))
-    managedOptions.unshift({ value: managedId, label: managedId })
 
   const migrate = async (): Promise<void> => {
     const envelope = await run('panel.migrate', () => rpc('panel.migrate', {}))
@@ -91,18 +82,6 @@ export function WorkspacesSection({ t, status, run, updateSettings, busy, viewin
           )}
 
       {degraded ? <Note tone="warn">{t('workspacesDegraded')}</Note> : null}
-
-      <div className="hh-field-block">
-        <span className="hh-field-label">{t('workspaceManagedLabel')}</span>
-        <Select
-          value={managedId}
-          label={t('workspaceManagedLabel')}
-          disabled={busy === 'settings'}
-          options={managedOptions}
-          onChange={workspace => updateSettings(current => ({ ...current, workspace }))}
-        />
-        <Hint>{t('workspaceManagedHint', { id: entryId })}</Hint>
-      </div>
 
       {migratable
         ? (

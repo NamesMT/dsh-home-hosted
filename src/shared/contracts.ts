@@ -48,6 +48,9 @@ export type RpcEndpoint =
   | 'settings.update'
 
 /** A settings write sends only the changed subtree; the host merges group by group. */
+/** The workspace every panel has, and the one this plugin manages. */
+export const DEFAULT_WORKSPACE = 'default'
+
 /** The panel's workspace id shape; the same regex its own schema enforces. */
 export const WORKSPACE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
 
@@ -58,7 +61,6 @@ export function isWorkspaceId(value: unknown): value is string {
 export interface SettingsPatch {
   autostart?: Partial<PluginSettings['autostart']>
   manageDsh?: boolean
-  workspace?: string
   entries?: PluginSettings['entries']
   panel?: Partial<PluginSettings['panel']>
   authNotice?: boolean
@@ -449,12 +451,6 @@ export interface PluginSettings {
   }
   /** Manage the running harness as a home-hosted entry. */
   manageDsh: boolean
-  /**
-   * The workspace this plugin manages. Server ids are only unique inside one, so
-   * this decides which file an entry write lands in and which `?workspace=` the
-   * API carries. Every other workspace is still reachable from the page.
-   */
-  workspace: string
   entries: EntryIntent[]
   agentTools: {
     enabled: boolean
@@ -501,7 +497,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   version: SETTINGS_VERSION,
   autostart: { enabled: false, mechanism: 'auto' },
   manageDsh: false,
-  workspace: 'default',
   entries: [],
   // Every tool on by default; the session's own permission mode is what gates them.
   agentTools: { enabled: true, allow: [...AGENT_TOOL_NAMES] },

@@ -10,13 +10,14 @@ Status: **in progress**. Target plugin release: **0.5.0** (0.x minor = the break
 | 3 runtime/token/instances | done (`runFile`, `secretsFile`, state-root and adoption detection) |
 | 4 API client | done (`?workspace=` on every servers call, `listWorkspaces`, `settings`) |
 | 5 service | done (managed workspace, snapshots v2, foreign helpers, `--workspace`, log URL, `panel.migrate`) |
-| 6 surface | with teammate `client` (page picker, `workspace` tool param, `workspaces_list`, locales) |
+| 6 surface | done (page picker + migrate action, `workspace` tool param, `workspaces_list`, locales); the managed-workspace setting was removed after review |
 | 7 dependency/docs/release | dependency pinned `^0.7.1`, floor `0.7.0`, docs in progress; release pending |
 
 Decisions taken:
-- **D1 — one plugin setting, `workspace`, default `default`.** Every API call sends `?workspace=<id>`; every
-  file write uses `.hh/<id>/…`. Sending the query to a panel that does not know it is harmless (its query
-  schemas do not reject undeclared keys).
+- **D1 — the managed workspace is the panel's `default`, fixed.** Every API call sends `?workspace=<id>`
+  (the managed one unless the call names another); every file write uses `.hh/<id>/…`. A configurable
+  managed workspace was built and then removed: it bought nothing but a way to write into the wrong
+  workspace.
 - **D1b — the page and the tools reach *every* workspace, fully.** Nothing about another workspace is read-only:
   `workspaces.list`, `servers.*` with a `workspace`, and the picker all act on it. Only the plugin's own intent
   (the `dsh` entry, snapshots, reconcile) is bound to one workspace, because that promise is about one entry.
@@ -58,7 +59,7 @@ Verified against the 0.7.1 source: `.hh` paths and helpers in `src/helpers/paths
 
 | # | decision | choice |
 | --- | --- | --- |
-| D1 | Workspace the plugin manages | one plugin setting `workspace`, default `default` (validated against the panel's list when it answers) |
+| D1 | Workspace the plugin manages | the panel's `default`, fixed (a setting was tried and removed) |
 | D2 | Pre-0.7 roots | not supported for reads or writes; 0.7+ required |
 | D3 | The managed entry id | `defaultEntryId` (`dsh`) keyed by `(workspace, id)` — a `dsh` in another workspace is a different entry |
 | D4 | The page's server list | every workspace, selectable; the managed one is named as such |
@@ -102,7 +103,7 @@ query — the test asserts the query is what selects it.
 gains a workspace key with a read-time migration from the flat shape. `configuredPort()` reads `.hh/settings.json`;
 `applyPanelPort()` patches it. Foreign panels use the same fixed 0.7 paths and the managed workspace (or the
 workspace named by the call). `panelLogUrl()` becomes `/w/<workspace>/logs?server=<id>` — the legacy `/logs?…`
-redirects to the **default** workspace, which is wrong once D1 allows another.
+redirects to the **default** workspace, which is wrong once a call may name another.
 Verify: dsh entry add/repair/pause/restore on 0.7.1; a foreign panel edit; the log URL lands on the right workspace.
 
 **Stage 6 — surface.** Plugin setting `workspace`; tool parameter `workspace` on
@@ -156,6 +157,6 @@ and a 0.6 binary would need those files back at the root.
 
 ## 9. Remaining
 
-- `tests` and `client` teammates land stages 0 and 6.
+- Stages 0 and 6 landed (teammates `tests` and `client`); the `workspace` setting removal followed.
 - Rebuild `lib/**`, run the platform gate through a release dry run, then release 0.5.0 with the
   `BREAKING CHANGE:` footer naming the upgrade order (plugin first, then let the panel start once on 0.7).

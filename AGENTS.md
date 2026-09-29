@@ -49,10 +49,10 @@ service manager, or restart the harness you are running in to "check" something.
 - Writes go through the authenticated panel API when it answers and the token proves itself,
   otherwise straight to `.hh/<workspace>/servers.config.json` (atomic write, schema-shaped); the
   panel's `control` lives in `.hh/settings.json` and is patched there.
-- **A server id is only unique inside a workspace**: every read and write names one — the plugin's
-  `workspace` setting for the managed panel, `?workspace=` on the API, `.hh/<workspace>/…` on disk,
-  and `workspace` in an RPC payload or tool argument for anything else. A missing workspace means the
-  managed one (another panel: its default).
+- **A server id is only unique inside a workspace**: every read and write names one — `?workspace=`
+  on the API, `.hh/<workspace>/…` on disk, and `workspace` in an RPC payload or tool argument. A
+  missing workspace means the panel's `default`, which is also the only one the plugin *manages*
+  (reconcile, the `dsh` entry, snapshots); every other one is reachable per call.
 - A pre-0.7 root is never read or written; it is only *recognised* (`isLegacyRoot`), reported as
   `legacyRoot`, and fixed by `panel.migrate` (`home-hosted migrate --yes`).
 - The settings file is versioned (`SETTINGS_VERSION`). Migrate on **read**, never in `update()`; an
