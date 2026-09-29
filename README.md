@@ -114,6 +114,13 @@ A tool that changes something asks for approval **only** when the session is not
 When the process cannot elevate, the page prints the exact commands instead — including the
 `launchd-daemon` that starts a Mac **before** login.
 
+A boot entry runs the panel as the person who installed it: the account comes from the login that
+elevated (`SUDO_UID`) or from the panel root's owner, not from `$USER`.
+<sub>An entry with no account to name runs the panel as root — that is the default, and the page
+says so rather than hiding it. A `User=` systemd cannot resolve is refused too, because it makes
+the unit fail to start. Moving an install from root to a user later needs
+`chown -R <user> <home>`.</sub>
+
 </details>
 
 <details>

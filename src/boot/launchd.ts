@@ -10,6 +10,7 @@ import type { BootCandidate, BootState } from '../shared/contracts.js'
 import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
+  assertUserName,
   assertArg,
   assertEnvKey,
   assertLabel,
@@ -21,6 +22,7 @@ import {
 } from './escape.js'
 import {
   bootState,
+  bootUserName,
   errorMessage,
   failed,
   inspectOwned,
@@ -28,7 +30,6 @@ import {
   removeOwned,
   tempDir,
   uidOf,
-  userNameOf,
   writeOwned,
 } from './common.js'
 
@@ -67,7 +68,10 @@ export interface LaunchdPlistOptions {
 export function launchdPlist(spec: BootSpec, options: LaunchdPlistOptions = {}): string {
   validate(spec)
   const label = launchdLabel(spec)
-  const userName = options.userName?.trim()
+  // XML escaping would keep a hostile name from breaking the plist, but `UserName`
+  // also has to be a name launchd can resolve — so it is validated, not escaped.
+  const named = options.userName?.trim()
+  const userName = named === undefined || named.length === 0 ? undefined : assertUserName(named)
   const out = path.posix.join(spec.logDir, `${label}.out.log`)
   const err = path.posix.join(spec.logDir, `${label}.err.log`)
   const envKeys = Object.keys(spec.env)
@@ -246,7 +250,12 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         validate(spec)
         const file = pathOf(spec)
         const label = launchdLabel(spec)
-        const content = launchdPlist(spec, mode === 'daemon' ? { userName: userNameOf(ctx) } : {})
+        // A LaunchDaemon is the same hazard as a system unit: `UserName` missing
+        // means launchd runs it as root, and `$USER` is root whenever the panel
+        // was started from a root shell. So the account comes from the login that
+        // elevated (or this process's own euid), never from the environment, and
+        // root is refused rather than written as if it were a choice.
+        const content = launchdPlist(spec, mode === 'daemon' ? { userName: bootUserName(ctx) } : {})
         const own = inspectOwned(file, spec.marker)
         if (own.exists && !own.owned)
           return failed(own.reason ?? 'foreign file')

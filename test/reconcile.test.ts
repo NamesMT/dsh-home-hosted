@@ -4,6 +4,8 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BootStatus } from '../src/shared/contracts.js'
 import type { BootSpec } from '../src/boot/types.js'
+import { parsePasswd } from '../src/boot/common.js'
+import type { PasswdEntry } from '../src/boot/types.js'
 import { HomeHostedService } from '../src/service.js'
 import type { BootInstallResult, BootLadderLike } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
@@ -49,7 +51,7 @@ interface Harness {
  * written when `unitFile: true`, so a test can describe "reported installed, but
  * nothing on disk".
  */
-function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean } = {}): Harness {
+function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean, env?: Record<string, string | undefined>, uid?: number | null, passwd?: readonly PasswdEntry[] } = {}): Harness {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -89,6 +91,10 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     defaultEntryId: 'dsh',
     settings,
     createLadder: () => ladder,
+    // Pinned so account resolution never depends on who runs the suite.
+    env: options.env ?? {},
+    uid: options.uid === undefined ? null : options.uid,
+    passwd: options.passwd,
   })
 
   return { service, installs, unitPath, state, fakeCli, specs, settings }
@@ -146,6 +152,64 @@ describe('boot entry target', () => {
     // node_modules path cannot break boot.
     expect(spec!.args).not.toContain(fakeCli)
     expect(spec!.args).toEqual(expect.arrayContaining(['up', '--foreground']))
+  })
+})
+
+describe('the account an entry runs as', () => {
+  // The user database is injected, so the expected home below is a fixture rather
+  // than a fact about the accounts the CI machine was provisioned with.
+  const PASSWD = parsePasswd(['root:x:0:0:root:/root:/bin/sh', 'ci:x:1000:1000:CI:/home/ci:/bin/sh'].join('\n'))
+  const OTHER_UID = '1000'
+
+  it('takes HOME from the login that elevated, not from a root environment', async () => {
+    // The bug's fingerprint: `sudo` leaves USER=root and HOME=/root behind, so the
+    // entry it wrote told the panel its home was root's.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'root', HOME: '/root', SUDO_UID: OTHER_UID }, uid: 0, passwd: PASSWD },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe('/home/ci')
+    expect(specs[0]?.env.HOME).not.toBe('/root')
+    // `User=` makes systemd set $USER itself, so the spec does not need to guess it.
+    expect(specs[0]?.env.USER).toBeUndefined()
+  })
+
+  it('omits HOME rather than handing the panel the installer\'s /root', async () => {
+    // An LDAP/NIS login has no passwd row, so its home is not knowable here. An
+    // explicit `Environment=HOME=` overrides `User=`, so leaving the installer's
+    // `/root` in place would give the panel root's home while it runs as somebody
+    // else — the failure DESIGN describes as "a permission error that never
+    // mentions its own user". Dropping the line lets systemd supply the right one.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'root', HOME: '/root', SUDO_USER: 'ldapuser', SUDO_UID: '2500' }, uid: 0, passwd: PASSWD },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBeUndefined()
+    expect(specs[0]?.env.HHOSTED_HOME).toBeDefined()
+  })
+
+  it('leaves the environment byte-identical when the account home matches it', async () => {
+    // The reconcile guarantee: a spec that merely repeats this process's own
+    // environment must not look like a change, or every startup rewrites the entry.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'ci', HOME: '/home/ci', UID: '1000' }, uid: 1000, passwd: PASSWD },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe('/home/ci')
+  })
+
+  it('takes the account home over an ambient one that disagrees', async () => {
+    // `Environment=HOME=` overrides `User=` on real systemd, so an ambient `$HOME`
+    // that is not the account's (root's, under sudo) is the value that must lose.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'ci', HOME: '/root', UID: '1000' }, uid: 1000, passwd: PASSWD },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe('/home/ci')
   })
 })
 

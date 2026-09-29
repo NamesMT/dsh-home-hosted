@@ -9,6 +9,7 @@ import type { BootCandidate, BootState } from '../shared/contracts.js'
 import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
+  assertUserName,
   assertArg,
   assertEnvKey,
   assertLabel,
@@ -20,8 +21,11 @@ import {
   systemdPath,
   systemdText,
 } from './escape.js'
+import type { FileOwnership } from './common.js'
 import {
+  accountOf,
   bootState,
+  bootUserName,
   configHome,
   currentUser,
   errorMessage,
@@ -58,6 +62,30 @@ function envLines(spec: BootSpec): string[] {
 
 const MANAGED = (spec: BootSpec): string => `# Managed by ${spec.marker}`
 
+function codeOf(result: { code: number | null, error?: string | null }): number | null {
+  return result.error ? null : result.code
+}
+
+/**
+ * What a status read says about the account the installed unit runs as.
+ *
+ * A unit this plugin wrote that names no `User=` runs the panel as root, and one
+ * that names somebody else is running a panel that is not that person's — either
+ * way a server which refuses root crash-loops with no hint that the panel's own
+ * user is the cause. So the account is stated where the operator is already
+ * looking, and the remedy is the install button already on the page.
+ */
+function accountNote(own: FileOwnership, ctx: BootProviderContext): string {
+  if (!own.owned || own.text === null)
+    return ''
+  // Only the root outcome is reachable: any other name in a unit this plugin wrote
+  // came from this same resolver, so it is the name the resolver would pick now.
+  const declared = /^User=(.*)$/m.exec(own.text)?.[1]?.trim() ?? ''
+  return declared === '' || declared === 'root'
+    ? '; the unit names no other user, so the panel runs as root — install again from the account that should own it'
+    : ''
+}
+
 /** `Type=exec` with an explicit environment; boot capability comes from linger, not from this file. */
 export function systemdUserUnit(spec: BootSpec): string {
   validate(spec)
@@ -71,6 +99,14 @@ export function systemdUserUnit(spec: BootSpec): string {
     'Type=exec',
     `ExecStart=${[spec.command, ...spec.args].map(systemdExecWord).join(' ')}`,
     `WorkingDirectory=${systemdPath(spec.cwd, 'spec.cwd')}`,
+    // A persistent entry survives a panel restart only because its nanny is not
+    // the panel. The nanny is spawned `detached`, which gives it its own session —
+    // but *not* its own cgroup, so the default `KillMode=control-group` kills it
+    // with the panel and takes the entry down too, quietly falsifying what
+    // `persistent: true` promises. `process` signals the panel alone. (An ordinary
+    // entry is spawned detached as well, so this keeps every supervised server, not
+    // only the nannies — the panel re-adopts such a survivor by its port.)
+    'KillMode=process',
     'Restart=always',
     'RestartSec=5',
     ...envLines(spec),
@@ -82,8 +118,12 @@ export function systemdUserUnit(spec: BootSpec): string {
 }
 
 /**
- * The system unit. `StartLimit*` belongs in `[Unit]`, not `[Service]`; `User=`
- * is written only when we are root and know the target account.
+ * The system unit. `StartLimit*` belongs in `[Unit]`, not `[Service]`.
+ *
+ * `User=` is written when the entry has a real account to run as, and *never* as
+ * `root`: an entry with no `User=` already runs as root, so naming it changes
+ * nothing except to make the silent default look deliberate. A root account is
+ * therefore refused loudly (by {@link bootUserName}) and the directive omitted.
  */
 export function systemdSystemUnit(spec: BootSpec, user: string | null = null): string {
   validate(spec)
@@ -96,10 +136,12 @@ export function systemdSystemUnit(spec: BootSpec, user: string | null = null): s
     'StartLimitBurst=5',
     '',
     '[Service]',
-    ...(user ? [`User=${user}`] : []),
+    ...(user === null || user === '' || user === 'root' ? [] : [`User=${assertUserName(user)}`]),
     'Type=exec',
     `ExecStart=${[spec.command, ...spec.args].map(systemdExecWord).join(' ')}`,
     `WorkingDirectory=${systemdPath(spec.cwd, 'spec.cwd')}`,
+    // See the user unit: `control-group` would kill the nannies too.
+    'KillMode=process',
     'Restart=always',
     'RestartSec=5',
     ...envLines(spec),
@@ -108,10 +150,6 @@ export function systemdSystemUnit(spec: BootSpec, user: string | null = null): s
     'WantedBy=multi-user.target',
     '',
   ].join('\n')}`
-}
-
-function codeOf(result: { code: number | null, error?: string | null }): number | null {
-  return result.error ? null : result.code
 }
 
 function parseKeyValues(stdout: string): Record<string, string> {
@@ -386,11 +424,6 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
   }
 }
 
-function systemUserName(ctx: BootProviderContext): string | null {
-  const user = currentUser(ctx)
-  return user && /^[A-Za-z_][A-Za-z0-9._-]*$/.test(user) ? user : null
-}
-
 function stageUnit(ctx: BootProviderContext, unit: string, content: string): string {
   const staged = posixJoin(tempDir(ctx), `home-hosted-${unit}`)
   fs.writeFileSync(staged, content, { mode: 0o644 })
@@ -401,7 +434,16 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
   const mechanism = 'systemd-system' as const
   const unitOf = (spec: BootSpec): string => `${assertUnitName(spec.unitName)}.service`
   const pathOf = (spec: BootSpec): string => posixJoin('/etc', 'systemd', 'system', unitOf(spec))
-  const contentOf = (spec: BootSpec): string => systemdSystemUnit(spec, ctx.isRoot ? systemUserName(ctx) : null)
+  /**
+   * The account the entry runs as — never this process's `$USER`.
+   *
+   * A system unit outlives the shell that wrote it and is restarted by root, so
+   * the only honest answer is the login that asked for root (`SUDO_UID`) or, when
+   * the panel itself is not root, the account it belongs to. A root answer is not
+   * written as `User=root`: omitting the directive *is* running as root, so
+   * naming it only disguises the default this exists to surface.
+   */
+  const contentOf = (spec: BootSpec): string => systemdSystemUnit(spec, bootUserName(ctx))
 
   const installCommands = (staged: string, file: string, unit: string): string[] => [
     shellCommand('sudo', ['install', '-m', '0644', staged, file]),
@@ -418,13 +460,20 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
       if (!existsOf(ctx, '/run/systemd/system'))
         return { mechanism, available: false, bootCapable: false, privileged: false, reason: 'systemd is not the init system here (no /run/systemd/system)' }
       const privileged = ctx.isRoot || (await ctx.sudo())
+      // The account the entry would run as is a property of the candidate, not a
+      // detail: a system unit with no account runs the panel as root, and that is
+      // the whole reason a server that refuses root crash-loops.
+      const who = accountOf(ctx)
+      const scope = who === null || who.root
+        ? 'no account was resolved for the entry, so it would run the panel as root'
+        : `the entry runs the panel as ${who.name}`
       return {
         mechanism,
         available: privileged,
         bootCapable: privileged,
         privileged,
         reason: privileged
-          ? 'systemd is PID 1 and this process can use root, so a system unit starts at boot'
+          ? `systemd is PID 1 and this process can use root, so a system unit starts at boot; ${scope}`
           : 'systemd is PID 1, but installing a system unit needs root or passwordless sudo',
       }
     },
@@ -446,7 +495,7 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
         return {
           state,
           unitPath: file,
-          detail: `${probe.detail}${privileged ? '' : '; needs root to change'}`,
+          detail: `${probe.detail}${privileged ? '' : '; needs root to change'}${accountNote(own, ctx)}`,
           commands,
         }
       }

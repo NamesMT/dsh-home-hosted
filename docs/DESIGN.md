@@ -292,6 +292,71 @@ The settings stamp moved to 3 for `instancesNotice`, while the tool-name
 migration stays bound to the release that merged the tools: a stamp bump must
 never re-read a current file's explicit two-tool allowlist as "nobody chose".
 
+## Boot entries run the panel as a person
+
+Two mechanisms drop privilege by name — a systemd `User=` and a launchd
+`UserName` — and both used to take that name from `$USER`. That is right in the
+common case and wrong in the one case it exists for: `sudo` and `pkexec` rewrite
+`USER`, `LOGNAME` and `HOME` to the *target* account, so a panel started from a
+root shell or a root unit read `USER=root`, and a mechanism that already runs as
+root got an entry that either repeated root or (with the name dropped) silently
+kept it. `os.userInfo()` is no help: it reports the euid.
+
+So the account comes from whoever this process is. An elevating tool's
+`SUDO_UID`/`PKEXEC_UID` is an instruction and is used while it resolves, so a
+stale value inherited from an ancestor cannot collapse the entry to root;
+otherwise this session's own login — its database row, else the row for this uid;
+otherwise the owner of the state root or the panel root, which names the person a
+root-launched panel belongs to; and only then, honestly, root.
+
+The uid is the fact and `$UID` is a claim: it is a shell variable rather than an
+exported one, so when it is present at all it was inherited, and it also feeds the
+launchd domain (`gui/$UID`). It is read only when the platform gives no uid.
+
+Two answers are refused rather than written, and both fail loudly:
+
+- **`User=root`**, because an entry with no `User=` already runs as root — naming
+  it only dresses up the silent default this change exists to surface;
+- **a name the user database cannot place.** systemd matches names
+  case-sensitively and cannot resolve what it does not know, so
+  `User=<such a name>` makes the unit refuse to start (`status=217/USER`) and
+  `Restart=always` turns that into a crash-loop that never mentions the account —
+  worse than running as root, and the same unexplained failure in a new costume.
+  An LDAP or NIS login has no `/etc/passwd` row, so those operators set `User=`
+  themselves; the warning says so.
+
+`HOME` is written into every spec, because `Environment=HOME=` **overrides
+`User=`** — verified on real systemd. So it has to be the account's home: left at
+the installer's it is root's under `sudo`, and the panel would run as the person
+with `~` pointing at `/root`, dying with a permission error that never mentions
+its own user. It is written only when it differs, so an unchanged install stays
+byte-identical and startup `reconcile()` does not rewrite the entry. When an
+account resolves but its home is not knowable, the line is **omitted** instead:
+systemd then supplies the right one from NSS, which leaving root's in place would
+have prevented.
+
+An installed entry that already runs as the wrong account is reported by
+`status()`, and the `enabled-failing` repair heals it by installing again. A
+*working* entry is deliberately left alone: re-installing stops the panel and
+hands it to the entry, which is a person's decision and not a startup side
+effect.
+
+## KillMode=process: a restart must not take the entries with it
+
+`persistent: true` puts an entry under a nanny the panel spawns, and the nanny is
+what makes it outlive the panel: it owns the child's pipes, so a panel stop,
+restart or kill cannot break them. The nanny is spawned `detached`, which gives it
+its own session — but *not* its own cgroup, and systemd's default
+`KillMode=control-group` signals every process in the unit's cgroup. So a
+`systemctl stop`/`restart` — which is what this plugin's own activation, and any
+`Restart=always`, runs — takes the nanny down with the panel, quietly falsifying
+the guarantee the design depends on. `KillMode=process` signals the panel alone.
+
+An ordinary entry is spawned `detached` too, so the same applies to every
+supervised server and not only the nannies: the panel re-adopts a survivor by its
+port, which is what makes keeping them the right answer rather than a leak.
+It belongs on both units.
+
 ## macOS: agent or daemon
 
 A `LaunchAgent` starts at login; starting before login means a `LaunchDaemon` in
@@ -299,8 +364,9 @@ A `LaunchAgent` starts at login; starting before login means a `LaunchDaemon` in
 install. The daemon is therefore offered even when this process cannot elevate:
 install stages the plist and returns the three commands to run. The daemon plist
 names the invoking user in `UserName`, Apple's sanctioned way to avoid running
-the panel as root, and the recommendation still prefers a mechanism this process
-can install on its own so "Automatic" stays a single click.
+the panel as root — resolved by the rule above, never from `$USER`. The
+recommendation still prefers a mechanism this process can install on its own so
+"Automatic" stays a single click.
 
 ## macOS: reachable launchd is not a requirement
 
@@ -490,6 +556,13 @@ That refusal is shown with the status it answered, and the page retires it as so
 as the status moves: a person runs the commands and presses Re-check, and the note
 must not outlive the state it described. The persisted last attempt follows the
 same rule, so a failed install is not re-shown once an entry exists.
+
+Switching those entries to a `User=` later is not just a unit edit. The moment a
+panel runs as root, everything it writes — `<home>/.hh`, its workspaces, logs and
+`snapshots.json` — is root-owned, so the unprivileged account the unit now names
+cannot write its own state and the panel fails to boot with a permission error
+that never mentions ownership. Moving an install from root to a user therefore
+needs `chown -R <user> <home>` (and the plugin state dir) first.
 
 ## Tests
 

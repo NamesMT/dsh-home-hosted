@@ -30,6 +30,20 @@ export function assertMarker(marker: string): string {
   return assertNoControl(marker, 'marker')
 }
 
+/**
+ * A user name a unit or a plist may name.
+ *
+ * It is *not* quoted anywhere: systemd's `User=` and launchd's `UserName` take a
+ * bare name, and a value carrying a newline would therefore end the line and let
+ * the rest of it become another directive. So this is the one place that decides
+ * what an account name may be, and every writer goes through it.
+ */
+export function assertUserName(name: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9._-]*$/.test(name))
+    throw new Error(`user name ${JSON.stringify(name)} must match ^[A-Za-z_][A-Za-z0-9._-]*$`)
+  return name
+}
+
 export function assertEnvKey(key: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     throw new Error(`environment key ${JSON.stringify(key)} is not a valid name`)

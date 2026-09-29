@@ -125,6 +125,39 @@ export interface BootRunOptions {
 /** argv-only, never a shell. `run` from `util/exec.ts` satisfies this. */
 export type BootRunner = (command: string, args: string[], options?: BootRunOptions) => Promise<BootRunResult>
 
+/** One row of the user database, as account resolution needs it. */
+export interface PasswdEntry {
+  name: string
+  uid: number
+  home: string
+}
+
+/**
+ * The account a boot entry should run as — deliberately not `$USER`.
+ *
+ * `sudo` and `pkexec` rewrite `USER`/`LOGNAME` to the *target* account, and a
+ * panel started from a root shell or a root unit sees `USER=root`. A unit written
+ * from that is a unit that runs the panel as root. `uid` is what the elevating
+ * tool left behind (`SUDO_UID`/`PKEXEC_UID`) or this process's own euid, and the
+ * name/home come from the user database rather than from the environment.
+ */
+export interface BootAccount {
+  name: string
+  uid: number | null
+  home: string | null
+  /** Root must never be written into a unit as if it were a choice. */
+  root: boolean
+  /**
+   * Whether the user database actually places this name.
+   *
+   * An unverified name is not necessarily wrong — an LDAP login has no
+   * `/etc/passwd` row — but systemd cannot resolve it either, and `User=<name it
+   * cannot resolve>` makes the unit refuse to start (`status=217/USER`), so the
+   * writer warns instead of installing a crash-loop in silence.
+   */
+  verified: boolean
+}
+
 export interface BootProviderContext {
   platform: NodeJS.Platform
   home: string
@@ -132,6 +165,14 @@ export interface BootProviderContext {
   run: BootRunner
   sudo: () => Promise<boolean>
   isRoot: boolean
+  /** This process's own uid; defaults to `process.getuid()`. Injected so a test can pin it. */
+  uid?: number | null
+  /** Directories whose owner names the human a root-launched panel belongs to. */
+  ownerPaths?: readonly string[]
+  /** The user database to resolve against; defaults to the real one. */
+  passwd?: readonly PasswdEntry[]
+  /** Where a refusal or a root-account fallback is said out loud. */
+  warn?: (message: string) => void
   /** Existence probe; defaults to `fs.existsSync`. Injected so container/PID-1 detection is testable. */
   exists?: (file: string) => boolean
 }
@@ -143,6 +184,10 @@ export interface BootLadderOptions {
   run?: BootRunner
   sudo?: () => Promise<boolean>
   exists?: (file: string) => boolean
+  uid?: number | null
+  ownerPaths?: readonly string[]
+  passwd?: readonly PasswdEntry[]
+  warn?: (message: string) => void
 }
 
 export interface BootLadder {

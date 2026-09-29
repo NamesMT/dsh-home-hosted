@@ -6,6 +6,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { BootProviderContext, BootRunResult, BootSpec } from '../../src/boot/types.js'
+import { parsePasswd } from '../../src/boot/common.js'
+import type { PasswdEntry } from '../../src/boot/types.js'
 
 export interface RunCall {
   command: string
@@ -84,12 +86,29 @@ export function winSpec(overrides: Partial<BootSpec> = {}): BootSpec {
   }
 }
 
+/**
+ * The user database every boot test resolves against.
+ *
+ * Injected, because the real `/etc/passwd` is a property of the machine: uid 1000
+ * is a login on Linux images and nothing at all on macOS, so a test that reads the
+ * host file asserts a different thing per platform — and the account would resolve
+ * to `null` on the macOS gate. Nothing in these tests may depend on that.
+ */
+export const TEST_PASSWD: PasswdEntry[] = parsePasswd([
+  'root:x:0:0:root:/root:/bin/sh',
+  'tester:x:1000:1000:tester:/home/tester:/bin/sh',
+].join('\n'))
+
 export function ctxFor(overrides: Partial<BootProviderContext> & { home: string, run: BootProviderContext['run'] }): BootProviderContext {
   return {
     platform: 'linux',
     env: { USER: 'tester', UID: '1000' },
     sudo: async () => false,
     isRoot: false,
+    // Pinned to null so account resolution reads the injected `env`, never the
+    // uid of whatever machine happens to run the suite.
+    uid: null,
+    passwd: TEST_PASSWD,
     ...overrides,
   }
 }

@@ -291,6 +291,55 @@ describe('launchd daemon', () => {
     expect(lines).toContain(`sudo -n launchctl bootstrap system ${daemonPath}`)
   })
 
+  it('names the login that elevated, never the $USER sudo rewrote', async () => {
+    let staged = ''
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[0] === 'print')
+        return { code: args[1] === 'gui/1000' ? 0 : 113 }
+      if (command === 'sudo' && args.includes('install'))
+        staged = fs.readFileSync(args[args.length - 2] ?? '', 'utf8')
+      return { code: 0 }
+    })
+    const provider = createLaunchdDaemonProvider(ctxFor({
+      home,
+      run: runner.run,
+      platform: 'darwin',
+      sudo: async () => true,
+      env: { USER: 'root', HOME: '/root', LOGNAME: 'root', SUDO_UID: '1000', TMPDIR: home },
+      uid: 0,
+    }))
+    const result = await provider.install(daemonSpec)
+    expect(result.ok).toBe(true)
+    // A LaunchDaemon with no `UserName` runs the panel as root, so the account has
+    // to come from the elevating login rather than from the root environment.
+    expect(staged).toContain('<key>UserName</key>')
+    expect(staged).not.toContain('<string>root</string>')
+  })
+
+  it('leaves UserName out rather than writing root', async () => {
+    let staged = ''
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[0] === 'print')
+        return { code: args[1] === 'gui/1000' ? 0 : 113 }
+      if (command === 'sudo' && args.includes('install'))
+        staged = fs.readFileSync(args[args.length - 2] ?? '', 'utf8')
+      return { code: 0 }
+    })
+    const provider = createLaunchdDaemonProvider(ctxFor({
+      home,
+      run: runner.run,
+      platform: 'darwin',
+      sudo: async () => true,
+      // Root with no login behind it: the honest root answer, and the one case a
+      // plist must not make look deliberate.
+      env: { USER: 'root', HOME: '/root', TMPDIR: home },
+      uid: 0,
+    }))
+    await provider.install(daemonSpec)
+    expect(staged).not.toContain('<key>UserName</key>')
+    expect(staged).not.toContain('<string>root</string>')
+  })
+
   it('stages the plist that the advertised sudo install command copies', async () => {
     const runner = fakeRun()
     const provider = createLaunchdDaemonProvider(ctxFor({
