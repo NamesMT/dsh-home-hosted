@@ -303,20 +303,37 @@ root got an entry that either repeated root or (with the name dropped) silently
 kept it. `os.userInfo()` is no help: it reports the euid.
 
 So the account comes from whoever this process is. An elevating tool's
-`SUDO_UID`/`PKEXEC_UID` is an instruction and wins; otherwise a non-root
-`$LOGNAME` names this session; otherwise the `/etc/passwd` row for `$UID` or the
-euid; otherwise the owner of the state root or the panel root — which names the
-person a root-launched panel belongs to; and only then, honestly, root. `root`
-is carried as a flag, and **no entry ever writes `User=root`**: omitting the
-directive *is* running as root, so naming it only dresses up the silent default
-the fix has to surface. A root answer warns loudly and omits it.
+`SUDO_UID`/`PKEXEC_UID` is an instruction and is used while it resolves, so a
+stale value inherited from an ancestor cannot collapse the entry to root;
+otherwise this session's own login — its database row, else the row for this uid;
+otherwise the owner of the state root or the panel root, which names the person a
+root-launched panel belongs to; and only then, honestly, root.
 
-The same environment is why `HOME` is written into every spec: run under `sudo`,
-`HOME` is root's, and an entry the root helper restarts (a `systemctl restart`
-keeps its caller's environment) would resolve `~` into `/root` and die with a
-permission error that never mentions the panel's own user. The spec carries the
-*account's* home instead — and only when it differs, so an unchanged install
-stays byte-identical and startup `reconcile()` does not rewrite the entry.
+The uid is the fact and `$UID` is a claim: it is a shell variable rather than an
+exported one, so when it is present at all it was inherited, and it also feeds the
+launchd domain (`gui/$UID`). It is read only when the platform gives no uid.
+
+Two answers are refused rather than written, and both fail loudly:
+
+- **`User=root`**, because an entry with no `User=` already runs as root — naming
+  it only dresses up the silent default this change exists to surface;
+- **a name the user database cannot place.** systemd matches names
+  case-sensitively and cannot resolve what it does not know, so
+  `User=<such a name>` makes the unit refuse to start (`status=217/USER`) and
+  `Restart=always` turns that into a crash-loop that never mentions the account —
+  worse than running as root, and the same unexplained failure in a new costume.
+  An LDAP or NIS login has no `/etc/passwd` row, so those operators set `User=`
+  themselves; the warning says so.
+
+`HOME` is written into every spec, because `Environment=HOME=` **overrides
+`User=`** — verified on real systemd. So it has to be the account's home: left at
+the installer's it is root's under `sudo`, and the panel would run as the person
+with `~` pointing at `/root`, dying with a permission error that never mentions
+its own user. It is written only when it differs, so an unchanged install stays
+byte-identical and startup `reconcile()` does not rewrite the entry. When an
+account resolves but its home is not knowable, the line is **omitted** instead:
+systemd then supplies the right one from NSS, which leaving root's in place would
+have prevented.
 
 An installed entry that already runs as the wrong account is reported by
 `status()`, and the `enabled-failing` repair heals it by installing again. A

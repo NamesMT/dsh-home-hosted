@@ -89,8 +89,16 @@ function numberFrom(value: string | undefined): number | null {
   return /^\d+$/.test(text) ? Number.parseInt(text, 10) : null
 }
 
-function accountFrom(row: PasswdEntry): BootAccount {
-  return { name: row.name, uid: row.uid, home: row.home.length > 0 ? row.home : null, root: row.uid === 0 }
+/**
+ * The home a row gives, falling back to the ambient one only when the row has none.
+ *
+ * They agree in the normal case. When they do not, the row is the one that is
+ * actually that login's home — and the ambient one is the value that arrives as
+ * root's under `sudo`.
+ */
+function accountFrom(row: PasswdEntry, ambientHome?: string): BootAccount {
+  const home = row.home.length > 0 ? row.home : (ambientHome?.trim() || null)
+  return { name: row.name, uid: row.uid, home, root: row.uid === 0, verified: true }
 }
 
 /** `SUDO_USER`/`PKEXEC_USER`: what an elevating tool says it elevated. */
@@ -142,20 +150,36 @@ export interface AccountInput {
  * `$USER` is right in the common case and wrong in exactly the case this exists
  * for: `sudo` and `pkexec` rewrite `USER`, `LOGNAME` and `HOME` to the *target*
  * account, so a panel started from a root shell or a root unit reads
- * `USER=root` — and so does `os.userInfo()`, which reports the euid. The source
- * therefore depends on who this process is:
+ * `USER=root` — and so does `os.userInfo()`, which reports the euid.
  *
- * 1. an elevating tool left `SUDO_UID`/`PKEXEC_UID`: that login is an
- *    instruction, and the only place the invoking user survives;
- * 2. otherwise the environment is this session's own, so a non-root `LOGNAME`
- *    names it. `root` is skipped on purpose: a root environment saying `root` is
- *    the silent default, not a choice, and a unit must never inherit it;
- * 3. otherwise the user database row for this uid (`$UID`, else the euid);
- * 4. otherwise the owner of a state path — who the panel actually belongs to;
+ * Two rules keep the answer usable, and both are about what systemd does with it:
+ *
+ * 1. **Prefer the database row for the uid over the name in the environment.**
+ *    They agree in the normal case. When they do not, the row is the one that
+ *    names a real login, and `User=<a name systemd cannot resolve>` is worse than
+ *    no entry at all: systemd refuses to start it (`status=217/USER`) and
+ *    `Restart=always` turns that into a crash-loop, which is exactly the
+ *    unexplained failure this whole change exists to remove.
+ * 2. **A uid this process has is the fact; `$UID` is a claim.** `$UID` is a shell
+ *    variable rather than an exported one, so when it is present at all it was
+ *    inherited, and it feeds the launchd domain (`gui/$UID`) as well as the owner
+ *    lookups. It is consulted only when there is no uid to be had from the
+ *    process itself.
+ *
+ * The order is therefore:
+ *
+ * 1. an elevating tool's `SUDO_UID`/`PKEXEC_UID` (an instruction, and the only
+ *    place the invoking login survives) — but only while it resolves, so a stale
+ *    value inherited from an ancestor cannot collapse the entry to root;
+ * 2. this session's own login: its database row, else the row for this uid, else
+ *    the name itself for a login the local database does not hold (macOS keeps
+ *    accounts in Open Directory and its `/etc/passwd` has no user rows);
+ * 3. the row for this uid;
+ * 4. the owner of a state path — who the panel actually belongs to;
  * 5. and only then, honestly, root.
  *
- * `User=root` is never a choice a panel made, so the answer carries `root: true`
- * for the writers to refuse rather than write it as if it were deliberate.
+ * A name that cannot be placed is reported with `verified: false`, so the writer
+ * can warn instead of quietly installing a unit that will not start.
  */
 export function accountOf(input: AccountInput): BootAccount | null {
   const passwd = input.passwd ?? readPasswd()
@@ -168,17 +192,35 @@ export function accountOf(input: AccountInput): BootAccount | null {
     const row = byUid(elevatedUid) ?? byName(elevatedName)
     if (row !== null)
       return accountFrom(row)
-    // A login the user database does not hold (LDAP, a container): the uid the
-    // tool left is the fact that matters, and `$HOME` has already been rewritten
-    // to the target's, so it is not a home to repeat.
-    return elevatedName === null ? null : { name: elevatedName, uid: elevatedUid, home: null, root: elevatedUid === 0 }
+    // An elevating tool that named *both* a login and a nonzero uid has made an
+    // explicit, consistent statement about an account the local database may not
+    // hold — an LDAP or NIS login is a real account even though `/etc/passwd` has
+    // no row for it. `$HOME` has already been rewritten to the target's, so it is
+    // not this account's home and carrying `null` stops the entry inheriting it.
+    if (elevatedUid !== null && elevatedUid !== 0 && elevatedName !== null)
+      return { name: elevatedName, uid: elevatedUid, home: null, root: false, verified: false }
+    // Anything less is not a statement about an account. Fall through rather than
+    // let a stale `SUDO_UID` override a login this process can still name.
   }
 
-  const ownUid = numberFrom(input.env.UID) ?? (input.uid === undefined ? (process.getuid?.() ?? null) : input.uid)
+  // This process's own uid. `$UID` is a claim and the process is the fact, so it
+  // is only consulted when the platform gives no uid at all.
+  const euid = input.uid === undefined ? (process.getuid?.() ?? null) : input.uid
+  const ownUid = euid ?? numberFrom(input.env.UID)
+
   const session = sessionName(input.env)
-  if (session !== null && session !== 'root') {
-    const row = byName(session)
-    return { name: session, uid: ownUid ?? row?.uid ?? null, home: input.env.HOME?.trim() || row?.home || null, root: false }
+  // systemd matches names case-sensitively, so `ROOT` is not root to it — but it is
+  // also not a login, and writing it produces a 217/USER refusal.
+  if (session !== null && session.toLowerCase() !== 'root') {
+    const sessionRow = byName(session)
+    if (sessionRow !== null)
+      return accountFrom(sessionRow, input.env.HOME)
+    // The name has no row. The uid's row is the better answer: it names a real
+    // login, and a typo'd `$USER` would otherwise make `User=<typo>`.
+    const uidRow = byUid(ownUid === 0 ? null : ownUid)
+    if (uidRow !== null)
+      return accountFrom(uidRow, input.env.HOME)
+    return { name: session, uid: ownUid, home: input.env.HOME?.trim() || null, root: false, verified: false }
   }
 
   // The root row is deliberately not consulted here: `uid 0` always has one, so
@@ -195,9 +237,9 @@ export function accountOf(input: AccountInput): BootAccount | null {
 
   // Nothing named a person. A root process's panel runs as root whether or not a
   // unit says so, so report that and let every writer refuse to dress it up.
-  if (ownUid === 0 || session === 'root')
-    return { name: 'root', uid: 0, home: input.env.HOME?.trim() || '/root', root: true }
-  return session === null ? null : { name: session, uid: ownUid, home: input.env.HOME?.trim() || null, root: false }
+  if (ownUid === 0 || session?.toLowerCase() === 'root')
+    return { name: 'root', uid: 0, home: input.env.HOME?.trim() || '/root', root: true, verified: true }
+  return null
 }
 
 /**
@@ -213,7 +255,7 @@ export function currentUser(ctx: AccountInput): string | null {
   if (account !== null && !account.root)
     return account.name
   const value = sessionName(ctx.env)
-  return value !== null && value !== 'root' ? value : null
+  return value !== null && value.toLowerCase() !== 'root' ? value : null
 }
 
 /**
@@ -222,16 +264,46 @@ export function currentUser(ctx: AccountInput): string | null {
  * `User=root` is never a choice a panel made: root is the silent default of a root
  * process, and a unit that names it looks deliberate while it is the bug. So a
  * root account is refused here, loudly, and the caller omits the directive.
+ *
+ * A name that cannot be written is refused the same way. `User=`/`UserName` are
+ * unquoted, so a name carrying a newline would end the field and let the rest of it
+ * become another directive — and the environment this reads is one a caller can
+ * set. No name is better than an injected one.
  */
 export function bootUserName(ctx: AccountInput): string | null {
   const account = accountOf(ctx)
-  if (account === null)
+  if (account === null) {
+    // No account is the same runtime outcome as root — the entry runs as root —
+    // so it is refused just as loudly. The candidate reason says it too, but a
+    // warning belongs at the point the decision is actually made.
+    warnAccount(ctx, 'no account could be resolved for the entry, so a system unit would run the panel as root. Install it from the account that should own the panel, or set User= yourself.')
     return null
+  }
   if (account.root) {
     warnAccount(ctx, 'the only account available is root; a system unit would run the panel as root. Install it from the account that should own the panel, or set User= yourself.')
     return null
   }
+  if (!isUserName(account.name)) {
+    warnAccount(ctx, `the account name ${JSON.stringify(account.name)} is not a usable user name, so no User= line was written`)
+    return null
+  }
+  if (!account.verified) {
+    // The name is writable but nothing here can place it: an LDAP or NIS login has
+    // no `/etc/passwd` row, and a stale `$USER` names nobody at all. systemd cannot
+    // resolve it either, and `User=<a name it cannot resolve>` makes the unit fail
+    // with `status=217/USER` — which `Restart=always` turns into a crash-loop that
+    // never mentions the account. Installing that is worse than installing nothing,
+    // so the name is refused and the reason is said out loud; the page's install
+    // button remains for anyone who knows the name is resolvable on that machine.
+    warnAccount(ctx, `the account ${JSON.stringify(account.name)} could not be found in the user database, so no User= line was written: systemd would refuse to start the unit (status=217/USER). Set User= yourself if that account resolves through LDAP or NIS.`)
+    return null
+  }
   return account.name
+}
+
+/** The one definition of a writable account name; {@link assertUserName} enforces it in a payload. */
+function isUserName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9._-]*$/.test(name)
 }
 
 function warnAccount(ctx: AccountInput, message: string): void {

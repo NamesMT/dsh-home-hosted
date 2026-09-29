@@ -175,13 +175,41 @@ describe('the account an entry runs as', () => {
     expect(specs[0]?.env.USER).toBeUndefined()
   })
 
-  it('keeps the environment it was given when nothing elevated it', async () => {
+  it('omits HOME rather than handing the panel the installer\'s /root', async () => {
+    // An LDAP/NIS login has no passwd row, so its home is not knowable here. An
+    // explicit `Environment=HOME=` overrides `User=`, so leaving the installer's
+    // `/root` in place would give the panel root's home while it runs as somebody
+    // else — the failure DESIGN describes as "a permission error that never
+    // mentions its own user". Dropping the line lets systemd supply the right one.
     const { service, specs } = harness(
       unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
-      { env: { USER: 'tester', HOME: '/home/tester', UID: '1000' }, uid: null, passwd: PASSWD },
+      { env: { USER: 'root', HOME: '/root', SUDO_USER: 'ldapuser', SUDO_UID: '2500' }, uid: 0, passwd: PASSWD },
     )
     await service.installBoot()
-    expect(specs[0]?.env.HOME).toBe('/home/tester')
+    expect(specs[0]?.env.HOME).toBeUndefined()
+    expect(specs[0]?.env.HHOSTED_HOME).toBeDefined()
+  })
+
+  it('leaves the environment byte-identical when the account home matches it', async () => {
+    // The reconcile guarantee: a spec that merely repeats this process's own
+    // environment must not look like a change, or every startup rewrites the entry.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'ci', HOME: '/home/ci', UID: '1000' }, uid: 1000, passwd: PASSWD },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe('/home/ci')
+  })
+
+  it('takes the account home over an ambient one that disagrees', async () => {
+    // `Environment=HOME=` overrides `User=` on real systemd, so an ambient `$HOME`
+    // that is not the account's (root's, under sudo) is the value that must lose.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'ci', HOME: '/root', UID: '1000' }, uid: 1000, passwd: PASSWD },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe('/home/ci')
   })
 })
 

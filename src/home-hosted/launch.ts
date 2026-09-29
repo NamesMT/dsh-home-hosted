@@ -67,16 +67,30 @@ export interface HomeHostedFacts {
   projectDir?: string | null
   version?: string | null
   /**
-   * The *account's* home, when the entry runs as somebody other than this process.
+   * The home of the account the entry runs as.
    *
-   * `HOME` is already written into every entry's environment, and that is the
-   * problem: installed through `sudo`, it is root's home, so the panel the entry
-   * starts resolves `~` (and anything HOME-relative) into `/root` and dies with a
-   * permission error that never mentions its own user. Writing the account's home
-   * instead is the whole correction — no other variable is wrong, because `User=`
-   * makes the service manager set `$USER`/`$LOGNAME` itself.
+   * `HOME` is written into every entry's environment, and that is the problem:
+   * installed through `sudo`, it is root's home, so the panel the entry starts
+   * resolves `~` (and anything else HOME-relative) into `/root` and dies with a
+   * permission error that never mentions its own user.
+   *
+   * `undefined` means account resolution was not involved, so this process's own
+   * `HOME` is right. A string is that account's home. `null` means an account *was*
+   * resolved but its home is not knowable here — an LDAP or NIS login has no
+   * `/etc/passwd` row — and then the line is *omitted* rather than left at the
+   * installer's, because an explicit `Environment=HOME=` overrides `User=` and
+   * systemd fills in the right one from NSS itself.
    */
   accountHome?: string | null
+  /**
+   * The environment this process's own values (`HOME`, `PATH`) are read from.
+   *
+   * Injected so a caller that decides the entry's account from a given environment
+   * also builds the entry's own environment from it: reading `process.env` here
+   * while resolving the account elsewhere is how the two came to describe
+   * different people.
+   */
+  env?: Readonly<Record<string, string | undefined>>
 }
 
 /** A deterministic environment for a boot-time entry, with absolute values. */
@@ -107,8 +121,16 @@ export function homeHostedEnv(facts: HomeHostedFacts, launch: CliLaunch, extra: 
   // process's own environment stays byte-identical, so an existing entry is not
   // rewritten on every plugin start.
   const accountHome = facts.accountHome?.trim()
-  if (accountHome !== undefined && accountHome.length > 0 && accountHome !== env.HOME)
-    env.HOME = accountHome
+  if (accountHome !== undefined && accountHome.length > 0) {
+    if (accountHome !== env.HOME)
+      env.HOME = accountHome
+  }
+  else if (facts.accountHome === null) {
+    // An account was resolved but its home is not knowable here. Dropping the line
+    // is the only safe answer: leaving it would hand the panel the installer's
+    // home (root's), and `User=` cannot correct an explicit `Environment=HOME=`.
+    delete env.HOME
+  }
   if (facts.projectDir)
     env.HHOSTED_PROJECT = facts.projectDir
   return env
@@ -121,6 +143,8 @@ export interface BootSpecOptions {
   marker?: string
   /** The account's home, so an entry launched by root does not inherit `/root`. */
   accountHome?: string | null
+  /** The environment this process's own values are read from. */
+  env?: Readonly<Record<string, string | undefined>>
 }
 
 export function buildHomeHostedBootSpec(
@@ -138,7 +162,16 @@ export function buildHomeHostedBootSpec(
     command: launch.program,
     args,
     cwd: facts.projectDir ?? facts.home,
-    env: homeHostedEnv({ ...facts, accountHome: options.accountHome ?? facts.accountHome }, launch),
+    env: homeHostedEnv(
+      {
+        ...facts,
+        // `undefined` means the option was not given; `null` is a decision (an
+        // account whose home is unknowable), and `??` would erase it.
+        accountHome: options.accountHome === undefined ? facts.accountHome : options.accountHome,
+        env: options.env ?? facts.env,
+      },
+      launch,
+    ),
     marker: options.marker ?? 'managed by dsh-home-hosted',
     // One artifact per state root, so two plugin instances cannot overwrite or
     // delete each other's entry. The machine-default install keeps the old name.

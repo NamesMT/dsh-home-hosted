@@ -1081,9 +1081,14 @@ export class HomeHostedService extends Service {
    * process launched at boot (a system unit that names no `User=`) can still be
    * told whose panel it is running.
    */
+  /** This process's environment, from the test seam when one is supplied. */
+  private processEnv(): Readonly<Record<string, string | undefined>> {
+    return this.options.env ?? process.env
+  }
+
   private accountFacts(): Omit<AccountInput, 'warn'> {
     return {
-      env: (this.options.env ?? process.env) as Record<string, string | undefined>,
+      env: this.processEnv() as Record<string, string | undefined>,
       uid: this.options.uid,
       ownerPaths: [this.options.home, this.options.stateDir],
       passwd: this.options.passwd,
@@ -1122,10 +1127,12 @@ export class HomeHostedService extends Service {
       {
         stateDir: this.options.stateDir,
         unitName: bootUnitName(this.options.stateDir),
-        // Only when the entry runs as somebody other than this process: a spec that
-        // merely repeats this environment stays byte-identical, so reconcile does
-        // not rewrite the entry on every start.
-        accountHome: account === null ? null : account.home,
+        // `undefined` when no account was resolved: the entry then runs as this
+        // process (or as root), and this process's own HOME is the right one. A
+        // spec that merely repeats this environment stays byte-identical, so
+        // reconcile does not rewrite the entry on every start.
+        accountHome: account === null ? undefined : account.home,
+        env: this.processEnv(),
       },
     )
 

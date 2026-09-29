@@ -63,14 +63,15 @@ describe('account resolution', () => {
     // The whole bug in one assertion: sudo sets USER=root, but SUDO_UID still
     // names the login that asked for it.
     const resolved = accountOf({ passwd: PASSWD, env: { USER: 'root', LOGNAME: 'root', SUDO_UID: String(USER_UID) }, uid: 0 })
-    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false })
+    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false, verified: true })
   })
 
   it('accepts the SUDO_USER name when the uid is not in the user database', () => {
     const resolved = accountOf({ passwd: PASSWD, env: { USER: 'root', SUDO_USER: 'someone', SUDO_UID: String(UNKNOWN_UID) }, uid: 0 })
-    // A login looked up nowhere (LDAP, a container): the uid is the fact, and the
-    // home is deliberately unknown because `$HOME` is already root's.
-    expect(resolved).toEqual({ name: 'someone', uid: UNKNOWN_UID, home: null, root: false })
+    // A login looked up nowhere (LDAP, a container): the uid is the fact, the home
+    // is deliberately unknown because `$HOME` is already root's, and `verified`
+    // records that nothing here can place the name — so no `User=` is written.
+    expect(resolved).toEqual({ name: 'someone', uid: UNKNOWN_UID, home: null, root: false, verified: false })
   })
 
   it('treats PKEXEC_UID the same way', () => {
@@ -79,7 +80,7 @@ describe('account resolution', () => {
 
   it('uses a non-root login environment as itself, with its home', () => {
     const resolved = accountOf({ passwd: PASSWD, env: { USER: USER, HOME: '/home/ci', UID: String(USER_UID) }, uid: null })
-    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false })
+    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false, verified: true })
   })
 
   it('refuses to read the session name when the session says root', () => {
@@ -109,7 +110,7 @@ describe('account resolution', () => {
       if (known === undefined)
         expect(resolved?.root).toBe(true)
       else
-        expect(resolved).toEqual({ name: known.name, uid: known.uid, home: known.home, root: known.uid === 0 })
+        expect(resolved).toMatchObject({ name: known.name, uid: known.uid, root: known.uid === 0 })
     }
     finally {
       cleanup(dir)
@@ -130,8 +131,48 @@ describe('account resolution', () => {
     }
   })
 
-  it('reports the uid behind $UID without reading the process', () => {
-    expect(accountOf({ passwd: PASSWD, env: { UID: String(USER_UID) }, uid: 0 })?.uid).toBe(USER_UID)
+  it('does not let $UID override the uid this process actually has', () => {
+    // `$UID` is a shell variable rather than an exported one, so when it is present
+    // at all it was inherited — and it also feeds launchd's `gui/$UID` domain. The
+    // process is the fact.
+    expect(accountOf({ passwd: PASSWD, env: { USER: USER, UID: '0' }, uid: USER_UID })?.uid).toBe(USER_UID)
+    expect(accountOf({ passwd: PASSWD, env: { USER: USER, UID: '99999999' }, uid: USER_UID })?.uid).toBe(USER_UID)
+    // It is still the only uid available when the platform gives none.
+    expect(accountOf({ passwd: PASSWD, env: { USER: USER, UID: String(USER_UID) }, uid: null })?.uid).toBe(USER_UID)
+  })
+
+  it('prefers the database row for the uid over a name that names nobody', () => {
+    // A typo'd or stale `$USER` must not become `User=<typo>`: systemd cannot
+    // resolve it and refuses to start the unit (status=217/USER).
+    const resolved = accountOf({ passwd: PASSWD, env: { USER: 'ghost' }, uid: USER_UID })
+    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false, verified: true })
+  })
+
+  it('marks a name the database cannot place, and the login-scoped path keeps it', () => {
+    // No row for the uid either, so nothing can place the name: it is marked
+    // unverified (the writer then refuses it) but a login-scoped mechanism may
+    // still use it, because those trust the session they are running in.
+    const resolved = accountOf({ passwd: PASSWD, env: { USER: 'ghost' }, uid: UNKNOWN_UID })
+    expect(resolved).toMatchObject({ name: 'ghost', uid: UNKNOWN_UID, verified: false })
+    expect(currentUser({ passwd: PASSWD, env: { USER: 'ghost' }, uid: UNKNOWN_UID })).toBe('ghost')
+  })
+
+  it('a stale elevating uid falls through instead of collapsing to root', () => {
+    // `SUDO_UID`/`PKEXEC_UID` inherited from an ancestor must not pre-empt a login
+    // this process can still name: the outcome would be no `User=` at all, i.e.
+    // the panel as root, with nothing said.
+    const resolved = accountOf({ passwd: PASSWD, env: { SUDO_UID: '99999999', USER: USER, LOGNAME: USER }, uid: 0 })
+    expect(resolved).toMatchObject({ name: USER, verified: true })
+    expect(resolved?.root).toBe(false)
+    // With no name beside it, a root process is honestly root.
+    expect(accountOf({ passwd: PASSWD, env: { SUDO_UID: '99999999' }, uid: 0 })).toMatchObject({ root: true })
+  })
+
+  it('treats an uppercase ROOT session as root, not as a login', () => {
+    // systemd matches names case-sensitively, so `User=ROOT` is a 217/USER refusal
+    // — and it is not a login either way.
+    expect(accountOf({ passwd: PASSWD, env: { USER: 'ROOT' }, uid: 0 })).toMatchObject({ root: true })
+    expect(currentUser({ passwd: PASSWD, env: { USER: 'ROOT' }, uid: 0 })).toBeNull()
   })
 
   it('never offers root as a login-scoped user', () => {
@@ -143,6 +184,50 @@ describe('account resolution', () => {
     const warnings: string[] = []
     expect(bootUserName({ passwd: PASSWD, env: { USER: 'root' }, uid: 0, warn: (line: string) => warnings.push(line) })).toBeNull()
     expect(warnings.join('\n')).toMatch(/root/)
+  })
+
+  it('warns just as loudly when no account resolves at all', () => {
+    // No account and `root` have the same runtime outcome — the entry runs as
+    // root — so the silent one must not be the quiet one.
+    const warnings: string[] = []
+    const ctx = { passwd: PASSWD, env: { UID: String(UNKNOWN_UID) }, uid: null, warn: (line: string) => warnings.push(line) }
+    expect(bootUserName(ctx)).toBeNull()
+    expect(warnings.join('\n')).toMatch(/run the panel as root/)
+  })
+
+  it('refuses a name it cannot place in the user database', () => {
+    // systemd cannot resolve it, so the unit would refuse to start and crash-loop.
+    const warnings: string[] = []
+    const ctx = { passwd: PASSWD, env: { USER: 'ghost' }, uid: UNKNOWN_UID, warn: (line: string) => warnings.push(line) }
+    expect(bootUserName(ctx)).toBeNull()
+    expect(warnings.join('\n')).toMatch(/217\/USER|user database/)
+  })
+
+  it('refuses a name that would inject a directive into the unit', () => {
+    // `User=` is unquoted, so a newline in the name ends the line and the rest of
+    // it becomes another directive. `evil\nUser=root` is the worst shape: systemd
+    // takes the LAST `User=`, so it resolves to root — the exact bug this commit
+    // exists to prevent, written by this commit's own code.
+    const warnings: string[] = []
+    const hostile = 'evil\nUser=root'
+    // No row for the uid, so the hostile session name is what would be written.
+    for (const env of [{ SUDO_USER: hostile, SUDO_UID: '0' }, { USER: hostile }, { LOGNAME: hostile }]) {
+      const name = bootUserName({ passwd: PASSWD, env, uid: UNKNOWN_UID, warn: (line: string) => warnings.push(line) })
+      expect(name).toBeNull()
+      expect(systemdSystemUnit(spec(), name)).not.toMatch(/^User=/m)
+    }
+    expect(warnings.join('\n')).toMatch(/not a usable user name/)
+  })
+
+  it('writes no User= line at all for an empty name', () => {
+    expect(systemdSystemUnit(spec(), '')).not.toMatch(/^User=/m)
+  })
+
+  it('rejects an unusable name at the writer, not only at the resolver', () => {
+    // Defense in depth: a caller that reaches the generator directly cannot get a
+    // hostile value into the file either.
+    expect(() => systemdSystemUnit(spec(), 'evil\nUser=root')).toThrow(/user name/)
+    expect(() => launchdPlist(spec(), { userName: 'evil\nUser=root' })).toThrow(/user name/)
   })
 })
 
@@ -168,5 +253,12 @@ describe('an entry never runs the panel as root', () => {
     const daemon = launchdPlist(spec({ logDir: path.join(home, 'logs') }), { userName: USER })
     expect(daemon).toContain(`<string>${USER}</string>`)
     expect(daemon).not.toContain('<string>root</string>')
+  })
+
+  it('writes no UserName key for an empty name, rather than a root daemon', () => {
+    // launchd with no `UserName` runs as root, so an empty name must be treated as
+    // "no name" — which the caller refuses — never as a directive with no value.
+    const daemon = launchdPlist(spec({ logDir: path.join(home, 'logs') }), { userName: '  ' })
+    expect(daemon).not.toContain('<key>UserName</key>')
   })
 })

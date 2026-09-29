@@ -147,6 +147,15 @@ export interface BootAccount {
   home: string | null
   /** Root must never be written into a unit as if it were a choice. */
   root: boolean
+  /**
+   * Whether the user database actually places this name.
+   *
+   * An unverified name is not necessarily wrong — an LDAP login has no
+   * `/etc/passwd` row — but systemd cannot resolve it either, and `User=<name it
+   * cannot resolve>` makes the unit refuse to start (`status=217/USER`), so the
+   * writer warns instead of installing a crash-loop in silence.
+   */
+  verified: boolean
 }
 
 export interface BootProviderContext {

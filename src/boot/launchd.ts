@@ -10,6 +10,7 @@ import type { BootCandidate, BootState } from '../shared/contracts.js'
 import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
+  assertUserName,
   assertArg,
   assertEnvKey,
   assertLabel,
@@ -67,7 +68,10 @@ export interface LaunchdPlistOptions {
 export function launchdPlist(spec: BootSpec, options: LaunchdPlistOptions = {}): string {
   validate(spec)
   const label = launchdLabel(spec)
-  const userName = options.userName?.trim()
+  // XML escaping would keep a hostile name from breaking the plist, but `UserName`
+  // also has to be a name launchd can resolve — so it is validated, not escaped.
+  const named = options.userName?.trim()
+  const userName = named === undefined || named.length === 0 ? undefined : assertUserName(named)
   const out = path.posix.join(spec.logDir, `${label}.out.log`)
   const err = path.posix.join(spec.logDir, `${label}.err.log`)
   const envKeys = Object.keys(spec.env)

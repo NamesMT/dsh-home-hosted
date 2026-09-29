@@ -9,6 +9,7 @@ import type { BootCandidate, BootState } from '../shared/contracts.js'
 import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
+  assertUserName,
   assertArg,
   assertEnvKey,
   assertLabel,
@@ -77,13 +78,12 @@ function codeOf(result: { code: number | null, error?: string | null }): number 
 function accountNote(own: FileOwnership, ctx: BootProviderContext): string {
   if (!own.owned || own.text === null)
     return ''
+  // Only the root outcome is reachable: any other name in a unit this plugin wrote
+  // came from this same resolver, so it is the name the resolver would pick now.
   const declared = /^User=(.*)$/m.exec(own.text)?.[1]?.trim() ?? ''
-  const who = accountOf(ctx)
-  if (declared === '' || declared === 'root')
-    return '; the unit names no other user, so the panel runs as root — install again from the account that should own it'
-  if (who !== null && !who.root && who.name !== declared)
-    return `; the unit runs the panel as ${declared}, not ${who.name} — install again to hand it over`
-  return ''
+  return declared === '' || declared === 'root'
+    ? '; the unit names no other user, so the panel runs as root — install again from the account that should own it'
+    : ''
 }
 
 /** `Type=exec` with an explicit environment; boot capability comes from linger, not from this file. */
@@ -134,7 +134,7 @@ export function systemdSystemUnit(spec: BootSpec, user: string | null = null): s
     'StartLimitBurst=5',
     '',
     '[Service]',
-    ...(user === null || user === 'root' ? [] : [`User=${user}`]),
+    ...(user === null || user === '' || user === 'root' ? [] : [`User=${assertUserName(user)}`]),
     'Type=exec',
     `ExecStart=${[spec.command, ...spec.args].map(systemdExecWord).join(' ')}`,
     `WorkingDirectory=${systemdPath(spec.cwd, 'spec.cwd')}`,
