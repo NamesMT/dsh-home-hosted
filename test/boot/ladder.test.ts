@@ -291,8 +291,10 @@ describe('ladder activation and switching', () => {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-system-running'))
         return { code: 0, stdout: 'running\n' }
+      // Only the user scope has a unit here: answering for the system scope too
+      // would make systemd-system read as installed and be retired as well.
       if (command === 'systemctl' && args.includes('is-enabled'))
-        return { code: 0 }
+        return args.includes('--user') ? { code: 0 } : { code: 4 }
       if (command === 'loginctl')
         return { code: 0, stdout: 'Linger=yes\n' }
       return { code: 0 }
@@ -312,6 +314,7 @@ describe('ladder activation and switching', () => {
     const plan = await ladder.activate(spec(), 'systemd-user')
     expect(plan).not.toBeNull()
     expect(plan?.commands).toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
+    expect(plan?.stop).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
     // Retirement rides in the same plan: only the detached helper may remove an
     // entry, and only after the panel is down and the new one has started.
     expect(plan?.retired).toEqual(['xdg-autostart'])
