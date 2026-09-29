@@ -1,6 +1,27 @@
 # Changelog
 
 
+## v0.6.2
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.1...v0.6.2)
+
+### 🩹 Fixes
+
+- **boot:** Never run a system entry as root, and keep entries alive across a restart ([8f053dc](https://github.com/NamesMT/dsh-home-hosted/commit/8f053dc))
+- **boot:** Never write a User= systemd cannot resolve, and refuse an injected name ([a7f0a96](https://github.com/NamesMT/dsh-home-hosted/commit/a7f0a96))
+
+### 📖 Documentation
+
+- **boot:** An ordinary entry is detached too, so KillMode keeps every server ([e27bad4](https://github.com/NamesMT/dsh-home-hosted/commit/e27bad4))
+
+### ✅ Tests
+
+- **boot:** Resolve accounts against an injected user database ([11e1745](https://github.com/NamesMT/dsh-home-hosted/commit/11e1745))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.6.1
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.0...v0.6.1)
