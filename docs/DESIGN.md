@@ -351,6 +351,10 @@ its own session — but *not* its own cgroup, and systemd's default
 `systemctl stop`/`restart` — which is what this plugin's own activation, and any
 `Restart=always`, runs — takes the nanny down with the panel, quietly falsifying
 the guarantee the design depends on. `KillMode=process` signals the panel alone.
+
+An ordinary entry is spawned `detached` too, so the same applies to every
+supervised server and not only the nannies: the panel re-adopts a survivor by its
+port, which is what makes keeping them the right answer rather than a leak.
 It belongs on both units.
 
 ## macOS: agent or daemon

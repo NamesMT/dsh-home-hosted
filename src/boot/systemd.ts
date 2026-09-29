@@ -103,7 +103,9 @@ export function systemdUserUnit(spec: BootSpec): string {
     // the panel. The nanny is spawned `detached`, which gives it its own session —
     // but *not* its own cgroup, so the default `KillMode=control-group` kills it
     // with the panel and takes the entry down too, quietly falsifying what
-    // `persistent: true` promises. `process` signals the panel alone.
+    // `persistent: true` promises. `process` signals the panel alone. (An ordinary
+    // entry is spawned detached as well, so this keeps every supervised server, not
+    // only the nannies — the panel re-adopts such a survivor by its port.)
     'KillMode=process',
     'Restart=always',
     'RestartSec=5',
