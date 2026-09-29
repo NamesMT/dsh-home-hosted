@@ -260,7 +260,7 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   ui_manage: {
-    description: 'Inspect or change the panel\'s own web UI: status, update, revert to stock, or install an official UI by release asset, or a local zip.',
+    description: 'Inspect or change the panel\'s own web UI: status, update, revert, or install a UI by release asset or local zip.',
     parameters: {
       instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'status, update, revert or switch' },
