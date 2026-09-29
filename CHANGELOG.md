@@ -1,6 +1,26 @@
 # Changelog
 
 
+## v0.6.1
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.0...v0.6.1)
+
+### 🚀 Enhancements
+
+- **tools:** Concise descriptions, explicit workspace, UI via the panel CLI ([4a0e290](https://github.com/NamesMT/dsh-home-hosted/commit/4a0e290))
+
+### 🩹 Fixes
+
+- **launcher:** Pin by tier, and never read a shim's surrounding package ([9d89ccc](https://github.com/NamesMT/dsh-home-hosted/commit/9d89ccc))
+
+### 📖 Documentation
+
+- **tools:** Shorten the ui_manage description ([884d73e](https://github.com/NamesMT/dsh-home-hosted/commit/884d73e))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.6.0
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.3...v0.6.0)
