@@ -92,10 +92,9 @@ running.
 | `home_hosted_servers_lifecycle` | `start` · `stop` · `restart` |
 | `home_hosted_servers_edit` | `create` · `update` · `delete` |
 | `home_hosted_autostart_manage` | `install` · `uninstall` |
-| `home_hosted_ui_manage` | `status` · `update` · `revert` · `switch` the panel's own UI |
+| `home_hosted_ui_manage` | `status` · `update` · `revert` · `switch` (official asset or local zip) |
 
-The server tools take a `workspace`, because an id is only unique inside one; omitting it means the
-workspace the plugin manages.
+Every server tool names its `workspace`, because an id is only unique inside one.
 
 A tool that changes something asks for approval **only** when the session is not already Full access.
 <sub>A refused token is re-enrolled on the spot and the tool retries — see **automatic regeneration** below.</sub>

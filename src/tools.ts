@@ -68,6 +68,18 @@ function stringArg(input: Input, key: string): string | null {
 }
 
 /**
+ * The workspace a server call acts on, which every such call names explicitly —
+ * a server id is only unique inside one workspace, so a default would make the
+ * same call mean different things on different machines.
+ */
+function requiredWorkspace(input: Input): string {
+  const workspace = stringArg(input, 'workspace')
+  if (workspace === null)
+    throw new Error('workspace is required; a server id is only unique inside one')
+  return workspace
+}
+
+/**
  * A structured argument. `entry`/`patch` are declared as objects, so the runtime
  * validates them before this runs; what remains is the absent case, which the
  * caller reports as such rather than as an unusable value.
@@ -99,16 +111,14 @@ interface ToolSpec {
  */
 const INSTANCE_PARAM = {
   type: 'string',
-  description: 'Home-hosted panel to act on: a state root (--home) or URL reported by home_hosted_status. Omit for the panel this plugin manages; naming another panel asks the user how to reach it before it changes anything.',
+  description: 'Panel state root or URL; omit for the managed panel',
 } as const satisfies ParameterPropertySpec
 
-/**
- * Which workspace inside that panel a call acts on. A server id is only unique
- * inside one, so every entry-shaped tool has to name it to be unambiguous.
- */
+/** Which workspace a call acts on; a server id is only unique inside one. */
 const WORKSPACE_PARAM = {
   type: 'string',
-  description: 'Workspace to act on (^[a-z0-9][a-z0-9_-]*$); a server id is only unique inside one. Omit for the workspace this plugin manages, which for another panel is its default.',
+  required: true,
+  description: 'Workspace id (^[a-z0-9][a-z0-9_-]*$)',
 } as const satisfies ParameterPropertySpec
 
 /**
@@ -157,30 +167,30 @@ const PATCH_PARAM = {
 
 const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
   status: {
-    description: 'Report the home-hosted panel state, every home-hosted panel found on this machine, its boot-autostart entry, and the entries this plugin manages. This describes the managed panel only; its payload lists the others.',
+    description: 'Report the panel state, the panels found on this machine, its autostart entry, and the entries this plugin manages.',
     parameters: { instance: INSTANCE_PARAM },
     run: () => ({ endpoint: 'status', payload: {} }),
   },
   workspaces_list: {
-    description: 'List every workspace a home-hosted panel serves, with its label, entry count and running count. A workspace is the ownership boundary: a server id is only unique inside one, which is why the servers_* tools take a workspace. Read-only.',
+    description: 'List every workspace the panel serves, with its label, entry count and running count. Read-only.',
     parameters: { instance: INSTANCE_PARAM },
     run: () => ({ endpoint: 'workspaces.list', payload: {} }),
   },
   servers_list: {
-    description: 'List the servers home-hosted supervises in one workspace, with status, pid and url. A server id is only unique inside a workspace, so name the workspace you mean. A named panel is read from its config file, or through its API when this plugin already holds a token for that panel; naming the API mechanism mints one.',
+    description: 'List the servers home-hosted supervises in one workspace, with status, pid and url.',
     parameters: { instance: INSTANCE_PARAM, workspace: WORKSPACE_PARAM },
     run: (input) => {
-      const workspace = stringArg(input, 'workspace')
-      return { endpoint: 'servers.list', payload: workspace === null ? {} : { workspace } }
+      const workspace = requiredWorkspace(input)
+      return { endpoint: 'servers.list', payload: { workspace } }
     },
   },
   servers_lifecycle: {
-    description: 'Start, stop or restart a server supervised by home-hosted, in the workspace the call names. A server id is only unique inside a workspace, so name the workspace when it is not the one this plugin manages. Restarting the entry this session runs as ends the session. A named panel is driven through the home-hosted CLI aimed at its state root, or through its API, and a CLI restart is a stop then a start.',
+    description: 'Start, stop or restart a server supervised by home-hosted. Restarting the entry this session runs as ends the session.',
     parameters: {
       instance: INSTANCE_PARAM,
       workspace: WORKSPACE_PARAM,
       action: { type: 'string', required: true, description: 'start, stop or restart' },
-      id: { type: 'string', required: true, description: 'Server entry id, unique inside the named workspace' },
+      id: { type: 'string', required: true, description: 'Server entry id' },
     },
     run: (input) => {
       const action = stringArg(input, 'action')
@@ -189,33 +199,30 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
       const id = stringArg(input, 'id')
       if (id === null)
         throw new Error('id is required')
-      const workspace = stringArg(input, 'workspace')
       return {
         endpoint: `servers.${action}` as RpcEndpoint,
-        payload: workspace === null ? { id } : { id, workspace },
+        payload: { id, workspace: requiredWorkspace(input) },
       }
     },
   },
   servers_edit: {
-    description: 'Create, update or delete a home-hosted server entry in the workspace the call names. A server id is only unique inside a workspace, so name the workspace when it is not the one this plugin manages. Delete is refused for the entry this session runs as. A named panel is edited through its servers.config.json, or through its API with a token this plugin mints.',
+    description: 'Create, update or delete a home-hosted server entry. Delete is refused for the entry this session runs as.',
     parameters: {
       instance: INSTANCE_PARAM,
       workspace: WORKSPACE_PARAM,
       action: { type: 'string', required: true, description: 'create, update or delete' },
-      id: { type: 'string', description: 'Server entry id, unique inside the named workspace (update, delete)' },
+      id: { type: 'string', description: 'Server entry id (update, delete)' },
       entry: ENTRY_PARAM,
       patch: PATCH_PARAM,
     },
     run: (input) => {
       const action = stringArg(input, 'action')
-      const workspace = stringArg(input, 'workspace')
-      const scoped = (payload: Record<string, unknown>): Record<string, unknown> =>
-        workspace === null ? payload : { ...payload, workspace }
+      const workspace = requiredWorkspace(input)
       if (action === 'create') {
         const entry = jsonArg(input, 'entry')
         if (entry === null)
           throw jsonArgError(input, 'entry', 'to create a server')
-        return { endpoint: 'servers.create', payload: scoped({ entry }) }
+        return { endpoint: 'servers.create', payload: { entry, workspace } }
       }
       if (action === 'update') {
         const id = stringArg(input, 'id')
@@ -226,23 +233,23 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
           throw jsonArgError(input, 'patch', 'to update a server')
         // A caller may echo the id back; it is the key, not a field to change.
         const { id: _key, ...fields } = patch
-        return { endpoint: 'servers.update', payload: scoped({ id, patch: fields }) }
+        return { endpoint: 'servers.update', payload: { id, patch: fields, workspace } }
       }
       if (action === 'delete') {
         const id = stringArg(input, 'id')
         if (id === null)
           throw new Error('id is required to delete a server')
-        return { endpoint: 'servers.delete', payload: scoped({ id }) }
+        return { endpoint: 'servers.delete', payload: { id, workspace } }
       }
       throw new Error('action must be create, update or delete')
     },
   },
   autostart_manage: {
-    description: 'Install or remove the OS entry that starts home-hosted at boot or login. The entry is machine-wide and always starts the panel this plugin manages. Installing hands the running panel to that entry: it stops the panel (and every server it supervises, which can include this session) and starts it again, then removes any other autostart entry.',
+    description: 'Install or remove the OS entry that starts home-hosted at boot or login. Installing stops the panel (and every server it supervises, which can include this session) and starts it again through that entry.',
     parameters: {
       instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'install or uninstall' },
-      mechanism: { type: 'string', description: 'Explicit mechanism, e.g. launchd-daemon or systemd-system; omit to use the plugin setting' },
+      mechanism: { type: 'string', description: 'Mechanism, e.g. systemd-system; omit for the plugin setting' },
     },
     run: (input) => {
       const action = stringArg(input, 'action')
@@ -253,18 +260,33 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   ui_manage: {
-    description: 'Inspect or change the home-hosted panel\'s own web UI: status, update, revert to stock, or switch to a local zip. A named panel\'s UI is driven through the home-hosted CLI aimed at its state root.',
+    description: 'Inspect or change the panel\'s own web UI: status, update, revert to stock, or install an official UI by release asset, or a local zip.',
     parameters: {
       instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'status, update, revert or switch' },
-      file: { type: 'string', description: 'Absolute path to a UI zip (switch)' },
+      asset: { type: 'string', description: 'Release asset name to install (switch), e.g. noc-console' },
+      repo: { type: 'string', description: 'owner/name the asset lives in (switch/update)' },
+      tag: { type: 'string', description: 'Release tag (switch/update)' },
+      file: { type: 'string', description: 'Absolute path to a local UI zip (switch)' },
     },
     run: (input) => {
       const action = stringArg(input, 'action')
       if (action !== 'status' && action !== 'update' && action !== 'revert' && action !== 'switch')
         throw new Error('action must be status, update, revert or switch')
-      const file = stringArg(input, 'file')
-      return { endpoint: 'ui.manage', payload: { action: action as UiAction, ...(file === null ? {} : { file }) } }
+      const optional = (key: string): Record<string, string> => {
+        const value = stringArg(input, key)
+        return value === null ? {} : { [key]: value }
+      }
+      return {
+        endpoint: 'ui.manage',
+        payload: {
+          action: action as UiAction,
+          ...optional('file'),
+          ...optional('asset'),
+          ...optional('repo'),
+          ...optional('tag'),
+        },
+      }
     },
   },
 }

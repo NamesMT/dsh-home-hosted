@@ -30,7 +30,15 @@ interface Harness {
   /** Flip settings and let the store's listener re-register. */
   update: (patch: Parameters<SettingsStore['update']>[0]) => void
   registeredNames: () => string[]
+  /**
+   * Invoke a registered tool, naming the managed workspace unless the call says
+   * otherwise. Every server call has to carry one; the default here is the same
+   * id a model would get from `home_hosted_workspaces_list`.
+   */
+  execute: (index: number, input: Record<string, unknown>, exec?: unknown) => Promise<string>
 }
+
+const MANAGED_WORKSPACE = 'default'
 
 function harness(options: {
   approval?: (toolName: string) => string
@@ -123,6 +131,14 @@ function harness(options: {
     settings,
     update: patch => settings.update(patch),
     registeredNames: () => tools.map(tool => tool.name),
+    execute: async (index, input, exec = { agent: 'a' }) => {
+      const workspaceTools: AgentToolName[] = ['servers_list', 'servers_lifecycle', 'servers_edit']
+      const needsWorkspace = workspaceTools.some(name => tools[index]!.name === toolNameFor(name))
+      const withWorkspace = needsWorkspace && !('workspace' in input)
+        ? { workspace: MANAGED_WORKSPACE, ...input }
+        : input
+      return await tools[index]!.execute(withWorkspace, exec)
+    },
   }
 }
 
@@ -170,41 +186,68 @@ describe('agent tools', () => {
   it('maps a lifecycle action onto its endpoint', async () => {
     for (const action of ['start', 'stop', 'restart']) {
       const h = harness({ allow: ['servers_lifecycle'], sandbox: 'danger-full-access' })
-      const answer = await h.tools[0]!.execute({ action, id: 'other' }, { agent: 'a' })
-      expect(h.calls[0]).toEqual({ endpoint: `servers.${action}`, payload: { id: 'other' } })
+      const answer = await h.execute(0, { action, id: 'other' }, { agent: 'a' })
+      expect(h.calls[0]).toEqual({ endpoint: `servers.${action}`, payload: { id: 'other', workspace: 'default' } })
       expect(answer).toContain(`servers.${action}`)
     }
   })
 
   it('checks the arguments of the merged edit tool', async () => {
     const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
-    const tool = h.tools[0]!
-    expect(await tool.execute({ action: 'create' }, { agent: 'a' })).toContain('entry must be a JSON object to create a server (received: missing)')
-    expect(await tool.execute({ action: 'update', id: 'x' }, { agent: 'a' })).toContain('patch must be a JSON object to update a server (received: missing)')
-    expect(await tool.execute({ action: 'delete' }, { agent: 'a' })).toContain('id is required')
-    expect(await tool.execute({ action: 'nope' }, { agent: 'a' })).toContain('action must be')
+    expect(await h.execute(0, { action: 'create' })).toContain('entry must be a JSON object to create a server (received: missing)')
+    expect(await h.execute(0, { action: 'update', id: 'x' })).toContain('patch must be a JSON object to update a server (received: missing)')
+    expect(await h.execute(0, { action: 'delete' })).toContain('id is required')
+    expect(await h.execute(0, { action: 'nope' })).toContain('action must be')
     expect(h.calls).toHaveLength(0)
 
-    await tool.execute({ action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.create', payload: { entry: { id: 'x', command: 'sleep' } } })
+    await h.execute(0, { action: 'create', entry: { id: 'x', command: 'sleep' } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.create', payload: { entry: { id: 'x', command: 'sleep' }, workspace: 'default' } })
   })
 
   it('maps autostart and ui actions', async () => {
     const autostart = harness({ allow: ['autostart_manage'], sandbox: 'danger-full-access' })
-    await autostart.tools[0]!.execute({ action: 'install', mechanism: 'launchd-daemon' }, { agent: 'a' })
+    await autostart.execute(0, { action: 'install', mechanism: 'launchd-daemon' }, { agent: 'a' })
     expect(autostart.calls[0]).toEqual({ endpoint: 'boot.install', payload: { mechanism: 'launchd-daemon' } })
-    await autostart.tools[0]!.execute({ action: 'uninstall' }, { agent: 'a' })
+    await autostart.execute(0, { action: 'uninstall' }, { agent: 'a' })
     expect(autostart.calls[1]).toEqual({ endpoint: 'boot.uninstall', payload: {} })
 
     const ui = harness({ allow: ['ui_manage'], sandbox: 'danger-full-access' })
-    await ui.tools[0]!.execute({ action: 'switch', file: '/tmp/x.zip' }, { agent: 'a' })
+    await ui.execute(0, { action: 'switch', file: '/tmp/x.zip' }, { agent: 'a' })
     expect(ui.calls[0]).toEqual({ endpoint: 'ui.manage', payload: { action: 'switch', file: '/tmp/x.zip' } })
-    expect(await ui.tools[0]!.execute({ action: 'delete' }, { agent: 'a' })).toContain('action must be')
+    expect(await ui.execute(0, { action: 'delete' }, { agent: 'a' })).toContain('action must be')
+  })
+
+  it('passes an official UI asset through instead of a downloaded zip', async () => {
+    const ui = harness({ allow: ['ui_manage'], sandbox: 'danger-full-access' })
+    await ui.execute(0, { action: 'switch', asset: 'noc-console' })
+    expect(ui.calls[0]).toEqual({ endpoint: 'ui.manage', payload: { action: 'switch', asset: 'noc-console' } })
+
+    await ui.execute(0, { action: 'switch', asset: 'noc-console', repo: 'acme/console', tag: 'v2' })
+    expect(ui.calls[1]).toEqual({
+      endpoint: 'ui.manage',
+      payload: { action: 'switch', asset: 'noc-console', repo: 'acme/console', tag: 'v2' },
+    })
+  })
+
+  it('drops an argument a call did not give, rather than sending an empty one', async () => {
+    const ui = harness({ allow: ['ui_manage'], sandbox: 'danger-full-access' })
+    await ui.execute(0, { action: 'update', file: '' })
+    expect(ui.calls[0]).toEqual({ endpoint: 'ui.manage', payload: { action: 'update' } })
+  })
+
+  it('requires the workspace on every server call, so an id is never ambiguous', async () => {
+    const h = harness({ allow: ['servers_lifecycle'], sandbox: 'danger-full-access' })
+    const parameters = h.tools[0]!.parameters as { required?: string[] }
+    // Requiredness is announced where a model reads it, and enforced before the
+    // handler: both halves have to agree or the model gets no signal at all.
+    expect(parameters.required).toContain('workspace')
+    await expect(h.tools[0]!.execute({ action: 'start', id: 'x' }, { agent: 'a' }))
+      .rejects.toThrow(/"workspace"/)
   })
 
   it('does not ask for approval for a read-only ui status call', async () => {
     const h = harness({ allow: ['ui_manage'], sandbox: 'workspace-write' })
-    const answer = await h.tools[0]!.execute({ action: 'status' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'status' }, { agent: 'a' })
     expect(h.approvals).toHaveLength(0)
     expect(h.calls[0]).toEqual({ endpoint: 'ui.manage', payload: { action: 'status' } })
     expect(answer).toContain('ui.manage')
@@ -213,18 +256,18 @@ describe('agent tools', () => {
   it('still asks before a ui action that changes the panel', async () => {
     const h = harness({ allow: ['ui_manage'], sandbox: 'workspace-write' })
     for (const action of ['update', 'revert', 'switch']) {
-      expect(await h.tools[0]!.execute({ action }, { agent: 'a' })).toContain('refused')
+      expect(await h.execute(0, { action }, { agent: 'a' })).toContain('refused')
     }
     // An unknown action is a bad input, not a read-only one: it is rejected
     // before any permission prompt, and nothing runs.
-    expect(await h.tools[0]!.execute({ action: 'Status' }, { agent: 'a' })).toContain('action must be')
+    expect(await h.execute(0, { action: 'Status' }, { agent: 'a' })).toContain('action must be')
     expect(h.approvals).toHaveLength(0)
     expect(h.calls).toHaveLength(0)
   })
 
   it('fails closed when the deployment has no approval service', async () => {
     const h = harness({ allow: ['servers_lifecycle'] })
-    const answer = await h.tools[0]!.execute({ action: 'start', id: 'other' }, { agent: 'agent-1' })
+    const answer = await h.execute(0, { action: 'start', id: 'other' }, { agent: 'agent-1' })
     expect(answer).toContain('refused')
     expect(h.calls).toHaveLength(0)
   })
@@ -232,7 +275,7 @@ describe('agent tools', () => {
   it('refuses when approval rejects or cancels', async () => {
     for (const outcome of ['rejected', 'cancelled', 'unavailable']) {
       const h = harness({ allow: ['servers_edit'], approval: () => outcome })
-      const answer = await h.tools[0]!.execute({ action: 'delete', id: 'other' }, { agent: 'agent-1' })
+      const answer = await h.execute(0, { action: 'delete', id: 'other' }, { agent: 'agent-1' })
       expect(answer).toContain(`refused: approval answered "${outcome}"`)
       expect(answer).toContain('Full access')
       expect(h.calls).toHaveLength(0)
@@ -241,10 +284,10 @@ describe('agent tools', () => {
 
   it('runs a mutating tool once approval allows it', async () => {
     const h = harness({ allow: ['servers_edit'], approval: () => 'allowed-once' })
-    const answer = await h.tools[0]!.execute({ action: 'update', id: 'dsh', patch: { autostart: false } }, { agent: 'agent-1' })
+    const answer = await h.execute(0, { action: 'update', id: 'dsh', patch: { autostart: false } }, { agent: 'agent-1' })
     expect(h.approvals).toHaveLength(1)
     expect(h.approvals[0]?.toolName).toBe('home_hosted_servers_edit')
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'dsh', patch: { autostart: false } } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'dsh', patch: { autostart: false }, workspace: 'default' } })
     expect(answer).toContain('servers.update')
   })
 
@@ -263,7 +306,7 @@ describe('agent tools', () => {
       { call: async () => { throw new Error('panel unavailable') } } as unknown as HomeHostedService,
       settings,
     )
-    const answer = await tools[0]!.execute({ action: 'start', id: 'x' }, {})
+    const answer = await tools[0]!.execute({ action: 'start', id: 'x', workspace: 'default' }, {})
     expect(answer).toContain('failed: panel unavailable')
   })
 })
@@ -295,22 +338,21 @@ describe('structured arguments through the bridge', () => {
   it('carries a real entry object through to the endpoint unchanged', async () => {
     const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
     const entry = { id: 'x', command: 'sleep', args: ['5'], env: { A: 'b' } }
-    await h.tools[0]!.execute({ action: 'create', entry }, { agent: 'a' })
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.create', payload: { entry } })
+    await h.execute(0, { action: 'create', entry }, { agent: 'a' })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.create', payload: { entry, workspace: 'default' } })
 
     const patch = { autostart: false, stop: { killPortHolders: true } }
-    await h.tools[0]!.execute({ action: 'update', id: 'x', patch }, { agent: 'a' })
-    expect(h.calls[1]).toEqual({ endpoint: 'servers.update', payload: { id: 'x', patch } })
+    await h.execute(0, { action: 'update', id: 'x', patch }, { agent: 'a' })
+    expect(h.calls[1]).toEqual({ endpoint: 'servers.update', payload: { id: 'x', patch, workspace: 'default' } })
   })
 
   it('names the parameter and the received type when a value cannot be used', async () => {
     const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
-    const tool = h.tools[0]!
     // The declared object type is what rejects a wrong shape, before the handler.
-    await expect(tool.execute({ action: 'create', entry: 'not json' }, { agent: 'a' }))
+    await expect(h.execute(0, { action: 'create', entry: 'not json' }))
       .rejects.toThrow(/"entry" must be an object/)
     // And an absent one says so, instead of reading as a malformed payload.
-    expect(await tool.execute({ action: 'create' }, { agent: 'a' }))
+    expect(await h.execute(0, { action: 'create' }))
       .toContain('entry must be a JSON object to create a server (received: missing)')
     expect(h.calls).toHaveLength(0)
   })
@@ -351,14 +393,14 @@ describe('panel targeting', () => {
     // No inventory means no way to tell which panel is meant; falling back to the
     // managed panel would be the silent retarget this must not do.
     const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
-    const answer = await h.tools[0]!.execute({ action: 'delete', id: 'dsh', instance: '/other' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'delete', id: 'dsh', instance: '/other' }, { agent: 'a' })
     expect(answer).toContain('refused: this host could not list the home-hosted panels')
     expect(h.calls).toHaveLength(0)
   })
 
   it('refuses a panel it cannot find', async () => {
     const h = harness({ allow: ['servers_lifecycle'], sandbox: 'danger-full-access', instances: [managed] })
-    const answer = await h.tools[0]!.execute({ action: 'start', id: 'x', instance: '/nope' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'start', id: 'x', instance: '/nope' }, { agent: 'a' })
     expect(answer).toContain('no home-hosted panel at "/nope"')
     expect(h.calls).toHaveLength(0)
   })
@@ -366,8 +408,8 @@ describe('panel targeting', () => {
   it('accepts the managed panel named by path or url, and never sends the selector to the panel', async () => {
     for (const selector of ['/managed', 'http://127.0.0.1:3999']) {
       const h = harness({ allow: ['servers_lifecycle'], sandbox: 'danger-full-access', instances: [managed, other] })
-      const answer = await h.tools[0]!.execute({ action: 'start', id: 'x', instance: selector }, { agent: 'a' })
-      expect(h.calls[0]).toEqual({ endpoint: 'servers.start', payload: { id: 'x' } })
+      const answer = await h.execute(0, { action: 'start', id: 'x', instance: selector }, { agent: 'a' })
+      expect(h.calls[0]).toEqual({ endpoint: 'servers.start', payload: { id: 'x', workspace: 'default' } })
       expect(h.asks).toHaveLength(0)
       expect(answer).toContain('servers.start')
     }
@@ -380,10 +422,10 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => fileAnswer,
     })
-    const answer = await h.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
     expect(h.asks).toHaveLength(1)
     expect(h.asks[0]?.questions[0]?.question).toContain('/other is not a panel this plugin manages. How should it be changed?')
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.delete', payload: { id: 'x', home: '/other', via: 'file' } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.delete', payload: { id: 'x', workspace: 'default', home: '/other', via: 'file' } })
     expect(answer).toContain('acted on /other')
     expect(answer).toContain('by editing its servers.config.json')
   })
@@ -395,11 +437,11 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => ({ answers: [{ id: 'home-hosted-foreign-panel', selected: [API_OPTION] }] }),
     })
-    const answer = await h.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
     expect(h.asks[0]?.questions[0]?.options?.map(option => option.label))
       .toEqual([FILE_OPTION, API_OPTION, 'Cancel'])
     expect(h.asks[0]?.questions[0]?.options?.[1]?.description).toContain('mints a token for it')
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.delete', payload: { id: 'x', home: '/other', via: 'api' } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.delete', payload: { id: 'x', workspace: 'default', home: '/other', via: 'api' } })
     expect(answer).toContain('by enrolling a token for it and using its API')
   })
 
@@ -410,16 +452,16 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => cliAnswer,
     })
-    await h.tools[0]!.execute({ action: 'restart', id: 'web', instance: '/other' }, { agent: 'a' })
+    await h.execute(0, { action: 'restart', id: 'web', instance: '/other' }, { agent: 'a' })
     expect(h.asks[0]?.questions[0]?.question).toContain('How should it be changed?')
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.restart', payload: { id: 'web', home: '/other', via: 'cli' } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.restart', payload: { id: 'web', workspace: 'default', home: '/other', via: 'cli' } })
   })
 
   it('reads another panel without asking, and says where the answer came from', async () => {
     const h = harness({ allow: ['servers_list'], instances: [managed, other] })
-    const answer = await h.tools[0]!.execute({ instance: '/other' }, { agent: 'a' })
+    const answer = await h.execute(0, { instance: '/other' }, { agent: 'a' })
     expect(h.asks).toHaveLength(0)
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.list', payload: { home: '/other', via: 'file' } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.list', payload: { workspace: 'default', home: '/other', via: 'file' } })
     expect(answer).toContain('read from /other')
   })
 
@@ -430,7 +472,7 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => ({ answers: [{ id: 'home-hosted-foreign-panel', selected: ['Cancel'] }] }),
     })
-    expect(await cancelled.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })).toContain('did not confirm')
+    expect(await cancelled.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })).toContain('did not confirm')
     expect(cancelled.calls).toHaveLength(0)
 
     const dismissed = harness({
@@ -439,7 +481,7 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => Object.assign(new Error('dismissed'), { code: 'ASK_ABORTED' }),
     })
-    expect(await dismissed.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })).toContain('dismissed the panel question')
+    expect(await dismissed.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })).toContain('dismissed the panel question')
     expect(dismissed.calls).toHaveLength(0)
   })
 
@@ -450,8 +492,8 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => ({ answers: [{ id: 'home-hosted-foreign-panel', selected: [], custom: 'yes, edit the config' }] }),
     })
-    await h.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
-    expect(h.calls[0]?.payload).toEqual({ id: 'x', home: '/other', via: 'file' })
+    await h.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
+    expect(h.calls[0]?.payload).toEqual({ id: 'x', workspace: 'default', home: '/other', via: 'file' })
   })
 
   it('lets a host with no answerer carry out an explicitly named panel, and says so', async () => {
@@ -461,19 +503,19 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => Object.assign(new Error('no answerer'), { code: 'NO_PROVIDER' }),
     })
-    const answer = await h.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
-    expect(h.calls[0]?.payload).toEqual({ id: 'x', home: '/other', via: 'file' })
+    const answer = await h.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
+    expect(h.calls[0]?.payload).toEqual({ id: 'x', workspace: 'default', home: '/other', via: 'file' })
     expect(answer).toContain('acted on /other')
   })
 
   it('refuses an endpoint that is about the managed panel, whichever panel is named', async () => {
     const h = harness({ allow: ['status'], instances: [managed, other] })
-    const answer = await h.tools[0]!.execute({ instance: '/other' }, { agent: 'a' })
+    const answer = await h.execute(0, { instance: '/other' }, { agent: 'a' })
     expect(answer).toContain('describes the panel this plugin manages')
     expect(h.calls).toHaveLength(0)
 
     const boot = harness({ allow: ['autostart_manage'], sandbox: 'danger-full-access', instances: [managed, other] })
-    expect(await boot.tools[0]!.execute({ action: 'install', instance: '/other' }, { agent: 'a' })).toContain('one machine-wide entry')
+    expect(await boot.execute(0, { action: 'install', instance: '/other' }, { agent: 'a' })).toContain('one machine-wide entry')
     expect(boot.calls).toHaveLength(0)
   })
 
@@ -484,12 +526,12 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => ({ answers: [{ id: 'home-hosted-instance', selected: ['/managed'] }] }),
     })
-    const answer = await h.tools[0]!.execute({ action: 'update', id: 'x', patch: { autostart: false } }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'update', id: 'x', patch: { autostart: false } }, { agent: 'a' })
     expect(h.asks).toHaveLength(1)
     expect(h.asks[0]?.questions[0]?.question).toContain('2 home-hosted panels')
     expect(h.asks[0]?.questions[0]?.options?.map(option => option.label)).toEqual(['/managed', '/other', 'Cancel'])
     expect(h.asks[0]?.questions[0]?.options?.[1]?.description).toContain('by editing its servers.config.json')
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'x', patch: { autostart: false } } })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'x', patch: { autostart: false }, workspace: 'default' } })
     expect(answer).not.toContain('not the panel this plugin manages')
   })
 
@@ -500,10 +542,10 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: answersByQuestion('/other', FILE_OPTION),
     })
-    const answer = await h.tools[0]!.execute({ action: 'update', id: 'x', patch: { autostart: false } }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'update', id: 'x', patch: { autostart: false } }, { agent: 'a' })
     // Which panel, then how: one decision per question.
     expect(h.asks.map(request => request.questions[0]?.id)).toEqual(['home-hosted-instance', 'home-hosted-foreign-panel'])
-    expect(h.calls[0]?.payload).toEqual({ id: 'x', patch: { autostart: false }, home: '/other', via: 'file' })
+    expect(h.calls[0]?.payload).toEqual({ id: 'x', patch: { autostart: false }, workspace: 'default', home: '/other', via: 'file' })
     expect(answer).toContain('acted on /other')
   })
 
@@ -515,7 +557,7 @@ describe('panel targeting', () => {
         instances: [managed, other],
         answer: () => ({ answers: [{ id: 'home-hosted-foreign-panel', selected, custom: 'no, do not edit the config' }] }),
       })
-      const answer = await h.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
+      const answer = await h.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
       expect(answer).toContain('did not confirm')
       expect(h.calls).toHaveLength(0)
     }
@@ -523,8 +565,8 @@ describe('panel targeting', () => {
 
   it('strips the id a patch may echo, because the panel rejects it', async () => {
     const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
-    await h.tools[0]!.execute({ action: 'update', id: 'web', patch: { id: 'web', port: null } }, { agent: 'a' })
-    expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'web', patch: { port: null } } })
+    await h.execute(0, { action: 'update', id: 'web', patch: { id: 'web', port: null } }, { agent: 'a' })
+    expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'web', patch: { port: null }, workspace: 'default' } })
   })
 
   it('does not repair the managed token for a failure on another panel', async () => {
@@ -536,7 +578,7 @@ describe('panel targeting', () => {
       answer: () => ({ answers: [{ id: 'home-hosted-foreign-panel', selected: [API_OPTION] }] }),
       call: async () => { throw refused },
     })
-    const answer = await h.tools[0]!.execute({ action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'delete', id: 'x', instance: '/other' }, { agent: 'a' })
     expect(answer).toContain('failed: authentication required')
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.delete'])
   })
@@ -548,7 +590,7 @@ describe('panel targeting', () => {
       instances: [managed, other],
       answer: () => Object.assign(new Error('the question UI exploded'), { code: 'UI_FAILED' }),
     })
-    const answer = await h.tools[0]!.execute({ action: 'delete', id: 'x' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'delete', id: 'x' }, { agent: 'a' })
     expect(answer).toContain('refused: the panel question could not be asked')
     expect(answer).toContain('the question UI exploded')
     expect(h.calls).toHaveLength(0)
@@ -566,22 +608,22 @@ describe('panel targeting', () => {
 
   it('does not ask for a read-only call, or when the setting is off', async () => {
     const read = harness({ allow: ['status'], instances: [managed, other] })
-    await read.tools[0]!.execute({}, { agent: 'a' })
+    await read.execute(0, {}, { agent: 'a' })
     expect(read.asks).toHaveLength(0)
     expect(read.calls[0]?.endpoint).toBe('status')
 
     const off = harness({ allow: ['servers_lifecycle'], sandbox: 'danger-full-access', instances: [managed, other] })
     off.update({ instancesNotice: false })
-    await off.tools[0]!.execute({ action: 'start', id: 'x' }, { agent: 'a' })
+    await off.execute(0, { action: 'start', id: 'x' }, { agent: 'a' })
     expect(off.asks).toHaveLength(0)
-    expect(off.calls[0]).toEqual({ endpoint: 'servers.start', payload: { id: 'x' } })
+    expect(off.calls[0]).toEqual({ endpoint: 'servers.start', payload: { id: 'x', workspace: 'default' } })
   })
 
   it('does not put the panel question before the session may act', async () => {
     // No approval service and a sandbox below Full access: the call is refused,
     // and the user is never asked which panel a refused call should have hit.
     const h = harness({ allow: ['servers_lifecycle'], instances: [managed, other] })
-    const answer = await h.tools[0]!.execute({ action: 'start', id: 'x' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'start', id: 'x' }, { agent: 'a' })
     expect(answer).toContain('no approval service')
     expect(h.asks).toHaveLength(0)
     expect(h.calls).toHaveLength(0)
@@ -589,7 +631,7 @@ describe('panel targeting', () => {
 
   it('does not ask a host that reports no inventory', async () => {
     const h = harness({ allow: ['servers_lifecycle'], sandbox: 'danger-full-access' })
-    await h.tools[0]!.execute({ action: 'start', id: 'x' }, { agent: 'a' })
+    await h.execute(0, { action: 'start', id: 'x' }, { agent: 'a' })
     expect(h.asks).toHaveLength(0)
     expect(h.calls[0]?.endpoint).toBe('servers.start')
   })
@@ -614,7 +656,7 @@ describe('token reclaim', () => {
         return { endpoint, payload }
       },
     })
-    const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+    const answer = await h.execute(0, {}, { agent: 'agent-1' })
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list', 'panel.reclaimToken', 'servers.list'])
     expect(h.calls[1]?.payload).toEqual({})
     expect(answer).toContain('"endpoint": "servers.list"')
@@ -632,7 +674,7 @@ describe('token reclaim', () => {
         return { endpoint, payload }
       },
     })
-    const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+    const answer = await h.execute(0, {}, { agent: 'agent-1' })
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list', 'status', 'panel.reclaimToken', 'servers.list'])
     expect(answer).toContain('"endpoint": "servers.list"')
   })
@@ -640,7 +682,7 @@ describe('token reclaim', () => {
   it('reports the original failure and reclaims nothing while the setting is off', async () => {
     const h = harness({ allow: ['servers_list'], call: async () => { throw refused() } })
     h.update({ reclaimToken: false })
-    const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+    const answer = await h.execute(0, {}, { agent: 'agent-1' })
     expect(answer).toBe('failed: authentication required')
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list'])
   })
@@ -653,7 +695,7 @@ describe('token reclaim', () => {
     ]
     for (const failure of failures) {
       const h = harness({ allow: ['servers_list'], call: async () => { throw failure } })
-      const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+      const answer = await h.execute(0, {}, { agent: 'agent-1' })
       expect(answer).toContain('failed:')
       expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list'])
     }
@@ -668,7 +710,7 @@ describe('token reclaim', () => {
         throw Object.assign(new Error('the panel is not running'), { code: 'PANEL_UNAVAILABLE' })
       },
     })
-    const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+    const answer = await h.execute(0, {}, { agent: 'agent-1' })
     expect(answer).toContain('failed: the panel is not running')
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list', 'status'])
   })
@@ -685,7 +727,7 @@ describe('token reclaim', () => {
         throw new PanelError('the panel refused the replacement token', 'AUTH_REQUIRED', 401)
       },
     })
-    const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+    const answer = await h.execute(0, {}, { agent: 'agent-1' })
     expect(answer).toBe('failed: the panel refused the replacement token')
     expect(h.calls.filter(call => call.endpoint === 'panel.reclaimToken')).toHaveLength(1)
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list', 'panel.reclaimToken', 'servers.list'])
@@ -700,7 +742,7 @@ describe('token reclaim', () => {
         throw refused()
       },
     })
-    const answer = await h.tools[0]!.execute({}, { agent: 'agent-1' })
+    const answer = await h.execute(0, {}, { agent: 'agent-1' })
     expect(answer).toContain('failed: authentication required')
     expect(answer).toContain('token reclaim failed: could not clear the old API token')
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.list', 'panel.reclaimToken'])
@@ -717,7 +759,7 @@ describe('token reclaim', () => {
         return { endpoint, payload }
       },
     })
-    const answer = await h.tools[0]!.execute({ action: 'start', id: 'other' }, { agent: 'agent-1' })
+    const answer = await h.execute(0, { action: 'start', id: 'other' }, { agent: 'agent-1' })
     expect(h.approvals).toHaveLength(1)
     expect(h.calls.map(call => call.endpoint)).toEqual(['servers.start', 'panel.reclaimToken', 'servers.start'])
     expect(answer).toContain('servers.start')
@@ -727,7 +769,7 @@ describe('token reclaim', () => {
 describe('session sandbox', () => {
   it('does not ask for approval when the session is already full access', async () => {
     const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
-    const answer = await h.tools[0]!.execute({ action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'agent-1' })
+    const answer = await h.execute(0, { action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'agent-1' })
     expect(h.approvals).toHaveLength(0)
     expect(h.calls).toHaveLength(1)
     expect(answer).toContain('servers.create')
@@ -735,20 +777,20 @@ describe('session sandbox', () => {
 
   it('still asks — and fails closed — below full access', async () => {
     const readOnly = harness({ allow: ['servers_edit'], sandbox: 'read-only' })
-    const answer = await readOnly.tools[0]!.execute({ action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
+    const answer = await readOnly.execute(0, { action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
     expect(answer).toContain('refused')
     expect(answer).toContain('Full access')
     expect(readOnly.calls).toHaveLength(0)
 
     const denied = harness({ allow: ['servers_edit'], sandbox: 'workspace-write', approval: () => 'rejected' })
-    const deniedAnswer = await denied.tools[0]!.execute({ action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
+    const deniedAnswer = await denied.execute(0, { action: 'create', entry: { id: 'x', command: 'sleep' } }, { agent: 'a' })
     expect(deniedAnswer).toContain('workspace-write')
     expect(denied.calls).toHaveLength(0)
   })
 
   it('runs when the sandbox is unknown but approval is granted', async () => {
     const h = harness({ allow: ['servers_lifecycle'], sandbox: null, approval: () => 'allowed-once' })
-    const answer = await h.tools[0]!.execute({ action: 'start', id: 'other' }, { agent: 'a' })
+    const answer = await h.execute(0, { action: 'start', id: 'other' }, { agent: 'a' })
     expect(h.approvals).toHaveLength(1)
     expect(answer).toContain('servers.start')
   })

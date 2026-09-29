@@ -115,10 +115,17 @@ artifact carrying this plugin's marker is ever removed.
 Seven tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit`
 carries create/update/delete, `autostart_manage` carries install/uninstall, and
 `ui_manage` drives the panel's own UI (`ui-update` / `ui-revert` / `ui-switch`).
-`workspaces_list` is the read-only way to see every workspace, and the server
-tools take a `workspace` because an id is only unique inside one.
+`workspaces_list` is the read-only way to see every workspace, and every server
+call names its `workspace` explicitly.
 They are registered on by default; what gates a mutating call is the session's
 own permission mode, not a plugin-level default.
+
+A description is read at the approval prompt, so each one is a line a person can
+glance at: what the tool does, and only the consequence they could not predict
+(restarting this session's own entry ends it; installing an entry stops the
+panel). Mechanics — which panel is reached how, which workspace a default means —
+belong in the argument schemas and the docs, not in the sentence somebody has to
+read before saying yes.
 
 Structured tool parameters are declared as objects, never as `type: 'json'`: an
 author-only `json` node projects to a schema with no `type` at all, and a real
@@ -203,6 +210,12 @@ workspace files when it does not) and act on any of them by naming it
 (`workspace` on the payload, `?workspace=` on the API, `.hh/<workspace>/…` on
 disk). Only `default` is *reconciled*; another workspace is managed the way a
 person would manage it.
+
+Every server-shaped tool call therefore carries an explicit `workspace`, required
+in the JSON: it is one argument instead of a paragraph, and it keeps the same call
+from meaning different things on two machines. The RPC endpoint still defaults an
+absent value (the page always sends one, and a hand-written call should not break),
+but a model is never left to guess.
 
 A pre-0.7 root is not read or written at all. It is recognised (a `legacyRoot`
 flag on the status), refused on every write, and fixed through one action that
@@ -451,6 +464,16 @@ value and a `.desktop` file are read by the shell or the session at login.
 Nothing is stopped then — leaving a working panel up beats killing it for an
 entry that would not bring it back. A handover that could not be spawned is
 reported with the exact commands, and the panel is still up.
+
+## The panel's UI is changed by the panel's own CLI
+
+`ui.manage` shells out to `ui-switch` / `ui-update` / `ui-revert` rather than
+downloading a release and installing a file. An official UI is named by its
+release asset (`--asset noc-console`, plus `--repo`/`--tag` when it lives
+somewhere else), and the panel then picks the release matching its own version,
+matches the asset name and verifies the archive — the version logic stays in one
+place instead of being reimplemented against the GitHub API here. `--file` stays
+for a local build, which is the case the CLI cannot cover.
 
 Enabling and switching differ only in the retirement: a switch already has an
 entry keeping the panel alive, so its plan carries the old mechanism's removal.

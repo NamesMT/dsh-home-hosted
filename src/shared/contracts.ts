@@ -160,8 +160,18 @@ export interface EndpointPayloads {
   'panel.reclaimToken': Record<string, never>
   /** Install the pinned range as a global CLI, so the `global` preference can use it. */
   'cli.installGlobal': Record<string, never>
-  /** Drive the panel's own UI: status, update, revert, or switch to a local build. */
-  'ui.manage': ForeignTarget & { action: UiAction, file?: string }
+  /**
+   * Drive the panel's own UI. `file` installs a local zip; `asset` (with optional
+   * `repo`/`tag`) installs a release asset through the panel's own `ui-switch`,
+   * so its download and version checking are not reimplemented here.
+   */
+  'ui.manage': ForeignTarget & {
+    action: UiAction
+    file?: string
+    asset?: string
+    repo?: string
+    tag?: string
+  }
   'settings.update': { patch: SettingsPatch }
 }
 

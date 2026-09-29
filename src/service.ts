@@ -944,8 +944,15 @@ export class HomeHostedService extends Service {
     return await this.entriesStatus()
   }
 
-  /** Drive the panel's own UI through its CLI, and report what is installed. */
-  async uiManage(action: UiAction, file?: string, target?: string): Promise<UiResult> {
+  /**
+   * Drive the panel's own UI through its CLI, and report what is installed.
+   *
+   * `ui-switch --asset` is preferred over a local zip for an official UI: the
+   * panel's own CLI picks the release for its version, matches the asset name
+   * and downloads it, so nothing here has to reimplement a GitHub lookup or
+   * guess which release belongs to the running panel.
+   */
+  async uiManage(action: UiAction, options: { file?: string, asset?: string, repo?: string, tag?: string } = {}, target?: string): Promise<UiResult> {
     const home = target ?? this.options.home
     const cli = action === 'status' ? null : await this.cli()
 
@@ -953,10 +960,11 @@ export class HomeHostedService extends Service {
       const launch = cli?.resolution.launch ?? null
       if (launch === null)
         throw new HomeHostedError(cli?.resolution.status.detail ?? 'no home-hosted CLI could be resolved', 'CLI_NOT_FOUND')
-      const result = await run(launch.program, [...launch.args, ...args, '--home', home], {
-        env: { ...process.env, HHOSTED_HOME: home },
-        timeoutMs: 300_000,
-      })
+      const full = [...launch.args, ...args, '--home', home]
+      const env = { ...process.env, HHOSTED_HOME: home }
+      const result = this.options.execCli !== undefined
+        ? await this.options.execCli(full, env)
+        : await run(launch.program, full, { env, timeoutMs: 300_000 })
       // A CLI that never started has no stdout to show, so its spawn error is the
       // only thing that explains the failure.
       const output = [result.error, result.stdout, result.stderr].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
@@ -969,13 +977,18 @@ export class HomeHostedService extends Service {
       return meta === null ? null : { name: meta.name ?? null, version: meta.version ?? null, repo: meta.repo ?? null, tag: meta.tag ?? null }
     }
 
+    const releaseFlags = (): string[] => [
+      ...(options.repo === undefined ? [] : ['--repo', options.repo]),
+      ...(options.tag === undefined ? [] : ['--tag', options.tag]),
+    ]
+
     switch (action) {
       case 'status': {
         const ui = active()
         return { ok: true, ui, detail: ui === null ? 'the panel is using its stock UI' : `${ui.name ?? 'a custom UI'}${ui.version === null ? '' : ` ${ui.version}`}` }
       }
       case 'update': {
-        const result = await runUi(['ui-update', '--yes'])
+        const result = await runUi(['ui-update', '--yes', ...releaseFlags()])
         return { ok: result.code === 0, detail: result.code === 0 ? 'the panel UI is up to date' : 'the update did not run', ui: active(), output: result.output }
       }
       case 'revert': {
@@ -983,8 +996,14 @@ export class HomeHostedService extends Service {
         return { ok: result.code === 0, detail: result.code === 0 ? 'back to the stock UI' : 'the revert did not run', ui: active(), output: result.output }
       }
       case 'switch': {
-        if (file === undefined || file.trim().length === 0)
-          throw new HomeHostedError('switching the UI needs the zip to install', 'UI_FILE_REQUIRED')
+        const file = options.file?.trim()
+        const asset = options.asset?.trim()
+        if (file === undefined || file.length === 0) {
+          if (asset === undefined || asset.length === 0)
+            throw new HomeHostedError('switching the UI needs an asset name or a local zip', 'UI_SOURCE_REQUIRED')
+          const result = await runUi(['ui-switch', '--asset', asset, '--yes', ...releaseFlags()])
+          return { ok: result.code === 0, detail: result.code === 0 ? `installed the ${asset} UI` : 'the switch did not run', ui: active(), output: result.output }
+        }
         if (!fs.existsSync(file))
           throw new HomeHostedError(`no file at ${file}`, 'UI_FILE_MISSING')
         const result = await runUi(['ui-switch', '--file', file, '--yes'])
@@ -1759,7 +1778,12 @@ export class HomeHostedService extends Service {
           this.mechanismFor('ui.manage', input.via)
         return await this.uiManage(
           input.action as UiAction,
-          typeof input.file === 'string' ? input.file : undefined,
+          {
+            file: typeof input.file === 'string' ? input.file : undefined,
+            asset: typeof input.asset === 'string' ? input.asset : undefined,
+            repo: typeof input.repo === 'string' ? input.repo : undefined,
+            tag: typeof input.tag === 'string' ? input.tag : undefined,
+          },
           target.foreign ? target.home : undefined,
         )
       }

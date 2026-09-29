@@ -78,8 +78,8 @@ async function harness(options: {
   /** Called with each plaintext the CLI is handed, as a real `set-token` would
    *  enrol its hash: the stub panel then accepts that token. */
   onEnroll?: (token: string) => void
-  /** Replaces the default CLI seam when a test needs a failing CLI. */
-  execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
+  /** Replaces the default CLI seam; `null` runs the resolved CLI for real. */
+  execCli?: ((args: string[], env: Record<string, string | undefined>) => Promise<RunResult>) | null
   /** Replaces the running-harness probe, so a clone can be expressed from a test. */
   resolveDsh?: (options: { dshHome: string, stateDir: string }) => Promise<DshLaunch | null>
   /** Names of extra panels to create under the scratch dir and declare. */
@@ -132,7 +132,7 @@ async function harness(options: {
     spawnActivation: options.spawnActivation ?? (() => ({ ok: true, detail: 'handed over' })),
     resolveDsh: options.resolveDsh,
     projectDir: options.projectDir,
-    execCli: options.execCli ?? (async (args, env): Promise<RunResult> => {
+    execCli: options.execCli === null ? undefined : options.execCli ?? (async (args, env): Promise<RunResult> => {
       cliCalls.push({ args, env })
       if (env.HHOSTED_TOKEN === undefined)
         writeJsonFile(secretsFile(home), { version: 2 })
@@ -603,10 +603,44 @@ describe('panel lifecycle from the page', () => {
 
   it('says why a panel CLI could not be run instead of only that it failed', async () => {
     // A directory exists but cannot be executed, which is how a broken CLI looks.
-    const { service } = await harness({ cli: os.tmpdir() })
+    const { service } = await harness({ cli: os.tmpdir(), execCli: null })
     const result = await service.uiManage('update')
     expect(result.ok).toBe(false)
     expect(result.output ?? '').not.toBe('')
+  })
+
+  it('installs an official UI through ui-switch --asset, not a downloaded zip', async () => {
+    const { service, cliCalls } = await harness()
+    const result = await service.uiManage('switch', { asset: 'noc-console' })
+    expect(result.ok).toBe(true)
+    // The panel's own CLI does the release lookup, matching and download; the
+    // plugin only names the asset.
+    expect(cliCalls.at(-1)?.args.slice(1)).toEqual(['ui-switch', '--asset', 'noc-console', '--yes', '--home', expect.any(String)])
+    expect(result.detail).toContain('noc-console')
+  })
+
+  it('forwards a repo and tag so an asset outside the default release can be used', async () => {
+    const { service, cliCalls } = await harness()
+    await service.uiManage('switch', { asset: 'noc-console', repo: 'acme/console', tag: 'v2.1.0' })
+    expect(cliCalls.at(-1)?.args.slice(1)).toEqual([
+      'ui-switch', '--asset', 'noc-console', '--yes',
+      '--repo', 'acme/console', '--tag', 'v2.1.0',
+      '--home', expect.any(String),
+    ])
+  })
+
+  it('still installs a local zip, and refuses a source that names neither', async () => {
+    const file = path.join(os.tmpdir(), 'ui.zip')
+    fs.writeFileSync(file, 'zip')
+    const { service, cliCalls } = await harness()
+    const result = await service.uiManage('switch', { file })
+    expect(result.ok).toBe(true)
+    expect(cliCalls.at(-1)?.args.slice(1)).toEqual(['ui-switch', '--file', file, '--yes', '--home', expect.any(String)])
+
+    await expect(service.uiManage('switch', {}))
+      .rejects.toMatchObject({ code: 'UI_SOURCE_REQUIRED' })
+    await expect(service.uiManage('switch', { file: path.join(os.tmpdir(), 'nope.zip') }))
+      .rejects.toMatchObject({ code: 'UI_FILE_MISSING' })
   })
 
   it('starts nothing when a panel already answers', async () => {
