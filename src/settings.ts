@@ -4,7 +4,7 @@
  * These are the things a person toggles; the Cordis row config stays for
  * operator overrides only, so neither surface can silently overwrite the other.
  */
-import { AGENT_TOOL_NAMES, DEFAULT_SETTINGS, isOnPortConflict } from './shared/contracts.js'
+import { AGENT_TOOL_NAMES, DEFAULT_SETTINGS, isOnPortConflict, isWorkspaceId } from './shared/contracts.js'
 import type { AgentToolName, EntryIntent, PluginSettings, SettingsPatch } from './shared/contracts.js'
 import { SETTINGS_VERSION } from './shared/contracts.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
@@ -90,6 +90,9 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
     // harness entry; the page's toggle needs the flag it never had.
     manageDsh: raw?.manageDsh === true
       || (legacyFile && entries.some(entry => entry.id === fallbackEntryId)),
+    // An id the panel's own schema would reject is dropped, never written into a
+    // path: the setting decides a directory name.
+    workspace: isWorkspaceId(raw?.workspace) ? raw.workspace : DEFAULT_SETTINGS.workspace,
     entries,
     panel: {
       // An integer in range, or nothing: the panel's schema rejects anything else,
@@ -145,6 +148,7 @@ export class SettingsStore {
       version: SETTINGS_VERSION,
       autostart: { ...this.current.autostart, ...(patch.autostart ?? {}) },
       manageDsh: patch.manageDsh ?? this.current.manageDsh,
+      workspace: patch.workspace ?? this.current.workspace,
       entries: patch.entries ?? this.current.entries,
       panel: { ...this.current.panel, ...(patch.panel ?? {}) },
       authNotice: patch.authNotice ?? this.current.authNotice,

@@ -9,6 +9,8 @@ const t = englishTranslator
 function status(overrides: Partial<HomeHostedStatus> = {}): HomeHostedStatus {
   return {
     defaultEntryId: 'dsh',
+    workspace: 'default',
+    workspaces: [],
     panel: {
       home: '/home/mt/.home-hosted',
       reachable: true,
@@ -45,7 +47,7 @@ function entry(overrides: Partial<ManagedEntryStatus> = {}): ManagedEntryStatus 
     exists: true,
     managed: true,
     drift: [],
-    live: { id: 'dsh', status: 'running', pid: 99, url: null, config: { id: 'dsh' } },
+    live: { id: 'dsh', workspace: 'default', status: 'running', pid: 99, url: null, config: { id: 'dsh' } },
     snapshot: null,
     ...overrides,
   }
@@ -54,6 +56,7 @@ function entry(overrides: Partial<ManagedEntryStatus> = {}): ManagedEntryStatus 
 function server(id: string, running: boolean): ServerEntryView {
   return {
     id,
+    workspace: 'default',
     status: running ? 'running' : 'stopped',
     pid: running ? 7 : null,
     url: null,

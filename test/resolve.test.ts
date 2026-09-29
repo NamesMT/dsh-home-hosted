@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 /** A fake installed package with a bin entry. */
-function fakePackage(root: string, version = '0.6.1', bin: unknown = { 'home-hosted': 'bin/home-hosted.mjs' }): string {
+function fakePackage(root: string, version = '0.7.1', bin: unknown = { 'home-hosted': 'bin/home-hosted.mjs' }): string {
   const dir = path.join(root, 'node_modules', 'home-hosted')
   const manifest = path.join(dir, 'package.json')
   writeJsonFile(manifest, { name: 'home-hosted', version, bin })
@@ -91,7 +91,7 @@ describe('CLI resolution order', () => {
     const manifest = fakePackage(scratch.path)
     const resolution = await resolveCli({
       packageManifest: () => manifest,
-      readVersion: async () => '0.6.1',
+      readVersion: async () => '0.7.1',
       findOnPath: async () => '/usr/local/bin/home-hosted',
     })
     expect(resolution.status.source).toBe('dependency')
@@ -105,7 +105,7 @@ describe('CLI resolution order', () => {
     const manifest = fakePackage(scratch.path)
     const resolution = await resolveCli({
       packageManifest: () => null,
-      readVersion: async () => '0.5.0',
+      readVersion: async () => '0.7.0',
       findOnPath: async command => (command === 'home-hosted' ? manifest.replace('package.json', 'bin/home-hosted.mjs') : null),
     })
     expect(resolution.status.source).toBe('path')
@@ -122,6 +122,20 @@ describe('CLI resolution order', () => {
     })
     expect(resolution.status.supported).toBe(false)
     expect(resolution.status.detail).toContain('oldest supported release')
+  })
+
+  it('draws the supported floor at home-hosted 0.7.0', async () => {
+    scratch = tempDir()
+    const manifest = fakePackage(scratch.path)
+    const pathOf = async (command: string): Promise<string | null> =>
+      command === 'home-hosted' ? manifest.replace('package.json', 'bin/home-hosted.mjs') : null
+
+    const at = await resolveCli({ packageManifest: () => null, readVersion: async () => '0.7.0', findOnPath: pathOf })
+    expect(at.status.supported).toBe(true)
+
+    const below = await resolveCli({ packageManifest: () => null, readVersion: async () => '0.6.9', findOnPath: pathOf })
+    expect(below.status.supported).toBe(false)
+    expect(below.status.detail).toContain('oldest supported release (0.7.0)')
   })
 
   it('reports no CLI at all instead of inventing one', async () => {
@@ -148,7 +162,7 @@ describe('CLI preference', () => {
     return await resolveCli({
       prefer,
       packageManifest: () => manifest,
-      readVersion: async () => '0.5.0',
+      readVersion: async () => '0.7.0',
       findOnPath: async command => (command === 'home-hosted' ? manifest.replace('package.json', 'bin/home-hosted.mjs') : null),
     })
   }
@@ -157,15 +171,15 @@ describe('CLI preference', () => {
     const resolution = await both('pinned')
     expect(resolution.status.source).toBe('dependency')
     expect(resolution.status.prefer).toBe('pinned')
-    expect(resolution.status.dependency).toMatchObject({ source: 'dependency', version: '0.6.1' })
-    expect(resolution.status.global).toMatchObject({ source: 'path', version: '0.5.0' })
+    expect(resolution.status.dependency).toMatchObject({ source: 'dependency', version: '0.7.1' })
+    expect(resolution.status.global).toMatchObject({ source: 'path', version: '0.7.0' })
   })
 
   it('uses the global install when that is the chosen preference', async () => {
     const resolution = await both('global')
     expect(resolution.status.source).toBe('path')
     expect(resolution.status.prefer).toBe('global')
-    expect(resolution.status.detail).toBe('the global install on PATH (0.5.0)')
+    expect(resolution.status.detail).toBe('the global install on PATH (0.7.0)')
   })
 
   it('falls back to the pinned copy when the chosen global install is missing', async () => {
@@ -187,7 +201,7 @@ describe('CLI preference', () => {
       prefer: 'pinned',
       packageManifest: () => null,
       findOnPath: async command => (command === 'home-hosted' ? manifest.replace('package.json', 'bin/home-hosted.mjs') : null),
-      readVersion: async () => '0.5.0',
+      readVersion: async () => '0.7.0',
     })
     expect(resolution.status.source).toBe('path')
     expect(resolution.status.dependency).toBeNull()

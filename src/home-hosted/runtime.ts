@@ -7,7 +7,7 @@ import http from 'node:http'
 import https from 'node:https'
 import process from 'node:process'
 import { readJson } from '../util/fsx.js'
-import { runtimeFile } from '../util/paths.js'
+import { runFile } from './layout.js'
 
 export interface PanelRuntime {
   version: string
@@ -24,7 +24,7 @@ export interface PanelRuntime {
 }
 
 export function readRuntime(home: string): PanelRuntime | null {
-  const raw = readJson<Record<string, unknown>>(runtimeFile(home))
+  const raw = readJson<Record<string, unknown>>(runFile(home))
   if (raw === null)
     return null
   const url = typeof raw.url === 'string' ? raw.url : null

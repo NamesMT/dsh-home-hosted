@@ -77,6 +77,7 @@ running.
 | 🛡️ **Survives a panel restart** | The managed entry runs under home-hosted's nanny, so restarting the panel leaves it running. |
 | 📦 **Ships its own panel** | The pinned `home-hosted` is a dependency, so boot runs the version this plugin is tested against. |
 | 🖥️ **Server control** | Add, edit, start, stop and restart entries — written through the panel's API, so nothing restarts behind your back. |
+| 🗂 **Workspaces** | The panel manages one workspace for the `dsh` entry; the page and the agent tools reach **every** workspace it serves, counts included. |
 | 🧭 **Token warnings that mean something** | A missing or refused API token is called out on the page, with one click to mint a working one. |
 | 🪟 **Knows the other panels** | Several panels on one machine? The agent is told which one this plugin manages, and asks before touching another. |
 | 🤖 **Agent tools** | On by default, session permissions still gate every write. |
@@ -86,11 +87,15 @@ running.
 | Tool | Does |
 |---|---|
 | `home_hosted_status` | Panel, boot entry and managed-entry state |
-| `home_hosted_servers_list` | Every supervised server |
+| `home_hosted_workspaces_list` | Every workspace the panel serves, with counts |
+| `home_hosted_servers_list` | Every supervised server in a workspace |
 | `home_hosted_servers_lifecycle` | `start` · `stop` · `restart` |
 | `home_hosted_servers_edit` | `create` · `update` · `delete` |
 | `home_hosted_autostart_manage` | `install` · `uninstall` |
 | `home_hosted_ui_manage` | `status` · `update` · `revert` · `switch` the panel's own UI |
+
+The server tools take a `workspace`, because an id is only unique inside one; omitting it means the
+workspace the plugin manages.
 
 A tool that changes something asks for approval **only** when the session is not already Full access.
 <sub>A refused token is re-enrolled on the spot and the tool retries — see **automatic regeneration** below.</sub>
@@ -135,8 +140,8 @@ re-finds your build at boot, so a rebuild, a moved checkout or a fresh profile d
 
 One entry (`dsh`), one toggle: the panel keeps it alive, restarts it and reclaims its port. A
 detached restart is recognised on macOS and Linux (`follow`); Windows cannot prove identity through
-a `.cmd` shim, so it uses `onPortConflict: kill` — needing home-hosted 0.6.0+, and the plugin
-refuses that write against an older panel rather than producing a config it cannot parse.
+a `.cmd` shim, so it uses `onPortConflict: kill`. The plugin pins home-hosted 0.7+, so every key it
+writes is one that panel parses.
 
 </details>
 

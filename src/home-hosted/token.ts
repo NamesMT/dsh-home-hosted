@@ -13,7 +13,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import type { RunResult } from '../util/exec.js'
 import { readJson, readText, writeFileAtomic } from '../util/fsx.js'
-import { secretsFile } from '../util/paths.js'
+import { secretsFile } from './layout.js'
 
 export type CliExecutor = (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
 

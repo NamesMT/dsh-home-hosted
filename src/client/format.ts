@@ -36,6 +36,7 @@ export function isMutatingTool(name: AgentToolName): boolean {
 /** Locale key for each agent tool's display label. */
 export const AGENT_TOOL_KEYS: Record<AgentToolName, string> = {
   status: 'agentToolStatus',
+  workspaces_list: 'agentToolWorkspacesList',
   servers_list: 'agentToolServersList',
   servers_lifecycle: 'agentToolServersLifecycle',
   servers_edit: 'agentToolServersEdit',
@@ -46,6 +47,7 @@ export const AGENT_TOOL_KEYS: Record<AgentToolName, string> = {
 /** Locale key for each agent tool's one-line description (the detailed cards). */
 export const AGENT_TOOL_DESC_KEYS: Record<AgentToolName, string> = {
   status: 'agentToolDescStatus',
+  workspaces_list: 'agentToolDescWorkspacesList',
   servers_list: 'agentToolDescServersList',
   servers_lifecycle: 'agentToolDescServersLifecycle',
   servers_edit: 'agentToolDescServersEdit',

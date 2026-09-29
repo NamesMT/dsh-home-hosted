@@ -8,15 +8,27 @@ import type { AddressInfo } from 'node:net'
 
 export interface StubServerRecord {
   id: string
+  /** The workspace it belongs to; omitted means the default one. */
+  workspace?: string
   status?: string
   pid?: number | null
   url?: string | null
   config: Record<string, unknown>
 }
 
+export interface StubWorkspaceRecord {
+  id: string
+  label?: string
+}
+
 export interface RecordedRequest {
   method: string
+  /** The path, without the query string. */
   path: string
+  /** The raw query string, `''` when there was none. */
+  query: string
+  /** The `?workspace=` a call named, or null when it named none. */
+  workspace: string | null
   body: unknown
   authorized: boolean
 }
@@ -26,13 +38,20 @@ export interface StubPanel {
   /** The one token the panel accepts; assignable so a test can rotate it. */
   token: string
   servers: StubServerRecord[]
+  /** Extra workspaces the registry lists; servers imply their own. */
+  workspaces: StubWorkspaceRecord[]
   requests: RecordedRequest[]
   stop: () => Promise<void>
 }
 
+const DEFAULT_WORKSPACE = 'default'
+
+const workspaceOf = (record: StubServerRecord): string => record.workspace ?? DEFAULT_WORKSPACE
+
 function view(record: StubServerRecord) {
   return {
     id: record.id,
+    workspace: workspaceOf(record),
     status: record.status ?? 'stopped',
     pid: record.pid ?? null,
     url: record.url ?? null,
@@ -40,12 +59,13 @@ function view(record: StubServerRecord) {
   }
 }
 
-export async function startStubPanel(options: { token?: string, acceptAnyToken?: boolean, failCreate?: boolean } = {}): Promise<StubPanel> {
+export async function startStubPanel(options: { token?: string, acceptAnyToken?: boolean, failCreate?: boolean, workspaces?: StubWorkspaceRecord[] } = {}): Promise<StubPanel> {
   // A holder, not a local: a test rotates the token on the returned object and
   // the listener starts accepting the new one without a restart.
   const state = { token: options.token ?? 'stub-panel-token' }
   const acceptAny = options.acceptAnyToken === true
   const servers: StubServerRecord[] = []
+  const workspaces: StubWorkspaceRecord[] = options.workspaces ?? []
   const requests: RecordedRequest[] = []
 
   const server = http.createServer((request, response) => {
@@ -63,9 +83,11 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
 
       const authorization = request.headers.authorization ?? ''
       const authorized = acceptAny ? authorization.startsWith('Bearer ') : authorization === `Bearer ${state.token}`
-      const path = request.url ?? '/'
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      const path = url.pathname
       const method = request.method ?? 'GET'
-      requests.push({ method, path, body, authorized })
+      const workspace = url.searchParams.get('workspace')
+      requests.push({ method, path, query: url.search, workspace, body, authorized })
 
       const send = (status: number, value: unknown): void => {
         response.writeHead(status, { 'content-type': 'application/json' })
@@ -85,8 +107,26 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
 
       const idMatch = /^\/api\/servers\/([^/]+)(?:\/(start|stop|restart|free-port))?$/.exec(path)
 
+      if (path === '/api/workspaces' && method === 'GET') {
+        const ids = new Set<string>([DEFAULT_WORKSPACE, ...workspaces.map(entry => entry.id), ...servers.map(workspaceOf)])
+        const labels = new Map(workspaces.map(entry => [entry.id, entry.label ?? entry.id]))
+        send(200, {
+          workspaces: [...ids].map((id) => {
+            const inWorkspace = servers.filter(record => workspaceOf(record) === id)
+            return {
+              id,
+              label: labels.get(id) ?? id,
+              serverCount: inWorkspace.length,
+              runningCount: inWorkspace.filter(record => (record.status ?? 'stopped') === 'running').length,
+              crashedCount: 0,
+            }
+          }),
+        })
+        return
+      }
+
       if (path === '/api/servers' && method === 'GET') {
-        send(200, { servers: servers.map(view) })
+        send(200, { servers: servers.filter(record => workspaceOf(record) === (workspace ?? DEFAULT_WORKSPACE)).map(view) })
         return
       }
 
@@ -96,7 +136,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
           return
         }
         const entry = body as Record<string, unknown>
-        const record: StubServerRecord = { id: String(entry.id), config: entry }
+        const record: StubServerRecord = { id: String(entry.id), workspace: workspace ?? DEFAULT_WORKSPACE, config: entry }
         servers.push(record)
         send(201, { server: view(record) })
         return
@@ -105,7 +145,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
       if (idMatch !== null) {
         const id = decodeURIComponent(idMatch[1] ?? '')
         const action = idMatch[2]
-        const found = servers.find(entry => entry.id === id)
+        const found = servers.find(entry => entry.id === id && workspaceOf(entry) === (workspace ?? DEFAULT_WORKSPACE))
 
         if (action === undefined && method === 'GET') {
           if (found === undefined) {
@@ -131,7 +171,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
         }
 
         if (action === undefined && method === 'DELETE') {
-          const index = servers.findIndex(entry => entry.id === id)
+          const index = servers.findIndex(entry => entry.id === id && workspaceOf(entry) === (workspace ?? DEFAULT_WORKSPACE))
           if (index >= 0)
             servers.splice(index, 1)
           send(200, { ok: true })
@@ -166,6 +206,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
     get token() { return state.token },
     set token(value: string) { state.token = value },
     servers,
+    workspaces,
     requests,
     stop: async () => await new Promise<void>((resolve, reject) => {
       server.close((error) => {

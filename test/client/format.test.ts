@@ -46,6 +46,7 @@ describe('isMutatingTool', () => {
 
   it('counts read-only tools as safe', () => {
     expect(isMutatingTool('status')).toBe(false)
+    expect(isMutatingTool('workspaces_list')).toBe(false)
     expect(isMutatingTool('servers_list')).toBe(false)
   })
 })

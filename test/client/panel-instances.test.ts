@@ -39,6 +39,8 @@ const other: InstanceView = {
 function status(instances: InstanceView[] | undefined): HomeHostedStatus {
   return {
     defaultEntryId: 'dsh',
+    workspace: 'default',
+    workspaces: [],
     panel: {
       home: managed.home,
       reachable: true,

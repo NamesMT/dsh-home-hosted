@@ -7,6 +7,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isHhRoot, runFile } from '../home-hosted/layout.js'
 
 export function expandHome(value: string): string {
   if (value === '~')
@@ -35,7 +36,7 @@ export function dshHome(): string {
  * The panel root one plugin instance drives.
  *
  * Two dsh installs share `~/.dsh` far more often than they should, and a shared
- * panel root means two plugins editing one `servers.config.json` and one boot
+ * panel root means two plugins editing one workspace config and one boot
  * entry. So each instance normally gets its own root beside its own state.
  *
  * An explicit `$HHOSTED_HOME` is an instruction and always wins. So is a panel
@@ -79,27 +80,29 @@ function isEstablishedInstance(stateDir: string, homeDir: string): boolean {
 }
 
 /**
- * Whether a root holds a panel somebody is running. A `run.json` alone is not
- * proof — it survives a crash — so it only counts while its pid is alive.
+ * Whether a root holds a panel this instance may adopt: a 0.7 `.hh`, a pre-0.7
+ * root with an actual servers config, or a `run.json` whose pid is still alive.
+ *
+ * A `run.json` alone is not proof — a killed panel leaves one behind — so it only
+ * counts while its process answers. The same goes for the other top-level
+ * leftovers (`.control-secrets.json`, `.state`): they are not a panel.
  */
 function hasLivePanel(home: string): boolean {
-  try {
-    if (fs.statSync(path.join(home, 'servers.config.json')).isFile())
-      return true
-  }
-  catch {
-    // no config; a runtime with a live pid still counts below
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(home, 'run.json'), 'utf8')) as { pid?: unknown }
-    if (typeof raw.pid !== 'number')
-      return false
-    process.kill(raw.pid, 0)
+  if (isHhRoot(home) || fs.existsSync(path.join(home, 'servers.config.json')))
     return true
+  for (const file of [runFile(home), path.join(home, 'run.json')]) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as { pid?: unknown }
+      if (typeof raw.pid !== 'number')
+        continue
+      process.kill(raw.pid, 0)
+      return true
+    }
+    catch {
+      // no runtime here; try the next one
+    }
   }
-  catch {
-    return false
-  }
+  return false
 }
 
 /**
@@ -130,16 +133,3 @@ export function pluginStateDir(override?: string): string {
   return path.join(dshHome(), 'dsh-home-hosted')
 }
 
-/** home-hosted's own tokens file, written by the panel at startup. */
-export function runtimeFile(home: string): string {
-  return path.join(home, 'run.json')
-}
-
-/** home-hosted's secrets file (0600): proves whether an API token is enrolled. */
-export function secretsFile(home: string): string {
-  return path.join(home, '.control-secrets.json')
-}
-
-export function configFile(home: string): string {
-  return path.join(home, 'servers.config.json')
-}

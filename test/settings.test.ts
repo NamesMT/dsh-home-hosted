@@ -24,13 +24,14 @@ describe('settings store', () => {
       version: 3,
       autostart: { enabled: false, mechanism: 'auto' },
       manageDsh: false,
+      workspace: 'default',
       entries: [],
       panel: { port: null },
       authNotice: true,
       reclaimToken: true,
       instancesNotice: true,
       uiStyle: 'detailed',
-      agentTools: { enabled: true, allow: ['status', 'servers_list', 'servers_lifecycle', 'servers_edit', 'autostart_manage', 'ui_manage'] },
+      agentTools: { enabled: true, allow: ['status', 'workspaces_list', 'servers_list', 'servers_lifecycle', 'servers_edit', 'autostart_manage', 'ui_manage'] },
       cli: { prefer: 'pinned' },
     })
   })
@@ -117,6 +118,19 @@ describe('settings store', () => {
     expect(new SettingsStore(s.file, 'dsh').get().cli).toEqual({ prefer: 'global' })
   })
 
+  it('defaults the managed workspace to `default` and drops an id the panel would reject', () => {
+    const s = store()
+    // The setting decides a directory name, so it is validated like one.
+    expect(s.get().workspace).toBe('default')
+
+    s.update({ workspace: 'B@D ID' })
+    expect(s.get().workspace).toBe('default')
+
+    s.update({ workspace: 'alpha' })
+    expect(s.get().workspace).toBe('alpha')
+    expect(new SettingsStore(s.file, 'dsh').get().workspace).toBe('alpha')
+  })
+
   it('keeps an explicitly empty tool list empty instead of turning every tool back on', () => {
     const s = store()
     s.update({ agentTools: { enabled: true, allow: [] } })
@@ -171,7 +185,7 @@ describe('upgrading an older settings file', () => {
     const store = new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh')
     // The old default wrote this pair itself, so it must not look like a choice.
     expect(store.get().agentTools.enabled).toBe(true)
-    expect(store.get().agentTools.allow).toHaveLength(6)
+    expect(store.get().agentTools.allow).toHaveLength(7)
   })
 
   it('keeps a real selection as it was made', () => {

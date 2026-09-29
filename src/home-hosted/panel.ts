@@ -25,17 +25,33 @@ export interface PanelClientOptions {
   baseUrl: string
   token: string
   timeoutMs?: number
+  /** The workspace every call acts on unless it names another one. */
+  workspace?: string
 }
 
 export class PanelClient {
   private readonly baseUrl: string
   private readonly token: string
   private readonly timeoutMs: number
+  private readonly workspace: string | null
 
   constructor(options: PanelClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '')
     this.token = options.token
     this.timeoutMs = options.timeoutMs ?? 10_000
+    this.workspace = options.workspace ?? null
+  }
+
+  /**
+   * A server path for one workspace. Server ids are only unique inside a
+   * workspace, so `?workspace=` is what selects which one is meant; omitting it
+   * on a panel that predates workspaces changes nothing.
+   */
+  private ws(path: string, workspace?: string | null): string {
+    const id = workspace ?? this.workspace
+    if (id === null || id === undefined || id.length === 0)
+      return path
+    return `${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(id)}`
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -77,45 +93,56 @@ export class PanelClient {
     return parsed as T
   }
 
-  async listServers(): Promise<ServerEntryView[]> {
-    const answer = await this.request<{ servers: ServerEntryView[] }>('GET', '/api/servers')
+  async listServers(workspace?: string): Promise<ServerEntryView[]> {
+    const answer = await this.request<{ servers: ServerEntryView[] }>('GET', this.ws('/api/servers', workspace))
     return answer.servers
   }
 
-  async getServer(id: string): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ServerEntryView }>('GET', `/api/servers/${encodeURIComponent(id)}`)
+  async getServer(id: string, workspace?: string): Promise<ServerEntryView> {
+    const answer = await this.request<{ server: ServerEntryView }>('GET', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace))
     return answer.server
   }
 
-  async createServer(entry: ServerEntry): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ServerEntryView }>('POST', '/api/servers', entry)
+  async createServer(entry: ServerEntry, workspace?: string): Promise<ServerEntryView> {
+    const answer = await this.request<{ server: ServerEntryView }>('POST', this.ws('/api/servers', workspace), entry)
     return answer.server
   }
 
-  async updateServer(id: string, patch: ServerEntryPatch): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ServerEntryView }>('PATCH', `/api/servers/${encodeURIComponent(id)}`, patch)
+  async updateServer(id: string, patch: ServerEntryPatch, workspace?: string): Promise<ServerEntryView> {
+    const answer = await this.request<{ server: ServerEntryView }>('PATCH', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace), patch)
     return answer.server
   }
 
-  async deleteServer(id: string): Promise<void> {
-    await this.request('DELETE', `/api/servers/${encodeURIComponent(id)}`)
+  async deleteServer(id: string, workspace?: string): Promise<void> {
+    await this.request('DELETE', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace))
   }
 
-  async startServer(id: string): Promise<void> {
-    await this.request('POST', `/api/servers/${encodeURIComponent(id)}/start`)
+  async startServer(id: string, workspace?: string): Promise<void> {
+    await this.request('POST', this.ws(`/api/servers/${encodeURIComponent(id)}/start`, workspace))
   }
 
-  async stopServer(id: string): Promise<void> {
-    await this.request('POST', `/api/servers/${encodeURIComponent(id)}/stop`)
+  async stopServer(id: string, workspace?: string): Promise<void> {
+    await this.request('POST', this.ws(`/api/servers/${encodeURIComponent(id)}/stop`, workspace))
   }
 
-  async restartServer(id: string): Promise<void> {
-    await this.request('POST', `/api/servers/${encodeURIComponent(id)}/restart`)
+  async restartServer(id: string, workspace?: string): Promise<void> {
+    await this.request('POST', this.ws(`/api/servers/${encodeURIComponent(id)}/restart`, workspace))
+  }
+
+  /** The workspaces this panel serves, as its registry reports them. */
+  async listWorkspaces(): Promise<{ id: string, label: string, serverCount: number, runningCount: number, crashedCount: number }[]> {
+    const answer = await this.request<{ workspaces: Array<{ id: string, label: string, serverCount: number, runningCount: number, crashedCount: number }> }>('GET', '/api/workspaces')
+    return answer.workspaces
+  }
+
+  /** The panel's own settings: `control` is the listener block a port change edits. */
+  async settings(): Promise<{ control?: Record<string, unknown> }> {
+    return await this.request<{ control?: Record<string, unknown> }>('GET', '/api/settings')
   }
 
   /** Re-list the port's listeners and stop what is not the panel's own tree. */
-  async freePort(id: string): Promise<{ stopped?: number[] }> {
-    return await this.request<{ stopped?: number[] }>('POST', `/api/servers/${encodeURIComponent(id)}/free-port`)
+  async freePort(id: string, workspace?: string): Promise<{ stopped?: number[] }> {
+    return await this.request<{ stopped?: number[] }>('POST', this.ws(`/api/servers/${encodeURIComponent(id)}/free-port`, workspace))
   }
 }
 

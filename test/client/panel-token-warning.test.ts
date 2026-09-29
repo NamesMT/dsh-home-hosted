@@ -14,6 +14,8 @@ const PANEL_URL = 'http://127.0.0.1:3999'
 function status(token: TokenState, reachable: boolean, started: boolean, detail = ''): HomeHostedStatus {
   return {
     defaultEntryId: 'dsh',
+    workspace: 'default',
+    workspaces: [],
     panel: {
       home: '/home/mt/.home-hosted',
       reachable,

@@ -3,19 +3,27 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { BootStatus, HomeHostedStatus, ServerEntryView } from '../src/shared/contracts.js'
+import type { BootStatus, HomeHostedStatus, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
 import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
+import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
-import { bootUnitName, configFile, runtimeFile, secretsFile } from '../src/util/paths.js'
+import { bootUnitName } from '../src/util/paths.js'
 import type { RunResult } from '../src/util/exec.js'
+import { makeHhHome } from './helpers/hh.js'
 import { startStubPanel } from './helpers/stub-panel.js'
 import type { StubPanel } from './helpers/stub-panel.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
+
+/**
+ * The default workspace's config in a root. Almost every case here uses the
+ * plugin's managed workspace, which defaults to `default`.
+ */
+const configFile = (root: string): string => serversFile(root, DEFAULT_WORKSPACE)
 
 const bootStatus: BootStatus = {
   platform: 'linux',
@@ -80,7 +88,8 @@ async function harness(options: {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
-  fs.mkdirSync(home, { recursive: true })
+  // The managed root is a 0.7 one: `.hh` with the `default` workspace registered.
+  makeHhHome(home, { workspaces: ['default'] })
   fs.mkdirSync(state, { recursive: true })
 
   // A deterministic CLI path: a .mjs file is run through node, so no `which` probe.
@@ -89,11 +98,14 @@ async function harness(options: {
     fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
 
   if (options.panel !== undefined)
-    writeJsonFile(runtimeFile(home), { version: options.panelVersion ?? '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
+    writeJsonFile(runFile(home), { version: options.panelVersion ?? '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
 
   const otherPanels = (options.otherPanels ?? []).map((name) => {
     const dir = path.join(scratch!.path, name)
-    writeJsonFile(configFile(dir), { meta: { writtenBy: '0.6.6' }, servers: [{ id: 'web' }] })
+    makeHhHome(dir, {
+      workspaces: ['default'],
+      servers: { default: { meta: { writtenBy: '0.6.6' }, servers: [{ id: 'web' }] } },
+    })
     return dir
   })
 
@@ -170,11 +182,14 @@ describe('home-hosted service', () => {
     const { service, home } = await harness({ otherPanels: ['other-panel'] })
     const other = path.join(path.dirname(home), 'other-panel')
     // A declared root without state is not a panel yet; giving it one is what a
-    // first start looks like from here.
-    fs.rmSync(configFile(other))
+    // first start looks like from here. A 0.7 root is its whole `.hh`.
+    fs.rmSync(hhDir(other), { recursive: true, force: true })
     expect((await service.instances()).map(instance => instance.home)).toEqual([home])
 
-    writeJsonFile(configFile(other), { meta: { writtenBy: '0.6.6' }, servers: [] })
+    makeHhHome(other, {
+      workspaces: ['default'],
+      servers: { default: { meta: { writtenBy: '0.6.6' }, servers: [] } },
+    })
     // Inside the cache window nothing is re-read, so the prompt provider cannot
     // turn a fresh measure into a per-step disk scan.
     expect(service.instancesNow().map(instance => instance.home)).toEqual([home])
@@ -218,14 +233,15 @@ describe('home-hosted service', () => {
 
     const started = await service.call('servers.start', { id: 'web', home: other })
     expect(started).toMatchObject({ id: 'web', action: 'start', via: 'cli', home: other })
-    expect(cliCalls[0]?.args).toEqual(['start', 'web', '--home', other])
+    // The CLI is told which workspace too: a server id is only unique inside one.
+    expect(cliCalls[0]?.args).toEqual(['start', 'web', '--workspace', 'default', '--home', other])
     expect(cliCalls[0]?.env.HHOSTED_HOME).toBe(other)
 
     // The CLI has no server restart: it is a stop followed by a start.
     await service.call('servers.restart', { id: 'web', home: other })
     expect(cliCalls.slice(1).map(call => call.args)).toEqual([
-      ['stop', 'web', '--home', other],
-      ['start', 'web', '--home', other],
+      ['stop', 'web', '--workspace', 'default', '--home', other],
+      ['start', 'web', '--workspace', 'default', '--home', other],
     ])
   })
 
@@ -267,7 +283,7 @@ describe('home-hosted service', () => {
     const { service, home, cliCalls } = await harness({ otherPanels: ['other-panel'] })
     const other = path.join(path.dirname(home), 'other-panel')
     // A running panel at that state root: its run.json names the listener.
-    writeJsonFile(runtimeFile(other), { version: '0.6.6', pid: process.pid, url: panel.url, port: 1234 })
+    writeJsonFile(runFile(other), { version: '0.6.6', pid: process.pid, url: panel.url, port: 1234 })
     panel.servers.push({ id: 'web', status: 'running', pid: 7, config: { id: 'web', command: 'sleep' } })
 
     const listed = await service.call('servers.list', { home: other, via: 'api' }) as ServerEntryView[]
@@ -284,7 +300,7 @@ describe('home-hosted service', () => {
     panels.push(panel)
     const { service, home, cliCalls } = await harness({ otherPanels: ['other-panel'] })
     const other = path.join(path.dirname(home), 'other-panel')
-    writeJsonFile(runtimeFile(other), { version: '0.6.6', pid: process.pid, url: panel.url, port: 1234 })
+    writeJsonFile(runFile(other), { version: '0.6.6', pid: process.pid, url: panel.url, port: 1234 })
     panel.servers.push({ id: 'web', status: 'running', pid: 7, config: { id: 'web', command: 'sleep' } })
     storeToken(path.join(path.dirname(home), 'state'), 'foreign-stub-token', tokenSlot(other))
 
@@ -310,7 +326,7 @@ describe('home-hosted service', () => {
     const { service, home } = await harness({ otherPanels: ['other-panel'] })
     const other = path.join(path.dirname(home), 'other-panel')
     const listed = await service.call('servers.list', { home: other }) as ServerEntryView[]
-    expect(listed).toEqual([{ id: 'web', status: 'unknown', pid: null, url: null, config: { id: 'web' } }])
+    expect(listed).toEqual([{ id: 'web', workspace: 'default', status: 'unknown', pid: null, url: null, config: { id: 'web' } }])
   })
 
   it('enrols a token through the CLI and adopts an existing entry over the API', async () => {
@@ -542,35 +558,40 @@ describe('home-hosted service', () => {
 })
 
 describe('panel lifecycle from the page', () => {
-  it('writes the chosen panel port into the state before starting it', async () => {
+  it('writes the chosen panel port into .hh/settings.json before starting it', async () => {
     const { home, service, settings } = await harness()
-    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ meta: { writtenBy: 'x', schema: 1 }, control: { port: 3999, host: '127.0.0.1' }, servers: [] }), 'utf8')
+    writeJsonFile(globalSettingsFile(home), {
+      meta: { writtenBy: 'x', schema: 1 },
+      control: { port: 3999, host: '127.0.0.1' },
+    })
     settings.update({ panel: { port: 6311 } })
 
     await service.startPanelNow()
 
-    const written = JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8'))
+    const written = JSON.parse(fs.readFileSync(globalSettingsFile(home), 'utf8'))
     expect(written.control.port).toBe(6311)
     // Everything else in the file survives the write.
     expect(written.control.host).toBe('127.0.0.1')
     // The plugin records that it wrote the file, and keeps the schema the file
     // already declared.
     expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 1 })
+    // The listener never lives in a workspace's servers config.
+    expect(fs.existsSync(configFile(home))).toBe(false)
   })
 
   it('leaves the port alone when the setting is empty', async () => {
     const { home, service } = await harness()
-    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ control: { port: 3999 }, servers: [] }), 'utf8')
+    writeJsonFile(globalSettingsFile(home), { control: { port: 3999 } })
     await service.startPanelNow()
-    expect(JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8')).control.port).toBe(3999)
+    expect(JSON.parse(fs.readFileSync(globalSettingsFile(home), 'utf8')).control.port).toBe(3999)
   })
 
   it('never writes a port the panel itself could not parse', async () => {
     const { home, service, settings } = await harness()
-    fs.writeFileSync(path.join(home, 'servers.config.json'), JSON.stringify({ control: { port: 3999 }, servers: [] }), 'utf8')
+    writeJsonFile(globalSettingsFile(home), { control: { port: 3999 } })
     settings.update({ panel: { port: 3999.5 } })
     await service.startPanelNow()
-    expect(JSON.parse(fs.readFileSync(path.join(home, 'servers.config.json'), 'utf8')).control.port).toBe(3999)
+    expect(JSON.parse(fs.readFileSync(globalSettingsFile(home), 'utf8')).control.port).toBe(3999)
   })
 
   it('says why a panel CLI could not be run instead of only that it failed', async () => {
@@ -845,7 +866,7 @@ describe('reclaiming the panel token', () => {
     // The reason a person cannot reach the panel is often the token itself, so a
     // panel that is up but silent must not make the repair impossible.
     const { home, service, state, cliCalls } = await harness()
-    writeJsonFile(runtimeFile(home), { version: '0.6.1', pid: 9_999_999, url: 'http://127.0.0.1:1', port: 1 })
+    writeJsonFile(runFile(home), { version: '0.6.1', pid: 9_999_999, url: 'http://127.0.0.1:1', port: 1 })
     storeToken(state, 'stale-token')
 
     const status = await service.call('panel.reclaimToken', {}) as HomeHostedStatus
@@ -1051,5 +1072,144 @@ describe('a managed entry someone deleted', () => {
 
     await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: false, onPortConflict: 'follow', stopKillPortHolders: true }] })
     expect(settings.get().manageDsh).toBe(false)
+  })
+})
+
+describe('the managed workspace', () => {
+  it('writes a managed entry into the chosen workspace, never into `default`', async () => {
+    const { home, service, settings } = await harness()
+    // A registry with more than one workspace: the setting decides which is ours.
+    makeHhHome(home, { workspaces: ['default', 'alpha'] })
+    settings.update({ workspace: 'alpha' })
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }] })
+
+    expect(findEntry(readConfig(home, 'alpha').raw!, 'dsh')).toMatchObject({ onPortConflict: 'kill' })
+    expect(fs.existsSync(serversFile(home, 'default'))).toBe(false)
+    expect((await service.status()).workspace).toBe('alpha')
+  })
+
+  it('carries the managed workspace into every panel API call', async () => {
+    const panel = await withPanel()
+    const { home, service, settings } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    makeHhHome(home, { workspaces: ['default', 'alpha'] })
+    settings.update({ workspace: 'alpha' })
+
+    await service.call('servers.create', { entry: { id: 'notes', command: 'sleep' } })
+
+    const created = panel.requests.find(request => request.method === 'POST' && request.path === '/api/servers')
+    expect(created?.workspace).toBe('alpha')
+    expect(panel.servers.find(entry => entry.id === 'notes')?.workspace).toBe('alpha')
+    // A server id is only unique inside a workspace, so the default one is untouched.
+    expect(panel.servers.some(entry => (entry.workspace ?? 'default') === 'default')).toBe(false)
+  })
+
+  it('names a workspace the panel would reject, instead of deriving a path from it', async () => {
+    const { service } = await harness()
+    await expect(service.call('servers.list', { workspace: '../escape' }))
+      .rejects.toMatchObject({ code: 'INVALID_WORKSPACE' })
+  })
+})
+
+describe('the panel\'s workspace inventory', () => {
+  it('counts each workspace from its config files when nothing answers', async () => {
+    const { home, service } = await harness()
+    makeHhHome(home, {
+      workspaces: ['default', 'alpha'],
+      servers: { alpha: { servers: [{ id: 'a' }, { id: 'b' }] } },
+    })
+
+    const listed = await service.call('workspaces.list', {}) as WorkspaceSummary[]
+    expect(listed.map(entry => [entry.id, entry.servers, entry.source])).toEqual([
+      ['default', 0, 'file'],
+      ['alpha', 2, 'file'],
+    ])
+  })
+
+  it('takes live counts from a running panel', async () => {
+    const panel = await withPanel()
+    const { home, service } = await harness({ panel, onEnroll: token => { panel.token = token } })
+    makeHhHome(home, { workspaces: ['default'] })
+    panel.servers.push({ id: 'web', status: 'running', config: { id: 'web', command: 'sleep' } })
+
+    const listed = await service.call('workspaces.list', {}) as WorkspaceSummary[]
+    expect(listed.find(entry => entry.id === 'default')).toMatchObject({ servers: 1, running: 1, source: 'api' })
+  })
+})
+
+describe('a root still on the pre-0.7 layout', () => {
+  it('is reported, and refuses a managed write until it is migrated', async () => {
+    const { home, service } = await harness()
+    fs.rmSync(hhDir(home), { recursive: true, force: true })
+    writeJsonFile(path.join(home, 'servers.config.json'), { servers: [] })
+
+    const status = await service.status()
+    expect(status.legacyRoot).toBe(true)
+
+    await expect(service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true }] }))
+      .rejects.toMatchObject({ code: 'CONFIG_UNREADABLE' })
+    // Nothing was created at the new paths, and the old config is untouched.
+    expect(fs.existsSync(hhDir(home))).toBe(false)
+    expect(fs.existsSync(serversFile(home, 'default'))).toBe(false)
+  })
+
+  it('degrades to a no-op migrate for a root already on `.hh`', async () => {
+    const { service, cliCalls } = await harness()
+    const result = await service.call('panel.migrate', {}) as { ok: boolean, detail: string }
+    expect(result.ok).toBe(true)
+    expect(result.detail).toContain('already on the .hh layout')
+    expect(cliCalls).toHaveLength(0)
+  })
+})
+
+describe('entry snapshots across workspaces', () => {
+  it('reads a pre-workspace flat file as the `default` workspace', async () => {
+    const { home, service, state } = await harness()
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      servers: [{ id: 'dsh', command: 'sleep', autostart: false, onPortConflict: 'warn' }],
+    })
+    writeJsonFile(path.join(state, 'snapshots.json'), {
+      dsh: { id: 'dsh', autostart: true, onPortConflict: 'kill', stop: { killPortHolders: true } },
+    })
+
+    await service.call('entries.restore', { id: 'dsh' })
+
+    expect(findEntry(readConfig(home, DEFAULT_WORKSPACE).raw!, 'dsh')).toMatchObject({
+      autostart: true,
+      onPortConflict: 'kill',
+      stop: { killPortHolders: true },
+    })
+  })
+
+  it('ignores a v2 file that belongs to another workspace', async () => {
+    const { home, service, state } = await harness()
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), { servers: [{ id: 'dsh', command: 'sleep' }] })
+    writeJsonFile(path.join(state, 'snapshots.json'), {
+      version: 2,
+      workspace: 'alpha',
+      entries: { dsh: { id: 'dsh', autostart: true } },
+    })
+
+    // The snapshot is another workspace's: restoring would rewrite an entry this
+    // plugin never adopted here.
+    await expect(service.call('entries.restore', { id: 'dsh' })).rejects.toMatchObject({ code: 'NOT_ADOPTED' })
+  })
+
+  it('reads a v2 file for the managed workspace, and saves v2', async () => {
+    const { home, service, state } = await harness()
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      servers: [{ id: 'dsh', command: 'sleep', autostart: false, onPortConflict: 'warn' }],
+    })
+    writeJsonFile(path.join(state, 'snapshots.json'), {
+      version: 2,
+      workspace: DEFAULT_WORKSPACE,
+      entries: { dsh: { id: 'dsh', autostart: true, onPortConflict: 'kill' } },
+    })
+
+    await service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true, onPortConflict: 'follow', stopKillPortHolders: true }] })
+
+    const written = JSON.parse(fs.readFileSync(path.join(state, 'snapshots.json'), 'utf8'))
+    expect(written).toMatchObject({ version: 2, workspace: DEFAULT_WORKSPACE })
+    expect(written.entries.dsh).toMatchObject({ id: 'dsh' })
   })
 })

@@ -17,8 +17,9 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import type { InstanceSource, InstanceView } from '../shared/contracts.js'
-import { configFile, expandHome, runtimeFile } from '../util/paths.js'
+import { expandHome } from '../util/paths.js'
 import { readConfig } from './config-file.js'
+import { defaultWorkspace, isHhRoot, isLegacyRoot, runFile } from './layout.js'
 import { pidAlive, readRuntime } from './runtime.js'
 
 export interface InstanceDiscoveryOptions {
@@ -61,7 +62,7 @@ function defaultListDir(dir: string): string[] | null {
   }
 }
 
-/** A directory that holds a panel's state: its config, or a runtime it wrote. */
+/** A directory that holds a panel's state: a 0.7 `.hh`, a pre-0.7 root, or a runtime it wrote. */
 function isStateRoot(home: string): boolean {
   try {
     if (!fs.statSync(home).isDirectory())
@@ -70,21 +71,16 @@ function isStateRoot(home: string): boolean {
   catch {
     return false
   }
-  for (const file of [configFile(home), runtimeFile(home)]) {
-    try {
-      if (fs.statSync(file).isFile())
-        return true
-    }
-    catch {
-      // keep looking for the other one
-    }
-  }
-  return false
+  if (isHhRoot(home) || isLegacyRoot(home))
+    return true
+  return fs.existsSync(runFile(home))
 }
 
 function viewOf(candidate: { home: string, source: InstanceSource }, managed: string, envHome: string | null, hosting: boolean, alive: (pid: number) => boolean): InstanceView {
   const runtime = readRuntime(candidate.home)
-  const read = readConfig(candidate.home)
+  // Another panel's entries are counted in the workspace it would default to;
+  // its own managed workspace is not knowable from here.
+  const read = readConfig(candidate.home, defaultWorkspace(candidate.home))
   return {
     home: candidate.home,
     managed: candidate.home === managed,

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { bootUnitName, resolveHomeHostedHome } from '../src/util/paths.js'
+import { makeHhHome } from './helpers/hh.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
 
@@ -67,13 +68,19 @@ describe('which panel root one plugin instance drives', () => {
     expect(resolveHomeHostedHome(machine, {}, home)).toEqual({ home: legacy, source: 'legacy' })
   })
 
-  it('adopts a legacy panel that is really there, not a stale runtime file', () => {
+  it('adopts a machine-wide panel that is really there, not a directory that merely exists', () => {
     const { state, home } = roots()
     const legacy = path.join(home, '.home-hosted')
-    writeJsonFile(path.join(legacy, 'servers.config.json'), { servers: [] })
+    // A 0.7 root counts through its registry or global settings, not a bare dir.
+    makeHhHome(legacy, { workspaces: ['default'] })
     // Established by its own settings, so the machine-wide panel is its to keep.
     writeJsonFile(path.join(state, 'settings.json'), { version: 1 })
     expect(resolveHomeHostedHome(state, {}, home)).toEqual({ home: legacy, source: 'legacy' })
+
+    // A pre-0.7 root with a real servers config is a panel too.
+    fs.rmSync(path.join(legacy, '.hh'), { recursive: true, force: true })
+    writeJsonFile(path.join(legacy, 'servers.config.json'), { servers: [] })
+    expect(resolveHomeHostedHome(state, {}, home).source).toBe('legacy')
 
     // A `run.json` alone survives a crash, so a dead pid is not a panel.
     fs.rmSync(path.join(legacy, 'servers.config.json'))
@@ -85,9 +92,13 @@ describe('which panel root one plugin instance drives', () => {
     writeJsonFile(path.join(legacy, 'run.json'), { pid: process.pid })
     expect(resolveHomeHostedHome(state, {}, home).source).toBe('legacy')
 
-    // A directory that merely exists is never adopted.
+    // A directory that merely exists is never adopted, and a bare top-level
+    // leftover is not either: `isLegacyRoot` still lists it so migration runs,
+    // but the adoption rule deliberately wants a config or a live runtime.
     fs.rmSync(path.join(legacy, 'run.json'))
     fs.mkdirSync(path.join(legacy, '.logs'), { recursive: true })
+    expect(resolveHomeHostedHome(state, {}, home).source).toBe('instance')
+    writeJsonFile(path.join(legacy, '.control-secrets.json'), { version: 2 })
     expect(resolveHomeHostedHome(state, {}, home).source).toBe('instance')
   })
 })

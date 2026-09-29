@@ -10,6 +10,8 @@ import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'
 function status(reachable: boolean, extra: Partial<HomeHostedStatus> = {}): HomeHostedStatus {
   return {
     defaultEntryId: 'dsh',
+    workspace: 'default',
+    workspaces: [],
     panel: {
       home: '/home/mt/.dsh/dsh-home-hosted/panel',
       reachable,

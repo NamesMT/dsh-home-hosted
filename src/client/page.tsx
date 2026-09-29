@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { Envelope, RpcError, UiStyle } from '../shared/contracts.js'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Envelope, RpcError, ServerEntryView, UiStyle } from '../shared/contracts.js'
 import { rpc, rpcSettingsUpdate, useStatus } from './api.js'
 import type { TranslateFn } from './context.js'
 import { IconRefresh } from './icons.js'
@@ -10,6 +10,7 @@ import { BootSection } from './section-boot.js'
 import { EntriesSection } from './section-entries.js'
 import { PanelSection } from './section-panel.js'
 import { ServersSection } from './section-servers.js'
+import { WorkspacesSection } from './section-workspaces.js'
 import { diffSettings } from './settings.js'
 import type { Signal } from './status.js'
 import { statusSignals } from './status.js'
@@ -57,6 +58,41 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
   const [actionError, setActionError] = useState<RpcError | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
+  // Which workspace the page lists. `null` means "follow the plugin's managed
+  // one", so a person who never picked stays in step with the setting.
+  const [viewing, setViewing] = useState<string | null>(null)
+  const [servers, setServers] = useState<ServerEntryView[]>([])
+  const [serversError, setServersError] = useState<RpcError | null>(null)
+  // Bumped after every mutation: `status` is the managed workspace's snapshot,
+  // while the list below it is whatever workspace the person picked.
+  const [serversVersion, setServersVersion] = useState(0)
+  const loadedWorkspace = useRef<string | null>(null)
+
+  const activeWorkspace = viewing ?? data?.workspace ?? null
+
+  const loadServers = useCallback(async (workspace: string): Promise<void> => {
+    const envelope = await rpc('servers.list', { workspace })
+    if (envelope.ok) {
+      setServers(envelope.value as ServerEntryView[])
+      setServersError(null)
+    }
+    else {
+      setServersError(envelope.error)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeWorkspace === null) return
+    // Never show one workspace's entries under another workspace's heading while
+    // the new list is in flight.
+    if (loadedWorkspace.current !== activeWorkspace) {
+      loadedWorkspace.current = activeWorkspace
+      setServers([])
+      setServersError(null)
+    }
+    void loadServers(activeWorkspace)
+  }, [activeWorkspace, serversVersion, loadServers])
+
   const run = useCallback<Runner>((key, call) => {
     setBusy(key)
     setActionError(null)
@@ -77,6 +113,7 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
       finally {
         setBusy(null)
         await refresh()
+        setServersVersion(version => version + 1)
       }
     })()
   }, [refresh])
@@ -123,6 +160,8 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
   }
 
   const sectionProps: SectionProps = { t, status: data, run, updateSettings, busy, uiStyle }
+  // `data.workspace` is the plugin's managed workspace; the page lists any.
+  const viewedWorkspace = activeWorkspace ?? data.workspace ?? 'default'
 
   return (
     <div className="hh-root">
@@ -157,11 +196,21 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
         : <ErrorNote error={{ code: 'panel', message: data.lastError }} title={t('errorTitle')} />}
       <ErrorNote error={error} title={t('errorTitle')} />
       <ErrorNote error={actionError} title={t('errorTitle')} />
+      <WorkspacesSection
+        {...sectionProps}
+        viewing={viewedWorkspace}
+        onView={setViewing}
+      />
       <PanelSection {...sectionProps} />
       <BootSection {...sectionProps} />
       <EntriesSection {...sectionProps} />
       <AgentsSection {...sectionProps} />
-      <ServersSection {...sectionProps} />
+      <ServersSection
+        {...sectionProps}
+        workspace={viewedWorkspace}
+        servers={servers}
+        serversError={serversError}
+      />
     </div>
   )
 }

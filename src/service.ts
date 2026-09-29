@@ -11,11 +11,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { BootMechanism, BootStatus, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult } from './shared/contracts.js'
-import { FOREIGN_MECHANISMS, isOnPortConflict, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import type { BootMechanism, BootStatus, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
+import { FOREIGN_MECHANISMS, isOnPortConflict, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootSpec } from './boot/types.js'
 import { createBootLadder } from './boot/index.js'
-import { findEntry, patchControl, patchEntry, readConfig, removeEntry as removeConfigEntry, upsertEntry, writeConfig } from './home-hosted/config-file.js'
+import { findEntry, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, upsertEntry, writeConfig } from './home-hosted/config-file.js'
+import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
 import type { RawConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
 import type { DshLaunch } from './home-hosted/dsh-entry.js'
@@ -84,8 +85,12 @@ export class HomeHostedError extends Error {
 }
 
 /** An entry another panel's config holds: no live status without that panel's API. */
-function foreignView(entry: ServerEntry): ServerEntryView {
-  return { id: entry.id, status: 'unknown', pid: null, url: null, config: entry }
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function foreignView(entry: ServerEntry, workspace: string): ServerEntryView {
+  return { id: entry.id, workspace, status: 'unknown', pid: null, url: null, config: entry }
 }
 
 export interface HomeHostedServiceOptions {
@@ -142,6 +147,11 @@ export class HomeHostedService extends Service {
 
   private projectDir(): string {
     return this.options.projectDir ?? process.cwd()
+  }
+
+  /** The workspace this plugin manages; server ids are only unique inside one. */
+  private managedWorkspace(): string {
+    return this.options.settings.get().workspace
   }
 
   private async resolveDsh(dshHome: string, projectDir: string | null = this.projectDir()): Promise<DshLaunch | null> {
@@ -272,65 +282,110 @@ export class HomeHostedService extends Service {
     const exec = async (args: string[], env: Record<string, string | undefined>) => await this.cliExec(args, env)
     const stored = readStoredToken(this.options.stateDir, slot)
     if (stored !== null && await verifyToken(runtime.url, stored))
-      return new PanelClient({ baseUrl: runtime.url, token: stored })
+      return new PanelClient({ baseUrl: runtime.url, token: stored, workspace: this.managedWorkspace() })
 
     const enrolled = stored !== null || apiTokenEnrolled(home)
       ? await reclaimToken({ home, stateDir: this.options.stateDir, exec, slot })
       : await ensureToken({ home, stateDir: this.options.stateDir, exec, slot })
     if (enrolled.token === null)
       throw new HomeHostedError(enrolled.detail, 'TOKEN_UNAVAILABLE')
-    return new PanelClient({ baseUrl: runtime.url, token: enrolled.token })
+    return new PanelClient({ baseUrl: runtime.url, token: enrolled.token, workspace: this.managedWorkspace() })
   }
 
-  /** Another panel's own config, refusing anything that is not a readable one. */
-  private readForeignConfig(home: string): RawConfig {
-    const read = readConfig(home)
+  /**
+   * Another panel's own entries. Its managed workspace is not knowable from here,
+   * so its default one is read and written.
+   */
+  private readForeignConfig(home: string, workspace: string = defaultWorkspace(home)): RawConfig {
+    const read = readConfig(home, workspace)
     if (read.error !== null || read.raw === null)
       throw new HomeHostedError(read.error ?? `no servers config in ${home}`, 'CONFIG_UNREADABLE')
     return read.raw
   }
 
-  /** Another panel's entries as its config holds them: live status needs its API token. */
-  private listForeign(home: string): ServerEntryView[] {
-    return (this.readForeignConfig(home).servers ?? []).map(entry => foreignView(entry))
+  /**
+   * Every workspace a panel serves, with counts. The running panel answers with
+   * live numbers; otherwise the registry plus each workspace's config file is
+   * enough to name them and count their entries.
+   */
+  private async workspaceSummaries(home: string, foreign: boolean): Promise<WorkspaceSummary[]> {
+    const registry = readWorkspaces(home)
+    const fromFile: WorkspaceSummary[] = registry.workspaces.map(entry => ({
+      id: entry.id,
+      label: entry.label,
+      servers: (readConfig(home, entry.id).raw?.servers ?? []).length,
+      running: 0,
+      source: 'file',
+    }))
+    try {
+      const client = foreign
+        ? (await this.foreignTokenWorks(home) ? await this.foreignClient(home) : null)
+        : await this.tryClient()
+      if (client !== null) {
+        const live = await client.listWorkspaces()
+        return live.map(entry => ({ id: entry.id, label: entry.label, servers: entry.serverCount, running: entry.runningCount, source: 'api' as const }))
+      }
+    }
+    catch {
+      // The files remain the best available truth.
+    }
+    return fromFile
   }
 
-  private createForeign(home: string, entry: ServerEntry): ServerEntryView {
-    const raw = this.readForeignConfig(home)
+  /** Another panel's entries as its config holds them: live status needs its API token. */
+  private listForeign(home: string, workspace: string = defaultWorkspace(home)): ServerEntryView[] {
+    return (this.readForeignConfig(home, workspace).servers ?? []).map(entry => foreignView(entry, workspace))
+  }
+
+  /**
+   * A workspace's entries read from disk, for when no panel client is available.
+   * The page shows them with `status: 'unknown'`, which is the truth: nothing is
+   * supervising them from this process's point of view.
+   */
+  private fileServers(home: string, workspace: string): { servers: ServerEntryView[], error: string | null } {
+    const read = readConfig(home, workspace)
+    return {
+      servers: (read.raw?.servers ?? []).map(entry => foreignView(entry, workspace)),
+      error: read.error,
+    }
+  }
+
+  private createForeign(home: string, entry: ServerEntry, workspace: string = defaultWorkspace(home)): ServerEntryView {
+    const raw = this.readForeignConfig(home, workspace)
     if (findEntry(raw, entry.id) !== null)
-      throw new HomeHostedError(`"${entry.id}" already exists in ${home}/servers.config.json`, 'DUPLICATE_SERVER')
+      throw new HomeHostedError(`"${entry.id}" already exists in ${serversFile(home, workspace)}`, 'DUPLICATE_SERVER')
     // The same two-phase add the managed path uses: that panel's watcher starts a
     // newly added `autostart` entry at once, while a changed definition is only
     // applied at that entry's next start.
-    writeConfig(home, upsertEntry(raw, { ...entry, autostart: false }), this.writtenBy(home))
-    const added = this.readForeignConfig(home)
-    writeConfig(home, patchEntry(added, entry.id, { autostart: entry.autostart === true }), this.writtenBy(home))
-    return this.writtenForeignEntry(home, entry.id)
+    writeConfig(home, upsertEntry(raw, { ...entry, autostart: false }), this.writtenBy(home), workspace)
+    const added = this.readForeignConfig(home, workspace)
+    writeConfig(home, patchEntry(added, entry.id, { autostart: entry.autostart === true }), this.writtenBy(home), workspace)
+    return this.writtenForeignEntry(home, entry.id, workspace)
   }
 
-  private updateForeign(home: string, id: string, patch: ServerEntryPatch): ServerEntryView {
-    const raw = this.readForeignConfig(home)
+  private updateForeign(home: string, id: string, patch: ServerEntryPatch, workspace: string = defaultWorkspace(home)): ServerEntryView {
+    const raw = this.readForeignConfig(home, workspace)
     if (findEntry(raw, id) === null)
-      throw new HomeHostedError(`no server "${id}" exists in ${home}/servers.config.json`, 'UNKNOWN_SERVER')
+      throw new HomeHostedError(`no server "${id}" exists in ${serversFile(home, workspace)}`, 'UNKNOWN_SERVER')
     // A patch never renames: the id is the key it was found by.
     const next = patchEntry(raw, id, { ...patch, id })
-    writeConfig(home, next, this.writtenBy(home))
-    return this.writtenForeignEntry(home, id)
+    writeConfig(home, next, this.writtenBy(home), workspace)
+    return this.writtenForeignEntry(home, id, workspace)
   }
 
   /** What a write actually left on disk, never what it was asked to write. */
-  private writtenForeignEntry(home: string, id: string): ServerEntryView {
-    const entry = findEntry(this.readForeignConfig(home), id)
+  private writtenForeignEntry(home: string, id: string, workspace: string = defaultWorkspace(home)): ServerEntryView {
+    const entry = findEntry(this.readForeignConfig(home, workspace), id)
     if (entry === null)
-      throw new HomeHostedError(`the write to ${home}/servers.config.json did not take`, 'FOREIGN_WRITE_LOST')
-    return foreignView(entry)
+      throw new HomeHostedError(`the write to ${serversFile(home, workspace)} did not take`, 'FOREIGN_WRITE_LOST')
+    return foreignView(entry, workspace)
   }
 
-  private deleteForeign(home: string, id: string): { id: string, home: string, via: 'file' } {
-    const raw = this.readForeignConfig(home)
+  private deleteForeign(home: string, id: string, workspace: string = defaultWorkspace(home)): { id: string, home: string, via: 'file' } {
+    const raw = this.readForeignConfig(home, workspace)
     if (findEntry(raw, id) === null)
-      throw new HomeHostedError(`no server "${id}" exists in ${home}/servers.config.json`, 'UNKNOWN_SERVER')
-    writeConfig(home, removeConfigEntry(raw, id), this.writtenBy(home))
+      throw new HomeHostedError(`no server "${id}" exists in ${serversFile(home, workspace)}`, 'UNKNOWN_SERVER')
+    writeConfig(home, removeConfigEntry(raw, id), this.writtenBy(home), workspace)
     return { id, home, via: 'file' }
   }
 
@@ -340,9 +395,9 @@ export class HomeHostedService extends Service {
    * start anything. The CLI has no server restart, so a restart is a stop
    * followed by a start — a stop that is not followed by one is reported.
    */
-  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string): Promise<{ home: string, id: string, action: string, via: 'cli' }> {
+  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string, workspace: string = defaultWorkspace(home)): Promise<{ home: string, workspace: string, id: string, action: string, via: 'cli' }> {
     const once = async (command: string): Promise<void> => {
-      const result = await this.cliExec([command, id, '--home', home], { ...process.env, HHOSTED_HOME: home })
+      const result = await this.cliExec([command, id, '--workspace', workspace, '--home', home], { ...process.env, HHOSTED_HOME: home })
       if (result.code !== 0) {
         const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
         throw new HomeHostedError(output.length > 0 ? output : `home-hosted ${command} ${id} exited ${String(result.code)}`, 'CLI_FAILED')
@@ -356,7 +411,7 @@ export class HomeHostedService extends Service {
     else {
       await once(action)
     }
-    return { home, id, action, via: 'cli' }
+    return { home, workspace, id, action, via: 'cli' }
   }
 
   // -------------------------------------------------------------------------
@@ -445,12 +500,30 @@ export class HomeHostedService extends Service {
     const url = this.runtime()?.url
     if (url === undefined || url.length === 0)
       return null
-    return `${url.replace(/\/+$/, '')}/logs?server=${encodeURIComponent(this.options.defaultEntryId)}`
+    // The workspace is part of the URL; the legacy `/logs` path would land on the
+    // panel's default workspace, which is not necessarily the managed one.
+    return `${url.replace(/\/+$/, '')}/w/${encodeURIComponent(this.managedWorkspace())}/logs?server=${encodeURIComponent(this.options.defaultEntryId)}`
   }
 
-  /** The port the panel's config holds, without touching a running panel. */
+  /**
+   * Relocate a pre-0.7 root into `.hh`. `up` does this on its own, but a person
+   * looking at a root this plugin cannot write needs the one step that fixes it;
+   * `migrate` is the CLI that does exactly that, non-interactively with `--yes`.
+   */
+  async migrateRoot(): Promise<PanelControlResult> {
+    if (!isLegacyRoot(this.options.home))
+      return { ok: true, detail: `${this.options.home} is already on the .hh layout` }
+    const result = await this.cliExec(['migrate', '--yes', '--home', this.options.home], { ...process.env, HHOSTED_HOME: this.options.home })
+    if (result.code !== 0) {
+      const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
+      return { ok: false, detail: output.length > 0 ? output : `home-hosted migrate exited ${String(result.code)}` }
+    }
+    return { ok: true, detail: `${this.options.home} was moved to the .hh layout` }
+  }
+
+  /** The port the panel's settings hold, without touching a running panel. */
   private configuredPort(): number | null {
-    const control = readConfig(this.options.home).raw?.control as { port?: unknown } | undefined
+    const control = readGlobalSettings(this.options.home).raw?.control as { port?: unknown } | undefined
     return typeof control?.port === 'number' ? control.port : null
   }
 
@@ -459,10 +532,7 @@ export class HomeHostedService extends Service {
     const port = this.options.settings.get().panel.port
     if (port === null || port === this.configuredPort())
       return
-    const read = readConfig(this.options.home)
-    if (read.error !== null)
-      throw new HomeHostedError(read.error, 'CONFIG_UNREADABLE')
-    writeConfig(this.options.home, patchControl(read.raw ?? {}, { port }), this.writtenBy())
+    setControl(this.options.home, { port }, this.writtenBy())
   }
 
   /** Whether this exact token was already proved against this exact panel. */
@@ -527,14 +597,14 @@ export class HomeHostedService extends Service {
         ? (token === 'enrolled'
             ? (this.tokenDetail || 'the panel is answering and this plugin holds a token')
             : token === 'stale'
-              ? 'the panel refused this plugin\'s API token, so writes go straight to servers.config.json; regenerate the token'
+              ? 'the panel refused this plugin\'s API token, so writes go straight to the workspace config file; regenerate the token'
               : token === 'present'
                 ? 'the panel is answering, but home-hosted already holds an API token this plugin does not have'
                 : token === 'absent'
-                  ? 'the panel is answering but no API token is enrolled for it yet; writes go to servers.config.json until one is'
+                  ? 'the panel is answering but no API token is enrolled for it yet; writes go to the workspace config file until one is'
                   : 'the panel answered, but the plugin\'s token could not be checked')
         : (runtime === null
-            ? 'no run.json: the panel is not running, so entries are written straight to servers.config.json'
+            ? 'no .hh/run.json: the panel is not running, so entries are written straight to the workspace config file'
             : token === 'present' || token === 'stale'
               ? 'the panel process is up but does not answer with this plugin\'s API token, so this page cannot reach it'
               : 'the panel process is alive but is not answering'),
@@ -613,7 +683,7 @@ export class HomeHostedService extends Service {
     if (!(await verifyToken(runtime.url, ensured.token)))
       return null
 
-    const client = new PanelClient({ baseUrl: runtime.url, token: ensured.token })
+    const client = new PanelClient({ baseUrl: runtime.url, token: ensured.token, workspace: this.managedWorkspace() })
     this.clientCache = { client, until: Date.now() + 30_000 }
     this.proveToken(runtime.url, ensured.token)
     return client
@@ -632,12 +702,24 @@ export class HomeHostedService extends Service {
   // Snapshot bookkeeping
   // -------------------------------------------------------------------------
 
+  /**
+   * What an adopted entry looked like before this plugin touched it, keyed by id
+   * inside the workspace those snapshots belong to. A file from another workspace
+   * is ignored: ids repeat across workspaces, and restoring the wrong one would
+   * rewrite an entry this plugin never adopted.
+   */
   private snapshots(): Record<string, ServerEntry> {
-    return readJson<Record<string, ServerEntry>>(this.snapshotsFile) ?? {}
+    const raw = readJson<Record<string, unknown>>(this.snapshotsFile)
+    if (raw === null)
+      return {}
+    if (raw.version === 2 && isRecordValue(raw.entries))
+      return raw.workspace === this.managedWorkspace() ? raw.entries as Record<string, ServerEntry> : {}
+    // A file from before workspaces: there was one workspace, and it was `default`.
+    return this.managedWorkspace() === DEFAULT_WORKSPACE ? raw as Record<string, ServerEntry> : {}
   }
 
   private saveSnapshots(snapshots: Record<string, ServerEntry>): void {
-    writeJsonAtomic(this.snapshotsFile, snapshots, 0o600)
+    writeJsonAtomic(this.snapshotsFile, { version: 2, workspace: this.managedWorkspace(), entries: snapshots }, 0o600)
   }
 
   // -------------------------------------------------------------------------
@@ -657,9 +739,10 @@ export class HomeHostedService extends Service {
         // fall through to the file, which is still the best available truth
       }
     }
-    const read = readConfig(this.options.home)
+    const workspace = this.managedWorkspace()
+    const read = readConfig(this.options.home, workspace)
     for (const entry of read.raw?.servers ?? [])
-      map.set(entry.id, { view: { id: entry.id, status: 'unknown', pid: null, url: null, config: entry }, config: entry })
+      map.set(entry.id, { view: foreignView(entry, workspace), config: entry })
     return map
   }
 
@@ -727,31 +810,32 @@ export class HomeHostedService extends Service {
       return
     }
 
-    const read = readConfig(this.options.home)
+    const workspace = this.managedWorkspace()
+    const read = readConfig(this.options.home, workspace)
     if (read.error !== null)
       throw new HomeHostedError(read.error, 'CONFIG_UNREADABLE')
     let raw = read.raw ?? {}
     if (findEntry(raw, intent.id) !== null) {
-      writeConfig(this.options.home, patchEntry(raw, intent.id, { ...patch, ...(repair ?? {}) }), this.writtenBy())
+      writeConfig(this.options.home, patchEntry(raw, intent.id, { ...patch, ...(repair ?? {}) }), this.writtenBy(), workspace)
       return
     }
 
     const entry = await this.createEntry(intent, patch)
     if (entry === null)
-      throw new HomeHostedError(`no server "${intent.id}" exists in ${this.options.home}/servers.config.json`, 'ENTRY_MISSING')
+      throw new HomeHostedError(`no server "${intent.id}" exists in ${serversFile(this.options.home, workspace)}`, 'ENTRY_MISSING')
 
     // While a panel is running, an external write is a real change and a newly
     // added autostart entry would be started at once. Adding it disabled and
     // flipping autostart in a second write makes that a changed definition
     // instead, which only takes effect at that entry's next start.
     if (await this.panelRunning()) {
-      writeConfig(this.options.home, upsertEntry(raw, { ...entry, autostart: false }), this.writtenBy())
-      raw = readConfig(this.options.home).raw ?? raw
-      writeConfig(this.options.home, patchEntry(raw, intent.id, { autostart: intent.autostart }), this.writtenBy())
+      writeConfig(this.options.home, upsertEntry(raw, { ...entry, autostart: false }), this.writtenBy(), workspace)
+      raw = readConfig(this.options.home, workspace).raw ?? raw
+      writeConfig(this.options.home, patchEntry(raw, intent.id, { autostart: intent.autostart }), this.writtenBy(), workspace)
       return
     }
 
-    writeConfig(this.options.home, upsertEntry(raw, entry), this.writtenBy())
+    writeConfig(this.options.home, upsertEntry(raw, entry), this.writtenBy(), workspace)
   }
 
   private async panelRunning(): Promise<boolean> {
@@ -823,10 +907,10 @@ export class HomeHostedService extends Service {
       }
     }
     else {
-      const read = readConfig(this.options.home)
+      const read = readConfig(this.options.home, this.managedWorkspace())
       if (read.error !== null || read.raw === null)
         throw new HomeHostedError(read.error ?? 'the config file is unreadable', 'CONFIG_UNREADABLE')
-      writeConfig(this.options.home, removeConfigEntry(read.raw, id), this.writtenBy())
+      writeConfig(this.options.home, removeConfigEntry(read.raw, id), this.writtenBy(), this.managedWorkspace())
     }
     delete snapshots[id]
     this.saveSnapshots(snapshots)
@@ -916,10 +1000,10 @@ export class HomeHostedService extends Service {
     if (client !== null)
       await client.updateServer(id, patch)
     else {
-      const read = readConfig(this.options.home)
+      const read = readConfig(this.options.home, this.managedWorkspace())
       if (read.error !== null || read.raw === null)
         throw new HomeHostedError(read.error ?? 'the config file is unreadable', 'CONFIG_UNREADABLE')
-      writeConfig(this.options.home, patchEntry(read.raw, id, patch), this.writtenBy())
+      writeConfig(this.options.home, patchEntry(read.raw, id, patch), this.writtenBy(), this.managedWorkspace())
     }
     delete snapshots[id]
     this.saveSnapshots(snapshots)
@@ -1335,18 +1419,28 @@ export class HomeHostedService extends Service {
     let lastError: string | null = null
     if (client !== null) {
       try {
-        servers = await client.listServers()
+        servers = await client.listServers(this.managedWorkspace())
       }
       catch (error) {
         lastError = error instanceof Error ? error.message : String(error)
       }
     }
-    else if (panel.reachable) {
-      lastError = panel.detail
+    else {
+      if (panel.reachable)
+        lastError = panel.detail
+      // No client: the workspace's own file is still the best available truth,
+      // and it is what the `source: 'file'` counts are read from.
+      const read = this.fileServers(this.options.home, this.managedWorkspace())
+      servers = read.servers
+      if (read.error !== null)
+        lastError ??= read.error
     }
 
     return {
       defaultEntryId: this.options.defaultEntryId,
+      workspace: this.managedWorkspace(),
+      workspaces: await this.workspaceSummaries(this.options.home, false).catch(() => []),
+      legacyRoot: isLegacyRoot(this.options.home),
       panel,
       panelRoot: this.options.home,
       panelRootSource: this.options.panelHomeSource ?? 'instance',
@@ -1369,6 +1463,21 @@ export class HomeHostedService extends Service {
   // Endpoint dispatch
   // -------------------------------------------------------------------------
 
+  /**
+   * Which workspace an endpoint call acts on. A caller may name any workspace the
+   * panel serves; omitted means the one this plugin manages, which for another
+   * panel is its default.
+   */
+  private callWorkspace(input: Record<string, unknown>, home: string, foreign: boolean): string {
+    const named = typeof input.workspace === 'string' ? input.workspace.trim() : ''
+    if (named.length > 0) {
+      if (!isWorkspaceId(named))
+        throw new HomeHostedError(`"${named}" is not a workspace id (expected ^[a-z0-9][a-z0-9_-]*$)`, 'INVALID_WORKSPACE')
+      return named
+    }
+    return foreign ? defaultWorkspace(home) : this.managedWorkspace()
+  }
+
   async call(endpoint: RpcEndpoint, payload: unknown): Promise<unknown> {
     const input = (payload ?? {}) as Record<string, unknown>
     // A target names a panel; an endpoint with no way to reach another one must
@@ -1389,51 +1498,67 @@ export class HomeHostedService extends Service {
         return await this.status()
       }
 
+      case 'panel.migrate':
+        return await this.migrateRoot()
+
+      case 'workspaces.list': {
+        const target = await this.targetHome(input.home)
+        return await this.workspaceSummaries(target.home, target.foreign)
+      }
+
       case 'servers.list': {
         const target = await this.targetHome(input.home)
-        if (!target.foreign)
-          return await (await this.requireClient()).listServers()
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
+        if (!target.foreign) {
+          // A panel that is not answering is still a readable config: the page's
+          // degraded view must not turn into an empty list.
+          const client = await this.tryClient()
+          return client === null ? this.fileServers(target.home, workspace).servers : await client.listServers(workspace)
+        }
         const via = this.mechanismFor('servers.list', input.via)
         // A read never mints a credential: it uses one this plugin already holds
         // for that panel, and otherwise reads the config file it can always read.
         if (via === 'api' || (input.via === undefined && await this.foreignTokenWorks(target.home)))
-          return await (await this.foreignClient(target.home)).listServers()
-        return this.listForeign(target.home)
+          return await (await this.foreignClient(target.home)).listServers(workspace)
+        return this.listForeign(target.home, workspace)
       }
 
       case 'servers.get':
-        return await (await this.requireClient()).getServer(String(input.id))
+        return await (await this.requireClient()).getServer(String(input.id), this.callWorkspace(input, this.options.home, false))
 
       case 'servers.create': {
         const entry = input.entry as ServerEntry
         if (typeof entry?.id !== 'string' || !ENTRY_ID_PATTERN.test(entry.id))
           throw new HomeHostedError('a server entry needs an id matching ^[a-z0-9][a-z0-9_-]*$', 'INVALID_ID')
         const target = await this.targetHome(input.home)
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (!target.foreign)
-          return await (await this.requireClient()).createServer(entry)
+          return await (await this.requireClient()).createServer(entry, workspace)
         return this.mechanismFor('servers.create', input.via) === 'api'
-          ? await (await this.foreignClient(target.home)).createServer(entry)
-          : this.createForeign(target.home, entry)
+          ? await (await this.foreignClient(target.home)).createServer(entry, workspace)
+          : this.createForeign(target.home, entry, workspace)
       }
 
       case 'servers.update': {
         const target = await this.targetHome(input.home)
         const id = String(input.id)
         const patch = (input.patch ?? {}) as ServerEntryPatch
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (!target.foreign)
-          return await (await this.requireClient()).updateServer(id, patch)
+          return await (await this.requireClient()).updateServer(id, patch, workspace)
         return this.mechanismFor('servers.update', input.via) === 'api'
-          ? await (await this.foreignClient(target.home)).updateServer(id, patch)
-          : this.updateForeign(target.home, id, patch)
+          ? await (await this.foreignClient(target.home)).updateServer(id, patch, workspace)
+          : this.updateForeign(target.home, id, patch, workspace)
       }
 
       case 'servers.delete': {
         const id = String(input.id)
         const target = await this.targetHome(input.home)
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (target.foreign) {
           return this.mechanismFor('servers.delete', input.via) === 'api'
-            ? await (await this.foreignClient(target.home)).deleteServer(id).then(() => ({ id, home: target.home, via: 'api' as const }))
-            : this.deleteForeign(target.home, id)
+            ? await (await this.foreignClient(target.home)).deleteServer(id, workspace).then(() => ({ id, workspace, home: target.home, via: 'api' as const }))
+            : this.deleteForeign(target.home, id, workspace)
         }
         if (id === this.selfEntryId()) {
           throw new HomeHostedError(
@@ -1442,54 +1567,57 @@ export class HomeHostedService extends Service {
             'SELF_ENTRY',
           )
         }
-        await (await this.requireClient()).deleteServer(id)
-        return { id }
+        await (await this.requireClient()).deleteServer(id, workspace)
+        return { id, workspace }
       }
 
       case 'servers.start': {
         const target = await this.targetHome(input.home)
         const id = String(input.id)
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (target.foreign) {
           if (this.mechanismFor('servers.start', input.via) === 'api') {
-            await (await this.foreignClient(target.home)).startServer(id)
-            return { home: target.home, id, action: 'start', via: 'api' }
+            await (await this.foreignClient(target.home)).startServer(id, workspace)
+            return { home: target.home, workspace, id, action: 'start', via: 'api' }
           }
-          return await this.lifecycleForeign(target.home, 'start', id)
+          return await this.lifecycleForeign(target.home, 'start', id, workspace)
         }
-        await (await this.requireClient()).startServer(id)
+        await (await this.requireClient()).startServer(id, workspace)
         return await this.entriesStatus()
       }
 
       case 'servers.stop': {
         const target = await this.targetHome(input.home)
         const id = String(input.id)
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (target.foreign) {
           if (this.mechanismFor('servers.stop', input.via) === 'api') {
-            await (await this.foreignClient(target.home)).stopServer(id)
-            return { home: target.home, id, action: 'stop', via: 'api' }
+            await (await this.foreignClient(target.home)).stopServer(id, workspace)
+            return { home: target.home, workspace, id, action: 'stop', via: 'api' }
           }
-          return await this.lifecycleForeign(target.home, 'stop', id)
+          return await this.lifecycleForeign(target.home, 'stop', id, workspace)
         }
-        await (await this.requireClient()).stopServer(id)
+        await (await this.requireClient()).stopServer(id, workspace)
         return await this.entriesStatus()
       }
 
       case 'servers.restart': {
         const target = await this.targetHome(input.home)
         const id = String(input.id)
+        const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (target.foreign) {
           if (this.mechanismFor('servers.restart', input.via) === 'api') {
-            await (await this.foreignClient(target.home)).restartServer(id)
-            return { home: target.home, id, action: 'restart', via: 'api' }
+            await (await this.foreignClient(target.home)).restartServer(id, workspace)
+            return { home: target.home, workspace, id, action: 'restart', via: 'api' }
           }
-          return await this.lifecycleForeign(target.home, 'restart', id)
+          return await this.lifecycleForeign(target.home, 'restart', id, workspace)
         }
-        await (await this.requireClient()).restartServer(id)
+        await (await this.requireClient()).restartServer(id, workspace)
         return await this.entriesStatus()
       }
 
       case 'servers.freePort':
-        return await (await this.requireClient()).freePort(String(input.id))
+        return await (await this.requireClient()).freePort(String(input.id), this.callWorkspace(input, this.options.home, false))
 
       case 'entries.apply': {
         const intents = Array.isArray(input.intents) ? input.intents as EntryIntent[] : []

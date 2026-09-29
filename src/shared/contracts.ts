@@ -23,6 +23,8 @@ export type Envelope<T> = { ok: true, value: T } | { ok: false, error: RpcError 
 export type RpcEndpoint =
   | 'status'
   | 'servers.list'
+  | 'workspaces.list'
+  | 'panel.migrate'
   | 'servers.get'
   | 'servers.create'
   | 'servers.update'
@@ -46,9 +48,17 @@ export type RpcEndpoint =
   | 'settings.update'
 
 /** A settings write sends only the changed subtree; the host merges group by group. */
+/** The panel's workspace id shape; the same regex its own schema enforces. */
+export const WORKSPACE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
+
+export function isWorkspaceId(value: unknown): value is string {
+  return typeof value === 'string' && WORKSPACE_ID_PATTERN.test(value)
+}
+
 export interface SettingsPatch {
   autostart?: Partial<PluginSettings['autostart']>
   manageDsh?: boolean
+  workspace?: string
   entries?: PluginSettings['entries']
   panel?: Partial<PluginSettings['panel']>
   authNotice?: boolean
@@ -68,6 +78,12 @@ export interface ForeignTarget {
   /** A discovered panel's `--home`; omitted means the panel this plugin manages. */
   home?: string
   /**
+   * Which workspace inside that panel to act on; omitted means the plugin's own
+   * managed workspace (another panel: its default one). Every workspace the panel
+   * serves is reachable, not only the managed one.
+   */
+  workspace?: string
+  /**
    * How to reach it; omitted means the endpoint's first mechanism. Only a value
    * {@link FOREIGN_MECHANISMS} lists for that endpoint is accepted.
    */
@@ -77,7 +93,7 @@ export interface ForeignTarget {
 /**
  * How this plugin can act on a panel it does not manage.
  *
- * `file` edits that panel's `servers.config.json`, `cli` runs the home-hosted
+ * `file` edits that panel's workspace config file, `cli` runs the home-hosted
  * CLI against its state root, and `api` enrols a token for it and drives its own
  * HTTP API — the only way to reach some operations, and the only one that gives
  * live status.
@@ -107,14 +123,18 @@ export interface EndpointPayloads {
   /** `refresh` bypasses the short panel-inventory cache; status is live either way. */
   'status': { refresh?: boolean }
   'servers.list': ForeignTarget
-  'servers.get': { id: string }
+  'servers.get': ForeignTarget & { id: string }
   'servers.create': ForeignTarget & { entry: ServerEntry }
   'servers.update': ForeignTarget & { id: string, patch: ServerEntryPatch }
   'servers.delete': ForeignTarget & { id: string }
   'servers.start': ForeignTarget & { id: string }
   'servers.stop': ForeignTarget & { id: string }
   'servers.restart': ForeignTarget & { id: string }
-  'servers.freePort': { id: string }
+  'servers.freePort': ForeignTarget & { id: string }
+  /** Every workspace a panel serves, with its counts. */
+  'workspaces.list': { home?: string }
+  /** Move a pre-0.7 panel root into `.hh` (idempotent; the CLI's own migration). */
+  'panel.migrate': Record<string, never>
   'entries.apply': { intents: EntryIntent[] }
   /** Stop managing an entry: restore what it was, or remove it when we created it. */
   'entries.remove': { id: string }
@@ -202,6 +222,8 @@ export const OWNED_ENTRY_KEYS = ['autostart', 'onPortConflict', 'persistent', 's
 
 export interface ServerEntryView {
   id: string
+  /** The workspace it lives in: a server id is only unique inside one. */
+  workspace: string
   status: string
   pid: number | null
   url: string | null
@@ -325,7 +347,7 @@ export interface InstanceView {
   /** A `run.json` whose pid is still alive. */
   running: boolean
   projectDir: string | null
-  /** Entries in that panel's `servers.config.json`; `null` when it is unreadable. */
+  /** Entries in that panel's default workspace; `null` when it is unreadable. */
   servers: number | null
   /** How discovery found this root. */
   source: InstanceSource
@@ -383,6 +405,7 @@ export interface BootStatus {
 
 export type AgentToolName =
   | 'status'
+  | 'workspaces_list'
   | 'servers_list'
   | 'servers_lifecycle'
   | 'servers_edit'
@@ -391,6 +414,7 @@ export type AgentToolName =
 
 export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   'status',
+  'workspaces_list',
   'servers_list',
   'servers_lifecycle',
   'servers_edit',
@@ -425,6 +449,12 @@ export interface PluginSettings {
   }
   /** Manage the running harness as a home-hosted entry. */
   manageDsh: boolean
+  /**
+   * The workspace this plugin manages. Server ids are only unique inside one, so
+   * this decides which file an entry write lands in and which `?workspace=` the
+   * API carries. Every other workspace is still reachable from the page.
+   */
+  workspace: string
   entries: EntryIntent[]
   agentTools: {
     enabled: boolean
@@ -471,6 +501,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   version: SETTINGS_VERSION,
   autostart: { enabled: false, mechanism: 'auto' },
   manageDsh: false,
+  workspace: 'default',
   entries: [],
   // Every tool on by default; the session's own permission mode is what gates them.
   agentTools: { enabled: true, allow: [...AGENT_TOOL_NAMES] },
@@ -482,9 +513,28 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   cli: { prefer: 'pinned' },
 }
 
+/** One workspace a panel serves, as the page lists them. */
+export interface WorkspaceSummary {
+  id: string
+  label: string
+  servers: number
+  running: number
+  /** `api` counts come from the running panel; `file` counts from its config files. */
+  source: 'api' | 'file'
+}
+
 export interface HomeHostedStatus {
   /** The entry id this plugin manages; the page must not assume "dsh". */
   defaultEntryId: string
+  /** The workspace this plugin manages. */
+  workspace: string
+  /** Every workspace the managed panel serves. */
+  workspaces: WorkspaceSummary[]
+  /**
+   * The managed root still uses the pre-0.7 layout. Nothing can be written to it
+   * until it is moved, so the page offers the one step that fixes it.
+   */
+  legacyRoot?: boolean
   panel: PanelStatus
   /** The panel root this plugin instance drives, so a second install is visible. */
   panelRoot?: string

@@ -149,6 +149,7 @@ describe('agent tools', () => {
     expect(settings.get().agentTools.enabled).toBe(true)
     expect(settings.get().agentTools.allow).toEqual([
       'status',
+      'workspaces_list',
       'servers_list',
       'servers_lifecycle',
       'servers_edit',

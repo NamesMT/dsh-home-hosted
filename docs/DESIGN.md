@@ -87,15 +87,17 @@ a clone run without its own `.bin`, or a global-only machine.
 ## One panel root and one boot artifact per state root
 
 Two dsh installs share `~/.dsh` far more often than they should, and each one
-installing this plugin used to mean two plugins editing one `servers.config.json`
-and one autostart unit under one ownership marker — so the second install quietly
+installing this plugin used to mean two plugins editing one panel's state and one
+autostart unit under one ownership marker — so the second install quietly
 replaced the first's boot entry. A panel root is now derived per instance: an
 explicit `$HHOSTED_HOME` still wins, and a panel already living at
 `~/.home-hosted` is adopted rather than abandoned (an upgrade must never make
 every server look like it vanished), but otherwise the root is the instance's own
-`<stateDir>/panel`. Only a root with a `servers.config.json` counts, or a
-`run.json` whose pid is alive — a killed panel leaves a runtime file behind, and
-adopting on that would point a fresh install at somebody's dead root. Adoption is
+`<stateDir>/panel`. A root counts when it is a 0.7 one (`.hh/workspaces.json` or
+`.hh/settings.json`), when it is a pre-0.7 one with a `servers.config.json`, or
+when a `run.json` in either layout has a live pid — a killed panel leaves a
+runtime file behind, and adopting on that would point a fresh install at
+somebody's dead root. Adoption is
 also limited to an instance that already exists: the machine's own harness home,
 or a state dir that already holds settings. A scratch `DSH_HOME` or a test
 project must not reach over and drive the panel some other install owns.
@@ -110,9 +112,11 @@ artifact carrying this plugin's marker is ever removed.
 
 ## Agent tools are merged and on by default
 
-Six tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit`
+Seven tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit`
 carries create/update/delete, `autostart_manage` carries install/uninstall, and
 `ui_manage` drives the panel's own UI (`ui-update` / `ui-revert` / `ui-switch`).
+`workspaces_list` is the read-only way to see every workspace, and the server
+tools take a `workspace` because an id is only unique inside one.
 They are registered on by default; what gates a mutating call is the session's
 own permission mode, not a plugin-level default.
 
@@ -175,11 +179,34 @@ channel).
 `onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and
 an older panel handed either key can refuse to *boot* from the config. The plugin
 used to consult the answering panel's version and refuse or drop them
-(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.6.8` and
+(`KILL_UNSUPPORTED`). That is gone on purpose: it pins `home-hosted@^0.7.1` and
 autostarts its own copy, so a panel older than those keys is only reachable by
 deliberately preferring an old global install — and this is pre-1.0. Supporting
 older panels again means bringing that check back from history, not re-deriving
 it.
+
+## Workspaces: one managed, all reachable
+
+home-hosted 0.7 made a workspace the ownership boundary: each has its own
+`servers.config.json`, settings, secrets, logs and nanny state under
+`.hh/<workspace>/`, while the listener, auth, TLS, host vitals, backups, UI and
+`run.json` stay at `.hh/`. A server id is therefore only unique *inside* a
+workspace, and every call has to say which one it means.
+
+The plugin manages exactly one workspace — the `workspace` setting, default
+`default` — because its intent (the `dsh` entry, snapshots, reconcile) is a
+promise about one entry in one place. The page and the agent tools are not
+limited to it: they list every workspace the panel serves
+(`workspaces.list`, `/api/workspaces` when it answers, the registry plus the
+workspace files when it does not) and act on any of them by naming it
+(`workspace` on the payload, `?workspace=` on the API, `.hh/<workspace>/…` on
+disk). Only the managed workspace is *reconciled*; another one is managed the way
+a person would manage it.
+
+A pre-0.7 root is not read or written at all. It is recognised (a `legacyRoot`
+flag on the status), refused on every write, and fixed through one action that
+runs `home-hosted migrate --yes` — the same relocation a first 0.7 start does on
+its own.
 
 ## Several panels on one machine
 
@@ -191,7 +218,8 @@ panels used to be indistinguishable from a person with one.
 Discovery is bounded, never a scan of the disk: the managed root (always listed,
 even before its first start), `$HHOSTED_HOME`, the operator's `instanceRoots`,
 and the `~/.home-hosted*` siblings. Another root counts only when it holds a
-`servers.config.json` or a `run.json`. The inventory is cached
+0.7 `.hh`, a pre-0.7 `servers.config.json`, or a `run.json` with a live pid. The
+inventory is cached
 (`INSTANCES_CACHE_MS`); the prompt path re-measures a stale cache in place
 (`instancesNow()`), because a provider that only read a snapshot would never
 notice a panel started while this dsh was already running.
@@ -215,7 +243,8 @@ hosts this dsh, and the Agent-tools section carries the `instancesNotice` toggle
 A call that names another panel is no dead end. The plugin asks the user how to
 reach it, offering every way that endpoint has, least invasive first:
 
-- `file` edits that panel's `servers.config.json` — no credential, but no live
+- `file` edits that panel's workspace config file (`.hh/<workspace>/servers.config.json`,
+  its default workspace unless the call names another) — no credential, but no live
   status either, and a running panel applies a changed definition at that
   entry's next start;
 - `cli` runs the home-hosted CLI against its state root — the only runtime path
@@ -283,7 +312,7 @@ says the page will disconnect; the helper logs to `bin/panel-takeover.log`.
 ## Two writes, and why the API comes first
 
 home-hosted's config store compares the bytes it last wrote, so a write through
-`/api/servers` never triggers its file watcher. A write to
+`/api/servers` never triggers its file watcher. A write to a workspace's
 `servers.config.json` does — and the watcher *starts* a newly added entry with
 `autostart: true`.
 
@@ -331,9 +360,10 @@ rather than guessed from `--help`: `set-token` replaces whatever hash is there
 (so `--clear` is not needed to overwrite, and is not used — see below),
 `HHOSTED_TOKEN` is the non-interactive input, and every command peels
 `--home <dir>` off before any state module is imported and turns it into
-`HHOSTED_HOME` — which is what makes the secrets file, `run.json` and the servers
-config live under the directory this plugin passes, so the plugin and the CLI
-always agree on where state is.
+`HHOSTED_HOME` — which is what makes the secrets file, `run.json` and every
+workspace's config live under the directory this plugin passes, so the plugin and
+the CLI always agree on where state is. A workspace-scoped command (`start`,
+`stop`) also takes `--workspace <id>`.
 
 The token state the page shows is measured, not assumed. When the panel answers,
 the plugin proves its token with a non-mutating `listServers()`: a refusal is

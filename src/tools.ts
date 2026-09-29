@@ -103,6 +103,15 @@ const INSTANCE_PARAM = {
 } as const satisfies ParameterPropertySpec
 
 /**
+ * Which workspace inside that panel a call acts on. A server id is only unique
+ * inside one, so every entry-shaped tool has to name it to be unambiguous.
+ */
+const WORKSPACE_PARAM = {
+  type: 'string',
+  description: 'Workspace to act on (^[a-z0-9][a-z0-9_-]*$); a server id is only unique inside one. Omit for the workspace this plugin manages, which for another panel is its default.',
+} as const satisfies ParameterPropertySpec
+
+/**
  * A home-hosted server entry, as one object parameter.
  *
  * Declared field by field rather than as `type: 'json'`: an author-only `json`
@@ -152,17 +161,26 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     parameters: { instance: INSTANCE_PARAM },
     run: () => ({ endpoint: 'status', payload: {} }),
   },
-  servers_list: {
-    description: 'List every server home-hosted supervises, with status, pid and url. A named panel is read from its config file, or through its API when this plugin already holds a token for that panel; naming the API mechanism mints one.',
+  workspaces_list: {
+    description: 'List every workspace a home-hosted panel serves, with its label, entry count and running count. A workspace is the ownership boundary: a server id is only unique inside one, which is why the servers_* tools take a workspace. Read-only.',
     parameters: { instance: INSTANCE_PARAM },
-    run: () => ({ endpoint: 'servers.list', payload: {} }),
+    run: () => ({ endpoint: 'workspaces.list', payload: {} }),
+  },
+  servers_list: {
+    description: 'List the servers home-hosted supervises in one workspace, with status, pid and url. A server id is only unique inside a workspace, so name the workspace you mean. A named panel is read from its config file, or through its API when this plugin already holds a token for that panel; naming the API mechanism mints one.',
+    parameters: { instance: INSTANCE_PARAM, workspace: WORKSPACE_PARAM },
+    run: (input) => {
+      const workspace = stringArg(input, 'workspace')
+      return { endpoint: 'servers.list', payload: workspace === null ? {} : { workspace } }
+    },
   },
   servers_lifecycle: {
-    description: 'Start, stop or restart a server supervised by home-hosted. Restarting the entry this session runs as ends the session. A named panel is driven through the home-hosted CLI aimed at its state root, or through its API, and a CLI restart is a stop then a start.',
+    description: 'Start, stop or restart a server supervised by home-hosted, in the workspace the call names. A server id is only unique inside a workspace, so name the workspace when it is not the one this plugin manages. Restarting the entry this session runs as ends the session. A named panel is driven through the home-hosted CLI aimed at its state root, or through its API, and a CLI restart is a stop then a start.',
     parameters: {
       instance: INSTANCE_PARAM,
+      workspace: WORKSPACE_PARAM,
       action: { type: 'string', required: true, description: 'start, stop or restart' },
-      id: { type: 'string', required: true, description: 'Server entry id' },
+      id: { type: 'string', required: true, description: 'Server entry id, unique inside the named workspace' },
     },
     run: (input) => {
       const action = stringArg(input, 'action')
@@ -171,25 +189,33 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
       const id = stringArg(input, 'id')
       if (id === null)
         throw new Error('id is required')
-      return { endpoint: `servers.${action}` as RpcEndpoint, payload: { id } }
+      const workspace = stringArg(input, 'workspace')
+      return {
+        endpoint: `servers.${action}` as RpcEndpoint,
+        payload: workspace === null ? { id } : { id, workspace },
+      }
     },
   },
   servers_edit: {
-    description: 'Create, update or delete a home-hosted server entry. Delete is refused for the entry this session runs as. A named panel is edited through its servers.config.json, or through its API with a token this plugin mints.',
+    description: 'Create, update or delete a home-hosted server entry in the workspace the call names. A server id is only unique inside a workspace, so name the workspace when it is not the one this plugin manages. Delete is refused for the entry this session runs as. A named panel is edited through its servers.config.json, or through its API with a token this plugin mints.',
     parameters: {
       instance: INSTANCE_PARAM,
+      workspace: WORKSPACE_PARAM,
       action: { type: 'string', required: true, description: 'create, update or delete' },
-      id: { type: 'string', description: 'Server entry id (update, delete)' },
+      id: { type: 'string', description: 'Server entry id, unique inside the named workspace (update, delete)' },
       entry: ENTRY_PARAM,
       patch: PATCH_PARAM,
     },
     run: (input) => {
       const action = stringArg(input, 'action')
+      const workspace = stringArg(input, 'workspace')
+      const scoped = (payload: Record<string, unknown>): Record<string, unknown> =>
+        workspace === null ? payload : { ...payload, workspace }
       if (action === 'create') {
         const entry = jsonArg(input, 'entry')
         if (entry === null)
           throw jsonArgError(input, 'entry', 'to create a server')
-        return { endpoint: 'servers.create', payload: { entry } }
+        return { endpoint: 'servers.create', payload: scoped({ entry }) }
       }
       if (action === 'update') {
         const id = stringArg(input, 'id')
@@ -200,13 +226,13 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
           throw jsonArgError(input, 'patch', 'to update a server')
         // A caller may echo the id back; it is the key, not a field to change.
         const { id: _key, ...fields } = patch
-        return { endpoint: 'servers.update', payload: { id, patch: fields } }
+        return { endpoint: 'servers.update', payload: scoped({ id, patch: fields }) }
       }
       if (action === 'delete') {
         const id = stringArg(input, 'id')
         if (id === null)
           throw new Error('id is required to delete a server')
-        return { endpoint: 'servers.delete', payload: { id } }
+        return { endpoint: 'servers.delete', payload: scoped({ id }) }
       }
       throw new Error('action must be create, update or delete')
     },

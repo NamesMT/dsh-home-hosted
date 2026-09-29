@@ -47,7 +47,14 @@ service manager, or restart the harness you are running in to "check" something.
 - `writeConfig` keeps the panel's `meta` and never invents `meta.schema`: an absent schema reads as
   the panel's current one, while a stale stamp stops the panel booting.
 - Writes go through the authenticated panel API when it answers and the token proves itself,
-  otherwise straight to `servers.config.json` (atomic write, schema-shaped).
+  otherwise straight to `.hh/<workspace>/servers.config.json` (atomic write, schema-shaped); the
+  panel's `control` lives in `.hh/settings.json` and is patched there.
+- **A server id is only unique inside a workspace**: every read and write names one — the plugin's
+  `workspace` setting for the managed panel, `?workspace=` on the API, `.hh/<workspace>/…` on disk,
+  and `workspace` in an RPC payload or tool argument for anything else. A missing workspace means the
+  managed one (another panel: its default).
+- A pre-0.7 root is never read or written; it is only *recognised* (`isLegacyRoot`), reported as
+  `legacyRoot`, and fixed by `panel.migrate` (`home-hosted migrate --yes`).
 - The settings file is versioned (`SETTINGS_VERSION`). Migrate on **read**, never in `update()`; an
   explicit empty allowlist means "no tools", and the old default pair means "nobody chose" — bound to
   the release that merged the tools (`PRE_MERGE_SETTINGS_VERSION`), never to the current stamp.
@@ -87,8 +94,9 @@ service manager, or restart the harness you are running in to "check" something.
   repairs an entry that exists — it never installs one.
 - An entry this process runs as is never deleted (the panel is told to stop it); "stop managing" pauses
   or restores it instead.
-- Only the `home-hosted` this plugin pins is supported (`^0.6.8`): the `kill`/`persistent` version
-  guards were dropped pre-1.0, so an older panel handed those keys can refuse to boot — see DESIGN.
+- Only the `home-hosted` this plugin pins is supported (`^0.7.1`): the state layout is `.hh`, and
+  the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
+  can refuse to boot — see DESIGN.
 
 ## Where to extend
 

@@ -5,13 +5,13 @@ import type { InstanceView } from '../src/shared/contracts.js'
 import { registerInstancesNotice } from '../src/home-hosted/instances-notice.js'
 import type { SystemPromptLike } from '../src/home-hosted/instances-notice.js'
 import { canonicalPath, describeInstance, discoverInstances, instancesNoticeText } from '../src/home-hosted/instances.js'
-import { configFile, runtimeFile } from '../src/util/paths.js'
-import { tempDir, writeJsonFile } from './helpers/temp.js'
+import { makeHhHome } from './helpers/hh.js'
+import { tempDir } from './helpers/temp.js'
 
 interface PanelState {
-  /** What `run.json` should say, when the panel was started. */
+  /** What `.hh/run.json` should say, when the panel was started. */
   runtime?: { pid: number, url: string, version: string, port?: number, projectDir?: string }
-  /** `servers.config.json` contents, when the panel has a config. */
+  /** `.hh/default/servers.config.json` entries, when the panel has a config. */
   servers?: unknown[]
 }
 
@@ -28,10 +28,13 @@ function fixture(): Fixture {
   const make = (name: string, options: PanelState = {}): string => {
     const home = path.join(root, name)
     fs.mkdirSync(home, { recursive: true })
-    if (options.servers !== undefined)
-      writeJsonFile(configFile(home), { meta: { writtenBy: '0.6.6' }, servers: options.servers })
-    if (options.runtime !== undefined)
-      writeJsonFile(runtimeFile(home), options.runtime)
+    if (options.servers !== undefined || options.runtime !== undefined) {
+      makeHhHome(home, {
+        workspaces: ['default'],
+        ...(options.servers === undefined ? {} : { servers: { default: { meta: { writtenBy: '0.6.6' }, servers: options.servers } } }),
+        ...(options.runtime === undefined ? {} : { running: options.runtime }),
+      })
+    }
     return home
   }
   return { root, managed: make('managed'), make }

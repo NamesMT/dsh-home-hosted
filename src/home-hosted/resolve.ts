@@ -19,10 +19,10 @@ import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
 
 /** The range the plugin ships and is tested against. */
-export const EXPECTED_RANGE = '^0.6.8'
+export const EXPECTED_RANGE = '^0.7.1'
 
 /** Oldest release whose API and config schema this plugin relies on. */
-export const MIN_SUPPORTED_VERSION = '0.4.1'
+export const MIN_SUPPORTED_VERSION = '0.7.0'
 
 export type CliPreference = 'pinned' | 'global'
 

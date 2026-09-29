@@ -17,6 +17,7 @@ import type {
   ServerEntryView,
   SettingsPatch,
   UiResult,
+  WorkspaceSummary,
 } from '../shared/contracts.js'
 import { RPC_PATH, RPC_VERSION } from '../shared/contracts.js'
 
@@ -39,6 +40,12 @@ export interface BootControlResult {
 export interface EndpointResults {
   'status': HomeHostedStatus
   'servers.list': ServerEntryView[]
+  'servers.create': ServerEntryView
+  'servers.update': ServerEntryView
+  'servers.delete': { id: string, workspace?: string }
+  'servers.freePort': FreePortResult
+  'workspaces.list': WorkspaceSummary[]
+  'panel.migrate': PanelControlResult
   'entries.apply': ManagedEntryStatus[]
   'entries.remove': ManagedEntryStatus[]
   'panel.start': PanelControlResult
@@ -48,6 +55,17 @@ export interface EndpointResults {
   'boot.install': BootControlResult
   'boot.uninstall': BootControlResult
   'ui.manage': UiResult
+}
+
+/**
+ * What a `free-port` attempt reports. The panel's own schema also carries the
+ * pids it signalled; the page only needs to say which port ended up free.
+ */
+export interface FreePortResult {
+  ok?: boolean
+  port?: number | null
+  free?: boolean
+  skipped?: number[]
 }
 
 export type RpcValue<E extends RpcEndpoint> = E extends keyof EndpointResults
