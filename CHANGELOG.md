@@ -1,6 +1,30 @@
 # Changelog
 
 
+## v0.5.0
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.5...v0.5.0)
+
+### 🚀 Enhancements
+
+- **workspaces:** ⚠️  Manage home-hosted 0.7 workspaces ([0e0b9b4](https://github.com/NamesMT/dsh-home-hosted/commit/0e0b9b4))
+
+### 🩹 Fixes
+
+- Explain the panel takeover and retire a stale boot refusal ([c684db1](https://github.com/NamesMT/dsh-home-hosted/commit/c684db1))
+
+### 📖 Documentation
+
+- **agents:** Require keeping README and docs updated with the change ([402ec9f](https://github.com/NamesMT/dsh-home-hosted/commit/402ec9f))
+
+#### ⚠️ Breaking Changes
+
+- **workspaces:** ⚠️  Manage home-hosted 0.7 workspaces ([0e0b9b4](https://github.com/NamesMT/dsh-home-hosted/commit/0e0b9b4))
+
+### ❤️ Contributors
+
+- NamesMT
+
 ## v0.4.5
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.4...v0.4.5)
