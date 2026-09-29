@@ -18,6 +18,9 @@ import { run } from '../util/exec.js'
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../util/fsx.js'
 import { compareVersions, parseVersion } from './resolve.js'
 
+/** A package-manager shim's real target, as the shim itself records it. */
+const SHIM_TARGET = /^#\s*cmd-shim-target=(.+)$/m
+
 export interface LauncherOptions {
   stateDir: string
   dshHome: string
@@ -75,12 +78,33 @@ const RECORD = ${JSON.stringify(record)}
 const MIN_VERSION = ${JSON.stringify(options.minVersion)}
 const PLUGIN_ROOT = ${JSON.stringify(options.pluginRoot ?? null)}
 
+/** A package-manager shim's real target, as the shim itself records it. */
+const SHIM_TARGET = /^#\\s*cmd-shim-target=(.+)$/m
+
 function readRecord() {
   try { return JSON.parse(fs.readFileSync(RECORD, 'utf8')) } catch { return null }
 }
 
+/**
+ * The version of the package a CLI entry belongs to, following a package-manager
+ * shim to the file it actually runs.
+ *
+ * A pnpm/npm shim is a shell script whose 'cmd-shim-target' comment names the real
+ * entry — and it lives *inside* the plugin's own package, so walking up from the
+ * shim reads this plugin's package.json and reports the plugin's version for the
+ * CLI. That is not cosmetic: 'choose' sorts by version, so the plugin's own number
+ * let a PATH fallback outrank the recorded pinned copy and boot a different
+ * home-hosted than this plugin shipped.
+ */
 function versionOf(entry) {
-  let dir = path.dirname(entry)
+  let target = entry
+  try {
+    if (fs.statSync(entry).isFile()) {
+      const shimTarget = SHIM_TARGET.exec(fs.readFileSync(entry, 'utf8'))?.[1]?.trim()
+      if (shimTarget !== undefined && shimTarget.length > 0) target = shimTarget
+    }
+  } catch {}
+  let dir = path.dirname(target)
   for (let hop = 0; hop < 4; hop += 1) {
     try {
       const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
@@ -107,45 +131,70 @@ function compare(a, b) {
   return left.pre < right.pre ? -1 : 1
 }
 
-function collect(out, entry) {
-  if (typeof entry === 'string' && entry.length > 0 && fs.existsSync(entry)) out.push(entry)
+function collect(out, entry, tier) {
+  if (typeof entry === 'string' && entry.length > 0 && fs.existsSync(entry)) out.push({ entry, tier })
 }
 
-function collectRoot(root, out) {
-  collect(out, path.join(root, 'node_modules', 'home-hosted', 'bin', 'home-hosted.mjs'))
+function collectRoot(root, out, tier) {
+  collect(out, path.join(root, 'node_modules', 'home-hosted', 'bin', 'home-hosted.mjs'), tier)
   const store = path.join(root, 'node_modules', '.pnpm')
   let names = []
   try { names = fs.readdirSync(store) } catch { return }
   for (const name of names) {
     if (name.startsWith('home-hosted@') || name.startsWith('dsh-home-hosted@'))
-      collect(out, path.join(store, name, 'node_modules', 'home-hosted', 'bin', 'home-hosted.mjs'))
+      collect(out, path.join(store, name, 'node_modules', 'home-hosted', 'bin', 'home-hosted.mjs'), tier)
   }
 }
+
+/**
+ * Where a copy can come from, best first. A plain version sort let a copy of the
+ * plugin's own version — read from the package-manager shim, or an unrelated
+ * global install — outrank the copy the plugin actually pinned. A recorded pin is
+ * an instruction; PATH is a hope.
+ */
+const TIER_RECORD = 0
+const TIER_LOCAL = 1
+const TIER_PATH = 2
 
 function candidates() {
   const out = []
   const record = readRecord()
-  if (record && typeof record.entry === 'string') collect(out, record.entry)
-  if (PLUGIN_ROOT !== null) collectRoot(PLUGIN_ROOT, out)
+  if (record && typeof record.entry === 'string') collect(out, record.entry, TIER_RECORD)
+  if (PLUGIN_ROOT !== null) collectRoot(PLUGIN_ROOT, out, TIER_LOCAL)
   try {
     for (const name of fs.readdirSync(path.join(DSH_HOME, 'profiles')))
-      collectRoot(path.join(DSH_HOME, 'profiles', name), out)
+      collectRoot(path.join(DSH_HOME, 'profiles', name), out, TIER_LOCAL)
   } catch {}
-  collectRoot(path.join(DSH_HOME), out)
+  collectRoot(path.join(DSH_HOME), out, TIER_LOCAL)
   // Last resort: a global install on the entry's own PATH.
   for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
     if (dir.length === 0) continue
-    collect(out, path.join(dir, 'home-hosted'))
-    collect(out, path.join(dir, 'home-hosted.cmd'))
+    collect(out, path.join(dir, 'home-hosted'), TIER_PATH)
+    collect(out, path.join(dir, 'home-hosted.cmd'), TIER_PATH)
   }
   return out
 }
 
+/** The best copy within a tier: the highest version, first-found when equal. */
+function bestOfTier(items) {
+  const known = items.filter(item => item.version !== null)
+  const pool = known.length === 0 ? items : known
+  return [...pool].sort((a, b) => compare(b.version ?? '0.0.0', a.version ?? '0.0.0'))[0] ?? null
+}
+
 function choose() {
-  const found = candidates().map(entry => ({ entry, version: versionOf(entry) }))
+  const found = candidates().map(item => ({ ...item, version: versionOf(item.entry) }))
   const supported = found.filter(item => item.version !== null && compare(item.version, MIN_VERSION) >= 0)
-  supported.sort((a, b) => compare(b.version, a.version))
-  return (supported[0] ?? found[0] ?? null)?.entry ?? null
+  for (const tier of [TIER_RECORD, TIER_LOCAL, TIER_PATH]) {
+    const best = bestOfTier(supported.filter(item => item.tier === tier))
+    if (best !== null) return best.entry
+  }
+  // Nothing supported: a too-old copy still beats no panel at all.
+  for (const tier of [TIER_RECORD, TIER_LOCAL, TIER_PATH]) {
+    const best = bestOfTier(found.filter(item => item.tier === tier))
+    if (best !== null) return best.entry
+  }
+  return null
 }
 
 const entry = choose()
@@ -181,20 +230,45 @@ export function writeLauncher(options: LauncherOptions): LauncherWrite {
   return { path: file, changed }
 }
 
-/** Run the launcher the way the boot entry will, and read the version it answers. */
-export async function preflightLauncher(stateDir: string, timeoutMs = 10_000): Promise<string | null> {
+/**
+ * Run the launcher the way the boot entry will, and read the version it answers.
+ *
+ * `env` is only for tests that have to describe the PATH the entry would see; a
+ * boot entry inherits a login PATH, never the one this process happens to have.
+ */
+export async function preflightLauncher(stateDir: string, timeoutMs = 10_000, env?: Record<string, string | undefined>): Promise<string | null> {
   const file = launcherPath(stateDir)
   if (!fs.existsSync(file))
     return null
   const result = process.platform === 'win32'
-    ? await run(process.execPath, [file, '--version'], { timeoutMs })
-    : await run(file, ['--version'], { timeoutMs })
+    ? await run(process.execPath, [file, '--version'], { timeoutMs, ...(env === undefined ? {} : { env }) })
+    : await run(file, ['--version'], { timeoutMs, ...(env === undefined ? {} : { env }) })
   return parseVersion(result.stdout) ?? parseVersion(result.stderr)
 }
 
-/** The version a CLI entry belongs to, read from the nearest package.json. */
+/**
+ * The file a package-manager shim actually runs, or null when `entry` is a real
+ * entry rather than a shim. Read for the same reason the generated launcher reads
+ * it: the shim sits inside the plugin's own package.
+ */
+function shimTargetOf(entry: string): string | null {
+  try {
+    if (!fs.statSync(entry).isFile())
+      return null
+    const target = SHIM_TARGET.exec(fs.readFileSync(entry, 'utf8'))?.[1]?.trim()
+    return target !== undefined && target.length > 0 ? target : null
+  }
+  catch {
+    return null
+  }
+}
+
+/** The version a CLI entry belongs to, following a shim to what it really runs. */
 export function versionOfEntry(entry: string): string | null {
-  let dir = path.dirname(entry)
+  let target = entry
+  const shimTarget = shimTargetOf(entry)
+  if (shimTarget !== null) target = shimTarget
+  let dir = path.dirname(target)
   for (let hop = 0; hop < 4; hop += 1) {
     const manifest = readJson<{ version?: string }>(path.join(dir, 'package.json'))
     if (typeof manifest?.version === 'string')

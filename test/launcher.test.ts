@@ -49,6 +49,18 @@ interface Harness {
   entry: string
 }
 
+/**
+ * A PATH holding node and nothing else.
+ *
+ * The launcher's last resort is a `home-hosted` on PATH, which is correct for a
+ * boot entry but makes these tests depend on whatever this machine has installed
+ * — npm puts `node_modules/.bin` on PATH for a lifecycle script, and a real
+ * home-hosted there wins the version sort. A test describes the PATH instead.
+ */
+function isolatedPath(): Record<string, string> {
+  return { PATH: path.dirname(process.execPath) }
+}
+
 function harness(version = '0.6.1'): Harness {
   scratch = tempDir()
   const dshHome = path.join(scratch.path, 'dsh')
@@ -79,7 +91,7 @@ describe('boot launcher', () => {
   it('runs the pinned copy and forwards its arguments', async () => {
     const h = harness()
     writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
-    const result = await run(launcherPath(h.state), ['up', '--foreground', '--home', '/tmp/example'])
+    const result = await run(launcherPath(h.state), ['up', '--foreground', '--home', '/tmp/example'], { env: isolatedPath() })
     expect(result.code).toBe(0)
     expect(result.stdout).toContain('fake-home-hosted 0.6.1 up --foreground --home /tmp/example')
   })
@@ -87,7 +99,7 @@ describe('boot launcher', () => {
   it('survives a profile reinstall that moves the pinned path', async () => {
     const h = harness()
     writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
-    expect(await preflightLauncher(h.state)).toBe('0.6.1')
+    expect(await preflightLauncher(h.state, 10_000, isolatedPath())).toBe('0.6.1')
 
     // pnpm moves the directory (new peer hash) and the recorded path goes stale.
     const store = path.join(h.profile, 'node_modules', '.pnpm')
@@ -95,7 +107,51 @@ describe('boot launcher', () => {
     fs.renameSync(path.join(store, versionDir!), path.join(store, 'home-hosted@0.6.1_zod@4.7.0'))
     expect(fs.existsSync(h.entry)).toBe(false)
 
-    expect(await preflightLauncher(h.state)).toBe('0.6.1')
+    expect(await preflightLauncher(h.state, 10_000, isolatedPath())).toBe('0.6.1')
+  })
+
+  it('reads the version of the package a shim runs, not the one it sits in', () => {
+    // A pnpm shim lives in the plugin's own node_modules/.bin, so walking up from
+    // the shim read this plugin's package.json and reported the plugin's version
+    // for home-hosted — which let PATH outrank the pinned copy in a version sort.
+    const h = harness()
+    const binDir = path.join(h.profile, 'node_modules', '.bin')
+    fs.mkdirSync(binDir, { recursive: true })
+    const shim = path.join(binDir, 'home-hosted')
+    fs.writeFileSync(shim, `#!/bin/sh\n# cmd-shim-target=${h.entry}\nexec node "$0" "$@"\n`, 'utf8')
+    // The plugin's own manifest sits directly above the shim, and is not the CLI's.
+    writeJsonFile(path.join(h.profile, 'node_modules', 'package.json'), { version: '9.9.9' })
+    expect(versionOfEntry(shim)).toBe('0.6.1')
+  })
+
+  it('never lets a PATH install outrank the recorded pinned copy', async () => {
+    const h = harness('0.6.1')
+    // A newer unrelated install on PATH, which is not the copy this plugin pinned.
+    const newer = fakePinned(path.join(path.dirname(h.dshHome), 'global'), '0.7.1')
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
+    const env = { PATH: `${path.dirname(newer)}${path.delimiter}${path.dirname(process.execPath)}` }
+    // The pin is an instruction: a higher version elsewhere is not an invitation.
+    expect(await preflightLauncher(h.state, 10_000, env)).toBe('0.6.1')
+  })
+
+  it('falls back to a PATH install when the pinned copy is gone', async () => {
+    const h = harness('0.6.1')
+    const globalDir = path.join(path.dirname(h.dshHome), 'global')
+    const globalEntry = fakePinned(globalDir, '0.7.1')
+    // A global install is reached through a .bin shim, as a real one is.
+    const binDir = path.join(globalDir, 'node_modules', '.bin')
+    fs.mkdirSync(binDir, { recursive: true })
+    const globalShim = path.join(binDir, 'home-hosted')
+    fs.writeFileSync(globalShim, `#!/bin/sh\n# cmd-shim-target=${globalEntry}\nexec node ${JSON.stringify(globalEntry)} "$@"\n`, 'utf8')
+    // A real shim is executable; without this the launcher's PATH fallback finds
+    // it and then cannot run it.
+    fs.chmodSync(globalShim, 0o755)
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
+    // The recorded path, the plugin root and every profile root are now empty.
+    fs.rmSync(h.entry, { force: true })
+    fs.rmSync(path.join(h.dshHome, 'profiles'), { recursive: true, force: true })
+    const env = { PATH: `${binDir}${path.delimiter}${path.dirname(process.execPath)}` }
+    expect(await preflightLauncher(h.state, 10_000, env)).toBe('0.7.1')
   })
 
   it('reports a clear failure when nothing is installed anywhere', async () => {
@@ -103,7 +159,7 @@ describe('boot launcher', () => {
     writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: null, minVersion: '0.4.1' })
     fs.rmSync(path.join(h.dshHome, 'profiles'), { recursive: true, force: true })
     // PATH keeps node (the shebang needs it) but holds no home-hosted install.
-    const result = await run(launcherPath(h.state), ['--version'], { env: { PATH: path.dirname(process.execPath) } })
+    const result = await run(launcherPath(h.state), ['--version'], { env: isolatedPath() })
     expect(result.code).toBe(1)
     expect(result.stderr).toContain('no home-hosted CLI found')
   })

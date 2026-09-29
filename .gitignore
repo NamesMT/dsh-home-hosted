@@ -5,3 +5,7 @@ coverage/
 lib/types/
 *.tgz
 assets/frames/
+
+# Scratch dirs used while testing on a host where /tmp is not writable.
+/.tmp-mt/
+/.ghcache/
