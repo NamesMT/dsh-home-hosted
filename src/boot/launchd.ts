@@ -21,6 +21,7 @@ import {
 } from './escape.js'
 import {
   bootState,
+  bootUserName,
   errorMessage,
   failed,
   inspectOwned,
@@ -28,7 +29,6 @@ import {
   removeOwned,
   tempDir,
   uidOf,
-  userNameOf,
   writeOwned,
 } from './common.js'
 
@@ -246,7 +246,12 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         validate(spec)
         const file = pathOf(spec)
         const label = launchdLabel(spec)
-        const content = launchdPlist(spec, mode === 'daemon' ? { userName: userNameOf(ctx) } : {})
+        // A LaunchDaemon is the same hazard as a system unit: `UserName` missing
+        // means launchd runs it as root, and `$USER` is root whenever the panel
+        // was started from a root shell. So the account comes from the login that
+        // elevated (or this process's own euid), never from the environment, and
+        // root is refused rather than written as if it were a choice.
+        const content = launchdPlist(spec, mode === 'daemon' ? { userName: bootUserName(ctx) } : {})
         const own = inspectOwned(file, spec.marker)
         if (own.exists && !own.owned)
           return failed(own.reason ?? 'foreign file')

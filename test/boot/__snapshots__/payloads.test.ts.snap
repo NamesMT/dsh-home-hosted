@@ -59,6 +59,7 @@ User=tester
 Type=exec
 ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/tester/.home-hosted
 WorkingDirectory=/home/tester
+KillMode=process
 Restart=always
 RestartSec=5
 Environment=PATH=/usr/bin:/bin
@@ -80,6 +81,7 @@ After=network-online.target
 Type=exec
 ExecStart=/usr/bin/node /opt/home-hosted/dist/cli.js up --foreground --home /home/tester/.home-hosted
 WorkingDirectory=/home/tester
+KillMode=process
 Restart=always
 RestartSec=5
 Environment=PATH=/usr/bin:/bin

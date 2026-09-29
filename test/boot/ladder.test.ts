@@ -158,6 +158,9 @@ describe('ladder selection', () => {
       platform: 'darwin',
       home,
       env: { USER: 'tester', UID: '1000' },
+      // A non-root process with no passwordless sudo: the state the LaunchAgent
+      // recommendation exists for, and not a fact about the machine running this.
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: () => false,

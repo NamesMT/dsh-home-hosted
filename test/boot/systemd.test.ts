@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createSystemdSystemProvider, createSystemdUserProvider, systemdUserUnit } from '../../src/boot/systemd.js'
+import { createSystemdSystemProvider, createSystemdUserProvider, systemdSystemUnit, systemdUserUnit } from '../../src/boot/systemd.js'
 import { cleanup, ctxFor, fakeRun, spec, tempHome } from './harness.js'
 
 const UNIT = 'home-hosted.service'
@@ -305,8 +305,13 @@ describe('systemd --user', () => {
 
 describe('systemd system', () => {
   let home: string
+  // A unit name no real install uses: a machine that already has this plugin's own
+  // system unit must not make these tests read — or refuse to touch — somebody's
+  // live entry. That host dependency is exactly what made them fail here.
+  const unitName = 'home-hosted-plugin-test'
+  const unitFile = `/etc/systemd/system/${unitName}.service`
   beforeEach(() => { home = tempHome() })
-  afterEach(() => cleanup(home))
+  afterEach(() => { cleanup(home) })
 
   it('is unavailable without systemd PID 1', async () => {
     const runner = fakeRun()
@@ -329,16 +334,16 @@ describe('systemd system', () => {
       sudo: async () => false,
       env: { USER: 'tester', TMPDIR: home },
     }))
-    const result = await provider.install(spec())
+    const result = await provider.install(spec({ unitName }))
     expect(result.ok).toBe(false)
     expect(result.needsPrivilege).toBe(true)
     expect(result.commands).toEqual([
-      `sudo install -m 0644 ${path.join(home, 'home-hosted-home-hosted.service')} /etc/systemd/system/home-hosted.service`,
+      `sudo install -m 0644 ${path.join(home, `home-hosted-${unitName}.service`)} ${unitFile}`,
       `sudo systemctl daemon-reload`,
-      `sudo systemctl enable --now home-hosted.service`,
+      `sudo systemctl enable --now ${unitName}.service`,
     ])
     expect(runner.calls.some(call => call.command === 'sudo')).toBe(false)
-    expect(fs.existsSync(path.join(home, 'home-hosted-home-hosted.service'))).toBe(true)
+    expect(fs.existsSync(path.join(home, `home-hosted-${unitName}.service`))).toBe(true)
   })
 
   it('installs through `sudo -n` and never through a shell', async () => {
@@ -361,12 +366,90 @@ describe('systemd system', () => {
       sudo: async () => true,
       env: { USER: 'tester', TMPDIR: home },
     }))
-    const result = await provider.install(spec())
+    const result = await provider.install(spec({ unitName }))
     expect(result.ok).toBe(true)
     expect(result.needsPrivilege).toBe(true)
-    expect(runner.lines()).toContain(`sudo -n install -m 0644 ${path.join(home, 'home-hosted-home-hosted.service')} /etc/systemd/system/home-hosted.service`)
+    expect(runner.lines()).toContain(`sudo -n install -m 0644 ${path.join(home, `home-hosted-${unitName}.service`)} ${unitFile}`)
     expect(runner.lines()).toContain('sudo -n systemctl daemon-reload')
-    expect(runner.lines()).toContain('sudo -n systemctl enable --now home-hosted.service')
+    expect(runner.lines()).toContain(`sudo -n systemctl enable --now ${unitName}.service`)
+    // Never `User=root`: the account is whoever the login named, and a root answer
+    // is dropped rather than written.
+    const staged = path.join(home, `home-hosted-${unitName}.service`)
+    if (fs.existsSync(staged))
+      expect(fs.readFileSync(staged, 'utf8')).not.toContain('User=root')
+  })
+
+  it('writes User= for the login that elevated, never for a root environment', async () => {
+    // The staged unit is a temp file the install deletes once copied, so read it
+    // out of the very argv the faked `sudo install` was handed.
+    let staged = ''
+    const runner = fakeRun((command, args) => {
+      if (command === 'sudo' && args.includes('install'))
+        staged = fs.readFileSync(args[args.length - 2] ?? '', 'utf8')
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 4 }
+      if (command === 'systemctl')
+        return { code: 0, stdout: 'UnitFileState=enabled\nActiveState=active\n' }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=no\n' }
+      return { code: 0, stdout: '' }
+    })
+    const provider = createSystemdSystemProvider(ctxFor({
+      home,
+      run: runner.run,
+      exists: file => file === '/run/systemd/system',
+      sudo: async () => true,
+      // Exactly what `sudo systemctl restart` hands the unit back later: root's own
+      // environment. SUDO_UID is the only place the invoking login survives.
+      env: { USER: 'root', HOME: '/root', LOGNAME: 'root', SUDO_UID: '1000', TMPDIR: home },
+      uid: 0,
+    }))
+    await provider.install(spec({ unitName }))
+    expect(staged).not.toBe('')
+    const content = staged
+    expect(content).toMatch(/^User=\S/m)
+    expect(content).not.toContain('User=root')
+    expect(content).toContain('KillMode=process')
+    // And the entry's own environment is that account's home, not the /root the
+    // root helper would otherwise pass down on restart.
+    expect(content).not.toContain('Environment=HOME=/root')
+  })
+
+  it('names the account it would run as in the detect reason', async () => {
+    const runner = fakeRun()
+    const provider = createSystemdSystemProvider(ctxFor({
+      home,
+      run: runner.run,
+      exists: file => file === '/run/systemd/system',
+      isRoot: true,
+      env: { USER: 'root', HOME: '/root', LOGNAME: 'root', SUDO_UID: '1000' },
+      uid: 0,
+    }))
+    const candidate = await provider.detect()
+    expect(candidate.available).toBe(true)
+    expect(candidate.reason).toMatch(/the entry runs the panel as \S+/)
+    expect(candidate.reason).not.toMatch(/as root/)
+  })
+
+  it('says an unresolvable account means the panel runs as root', async () => {
+    const warnings: string[] = []
+    const runner = fakeRun()
+    const provider = createSystemdSystemProvider(ctxFor({
+      home,
+      run: runner.run,
+      exists: file => file === '/run/systemd/system',
+      // Root with no login behind it: the one honest root answer. It must be said
+      // out loud, and the unit must not be dressed up with `User=root`.
+      isRoot: true,
+      env: { USER: 'root', HOME: '/root', TMPDIR: home },
+      uid: 0,
+      warn: (line: string) => warnings.push(line),
+    }))
+    const candidate = await provider.detect()
+    expect(candidate.reason).toMatch(/run the panel as root/)
+    warnings.length = 0
+    systemdSystemUnit(spec({ unitName }), 'root')
+    expect(warnings).toEqual([])
   })
 
   it('reports not-installed when systemd does not know the unit', async () => {
@@ -376,9 +459,9 @@ describe('systemd system', () => {
       return { code: 0, stdout: '' }
     })
     const provider = createSystemdSystemProvider(ctxFor({ home, run: runner.run, sudo: async () => false }))
-    const status = await provider.status(spec())
+    const status = await provider.status(spec({ unitName }))
     expect(status.state).toBe('not-installed')
-    expect(status.unitPath).toBe('/etc/systemd/system/home-hosted.service')
+    expect(status.unitPath).toBe(unitFile)
     expect(status.commands).toEqual([])
   })
 
@@ -389,7 +472,7 @@ describe('systemd system', () => {
       return { code: 0, stdout: '' }
     })
     const provider = createSystemdSystemProvider(ctxFor({ home, run: runner.run, sudo: async () => false }))
-    const result = await provider.uninstall(spec())
+    const result = await provider.uninstall(spec({ unitName }))
     expect(result.ok).toBe(true)
     expect(result.changed).toBe(false)
     expect(result.detail).toMatch(/nothing to remove/)

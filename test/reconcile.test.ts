@@ -49,7 +49,7 @@ interface Harness {
  * written when `unitFile: true`, so a test can describe "reported installed, but
  * nothing on disk".
  */
-function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean } = {}): Harness {
+function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean, env?: Record<string, string | undefined>, uid?: number | null } = {}): Harness {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -89,6 +89,9 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     defaultEntryId: 'dsh',
     settings,
     createLadder: () => ladder,
+    // Pinned so account resolution never depends on who runs the suite.
+    env: options.env ?? {},
+    uid: options.uid === undefined ? null : options.uid,
   })
 
   return { service, installs, unitPath, state, fakeCli, specs, settings }
@@ -146,6 +149,47 @@ describe('boot entry target', () => {
     // node_modules path cannot break boot.
     expect(spec!.args).not.toContain(fakeCli)
     expect(spec!.args).toEqual(expect.arrayContaining(['up', '--foreground']))
+  })
+})
+
+describe('the account an entry runs as', () => {
+  /** The home of the first *login* account in this machine's user database. */
+  function realHome(): string {
+    const row = fs.readFileSync('/etc/passwd', 'utf8')
+      .split('\n')
+      .map(line => line.split(':'))
+      // The lowest login uid: `nobody` (65534) also owns a home, but `/` is not
+      // the account the elevating login named.
+      .find((fields) => {
+        const uid = Number.parseInt(fields[2] ?? '', 10)
+        return uid >= 1000 && uid < 60000 && (fields[0] ?? '').length > 0
+      })
+    if (row === undefined)
+      throw new Error('this machine has no login account to resolve')
+    return row[5] ?? ''
+  }
+
+  it('takes HOME from the login that elevated, not from a root environment', async () => {
+    // The bug's fingerprint: `sudo` leaves USER=root and HOME=/root behind, so the
+    // entry it wrote told the panel its home was root's.
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'root', HOME: '/root', SUDO_UID: '1000' }, uid: 0 },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe(realHome())
+    expect(specs[0]?.env.HOME).not.toBe('/root')
+    // `User=` makes systemd set $USER itself, so the spec does not need to guess it.
+    expect(specs[0]?.env.USER).toBeUndefined()
+  })
+
+  it('keeps the environment it was given when nothing elevated it', async () => {
+    const { service, specs } = harness(
+      unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
+      { env: { USER: 'tester', HOME: '/home/tester', UID: '1000' }, uid: null },
+    )
+    await service.installBoot()
+    expect(specs[0]?.env.HOME).toBe('/home/tester')
   })
 })
 

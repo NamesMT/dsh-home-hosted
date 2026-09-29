@@ -54,7 +54,10 @@ export function bootProviders(
 
 export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
   const platform = options.platform ?? process.platform
-  const isRoot = process.getuid?.() === 0
+  // `uid` is this process's own uid, so pinning it in a test also pins whether the
+  // process counts as root — otherwise the answer depends on who ran the suite.
+  const uid = options.uid === undefined ? (process.getuid?.() ?? null) : options.uid
+  const isRoot = uid === 0
   const ctx: BootProviderContext = {
     platform,
     home: options.home ?? os.homedir(),
@@ -62,6 +65,9 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     run: options.run ?? execRun,
     sudo: options.sudo ?? (async () => (isRoot ? true : await sudoAvailable())),
     isRoot,
+    uid: options.uid,
+    ownerPaths: options.ownerPaths,
+    warn: options.warn,
     exists: options.exists,
   }
   const providers = bootProviders(ctx, platform)

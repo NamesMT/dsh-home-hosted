@@ -16,6 +16,8 @@ import { FOREIGN_MECHANISMS, isOnPortConflict, isWorkspaceId, ON_PORT_CONFLICT_P
 import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
+import { accountOf } from './boot/index.js'
+import type { AccountInput } from './boot/index.js'
 import { findEntry, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
 import type { RawConfig } from './home-hosted/config-file.js'
@@ -119,6 +121,10 @@ export interface HomeHostedServiceOptions {
   projectDir?: string
   /** Test seam: resolve the running harness instead of reading this process. */
   resolveDsh?: (options: { dshHome: string, stateDir: string, projectDir?: string | null }) => Promise<DshLaunch | null>
+  /** Test seam: the environment account resolution reads; defaults to this process's. */
+  env?: Readonly<Record<string, string | undefined>>
+  /** Test seam: this process's uid; defaults to `process.getuid()`. */
+  uid?: number | null
 }
 
 interface CachedClient {
@@ -1069,7 +1075,25 @@ export class HomeHostedService extends Service {
   private ladder(): BootLadderLike {
     if (this.options.createLadder !== undefined)
       return this.options.createLadder()
-    return createBootLadder({ env: process.env })
+    return createBootLadder({
+      env: process.env,
+      // The ladder resolves the account once for every provider it builds, so a
+      // root-launched install and a per-provider call cannot disagree about it.
+      ownerPaths: [this.options.home, this.options.stateDir],
+    })
+  }
+
+  /**
+   * What account resolution reads. The state paths name the person a panel
+   * belongs to, so a root process launched at boot (a system unit that names no
+   * `User=`) can still be told whose panel it is running.
+   */
+  private accountFacts(): AccountInput {
+    return {
+      env: (this.options.env ?? process.env) as Record<string, string | undefined>,
+      uid: this.options.uid,
+      ownerPaths: [this.options.home, this.options.stateDir],
+    }
   }
 
   private async bootSpec(): Promise<BootSpec | null> {
@@ -1078,6 +1102,11 @@ export class HomeHostedService extends Service {
     if (launch === null)
       return null
     const runtime = this.runtime()
+    // The account a system entry hands the panel to, resolved from the login that
+    // elevated (or this process's own), never from `$USER`: under `sudo` the
+    // environment says *root*, which is how a system unit came to run the panel as
+    // root. A root answer travels as `root: true` so providers refuse to write it.
+    const account = accountOf(this.accountFacts())
     const spec = buildHomeHostedBootSpec(
       {
         home: this.options.home,
@@ -1085,7 +1114,14 @@ export class HomeHostedService extends Service {
         version: runtime?.version ?? null,
       },
       launch,
-      { stateDir: this.options.stateDir, unitName: bootUnitName(this.options.stateDir) },
+      {
+        stateDir: this.options.stateDir,
+        unitName: bootUnitName(this.options.stateDir),
+        // Only when the entry runs as somebody other than this process: a spec that
+        // merely repeats this environment stays byte-identical, so reconcile does
+        // not rewrite the entry on every start.
+        accountHome: account === null ? null : account.home,
+      },
     )
 
     // The entry runs the stable launcher, not the pinned node_modules path: that
@@ -1527,6 +1563,12 @@ export class HomeHostedService extends Service {
       || status.mechanism === 'launchd-daemon'
     if (fileBacked && (status.unitPath === null || !fs.existsSync(status.unitPath)))
       return
+    // `enabled-failing` is exactly what a system unit that runs the panel as root
+    // looks like once a server refuses to run as root, so this repair now rewrites
+    // it with the account resolved above. A *working* entry is deliberately not
+    // touched: re-installing stops the panel and hands it to the entry, which is a
+    // person's decision, not a startup side effect — and the status detail names
+    // the wrong account so the page's install button is an informed choice.
     try {
       await this.installBoot()
     }

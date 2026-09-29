@@ -66,6 +66,17 @@ export interface HomeHostedFacts {
   home: string
   projectDir?: string | null
   version?: string | null
+  /**
+   * The *account's* home, when the entry runs as somebody other than this process.
+   *
+   * `HOME` is already written into every entry's environment, and that is the
+   * problem: installed through `sudo`, it is root's home, so the panel the entry
+   * starts resolves `~` (and anything HOME-relative) into `/root` and dies with a
+   * permission error that never mentions its own user. Writing the account's home
+   * instead is the whole correction — no other variable is wrong, because `User=`
+   * makes the service manager set `$USER`/`$LOGNAME` itself.
+   */
+  accountHome?: string | null
 }
 
 /** A deterministic environment for a boot-time entry, with absolute values. */
@@ -92,6 +103,12 @@ export function homeHostedEnv(facts: HomeHostedFacts, launch: CliLaunch, extra: 
     HHOSTED_HOME: facts.home,
     ...extra,
   }
+  // Only when it is genuinely a *different* home: a spec that merely repeats this
+  // process's own environment stays byte-identical, so an existing entry is not
+  // rewritten on every plugin start.
+  const accountHome = facts.accountHome?.trim()
+  if (accountHome !== undefined && accountHome.length > 0 && accountHome !== env.HOME)
+    env.HOME = accountHome
   if (facts.projectDir)
     env.HHOSTED_PROJECT = facts.projectDir
   return env
@@ -102,6 +119,8 @@ export interface BootSpecOptions {
   /** The artifact name to write; defaults to the one this state root owns. */
   unitName?: string
   marker?: string
+  /** The account's home, so an entry launched by root does not inherit `/root`. */
+  accountHome?: string | null
 }
 
 export function buildHomeHostedBootSpec(
@@ -119,7 +138,7 @@ export function buildHomeHostedBootSpec(
     command: launch.program,
     args,
     cwd: facts.projectDir ?? facts.home,
-    env: homeHostedEnv(facts, launch),
+    env: homeHostedEnv({ ...facts, accountHome: options.accountHome ?? facts.accountHome }, launch),
     marker: options.marker ?? 'managed by dsh-home-hosted',
     // One artifact per state root, so two plugin instances cannot overwrite or
     // delete each other's entry. The machine-default install keeps the old name.

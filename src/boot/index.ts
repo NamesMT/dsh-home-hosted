@@ -4,6 +4,7 @@
  * remove an OS-level entry — it never runs at boot itself.
  */
 export type {
+  BootAccount,
   BootActionResult,
   BootLadder,
   BootLadderOptions,
@@ -16,6 +17,8 @@ export type {
   BootSpec,
 } from './types.js'
 
+export { accountOf } from './common.js'
+export type { AccountInput } from './common.js'
 export { bootProviders, createBootLadder } from './ladder.js'
 export { launchdLabel, launchdPlist } from './launchd.js'
 export { systemdSystemUnit, systemdUserUnit } from './systemd.js'

@@ -90,6 +90,9 @@ export function ctxFor(overrides: Partial<BootProviderContext> & { home: string,
     env: { USER: 'tester', UID: '1000' },
     sudo: async () => false,
     isRoot: false,
+    // Pinned to null so account resolution reads the injected `env`, never the
+    // uid of whatever machine happens to run the suite.
+    uid: null,
     ...overrides,
   }
 }

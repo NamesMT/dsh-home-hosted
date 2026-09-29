@@ -292,6 +292,50 @@ The settings stamp moved to 3 for `instancesNotice`, while the tool-name
 migration stays bound to the release that merged the tools: a stamp bump must
 never re-read a current file's explicit two-tool allowlist as "nobody chose".
 
+## Boot entries run the panel as a person
+
+Two mechanisms drop privilege by name — a systemd `User=` and a launchd
+`UserName` — and both used to take that name from `$USER`. That is right in the
+common case and wrong in the one case it exists for: `sudo` and `pkexec` rewrite
+`USER`, `LOGNAME` and `HOME` to the *target* account, so a panel started from a
+root shell or a root unit read `USER=root`, and a mechanism that already runs as
+root got an entry that either repeated root or (with the name dropped) silently
+kept it. `os.userInfo()` is no help: it reports the euid.
+
+So the account comes from whoever this process is. An elevating tool's
+`SUDO_UID`/`PKEXEC_UID` is an instruction and wins; otherwise a non-root
+`$LOGNAME` names this session; otherwise the `/etc/passwd` row for `$UID` or the
+euid; otherwise the owner of the state root or the panel root — which names the
+person a root-launched panel belongs to; and only then, honestly, root. `root`
+is carried as a flag, and **no entry ever writes `User=root`**: omitting the
+directive *is* running as root, so naming it only dresses up the silent default
+the fix has to surface. A root answer warns loudly and omits it.
+
+The same environment is why `HOME` is written into every spec: run under `sudo`,
+`HOME` is root's, and an entry the root helper restarts (a `systemctl restart`
+keeps its caller's environment) would resolve `~` into `/root` and die with a
+permission error that never mentions the panel's own user. The spec carries the
+*account's* home instead — and only when it differs, so an unchanged install
+stays byte-identical and startup `reconcile()` does not rewrite the entry.
+
+An installed entry that already runs as the wrong account is reported by
+`status()`, and the `enabled-failing` repair heals it by installing again. A
+*working* entry is deliberately left alone: re-installing stops the panel and
+hands it to the entry, which is a person's decision and not a startup side
+effect.
+
+## KillMode=process: a restart must not take the entries with it
+
+`persistent: true` puts an entry under a nanny the panel spawns, and the nanny is
+what makes it outlive the panel: it owns the child's pipes, so a panel stop,
+restart or kill cannot break them. The nanny is spawned `detached`, which gives it
+its own session — but *not* its own cgroup, and systemd's default
+`KillMode=control-group` signals every process in the unit's cgroup. So a
+`systemctl stop`/`restart` — which is what this plugin's own activation, and any
+`Restart=always`, runs — takes the nanny down with the panel, quietly falsifying
+the guarantee the design depends on. `KillMode=process` signals the panel alone.
+It belongs on both units.
+
 ## macOS: agent or daemon
 
 A `LaunchAgent` starts at login; starting before login means a `LaunchDaemon` in
@@ -299,8 +343,9 @@ A `LaunchAgent` starts at login; starting before login means a `LaunchDaemon` in
 install. The daemon is therefore offered even when this process cannot elevate:
 install stages the plist and returns the three commands to run. The daemon plist
 names the invoking user in `UserName`, Apple's sanctioned way to avoid running
-the panel as root, and the recommendation still prefers a mechanism this process
-can install on its own so "Automatic" stays a single click.
+the panel as root — resolved by the rule above, never from `$USER`. The
+recommendation still prefers a mechanism this process can install on its own so
+"Automatic" stays a single click.
 
 ## macOS: reachable launchd is not a requirement
 
@@ -490,6 +535,13 @@ That refusal is shown with the status it answered, and the page retires it as so
 as the status moves: a person runs the commands and presses Re-check, and the note
 must not outlive the state it described. The persisted last attempt follows the
 same rule, so a failed install is not re-shown once an entry exists.
+
+Switching those entries to a `User=` later is not just a unit edit. The moment a
+panel runs as root, everything it writes — `<home>/.hh`, its workspaces, logs and
+`snapshots.json` — is root-owned, so the unprivileged account the unit now names
+cannot write its own state and the panel fails to boot with a permission error
+that never mentions ownership. Moving an install from root to a user therefore
+needs `chown -R <user> <home>` (and the plugin state dir) first.
 
 ## Tests
 

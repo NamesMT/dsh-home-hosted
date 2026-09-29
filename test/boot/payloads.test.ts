@@ -31,6 +31,24 @@ describe('systemd payloads', () => {
     expect(systemdSystemUnit(spec(), null)).not.toContain('User=')
   })
 
+  it('never writes User=root, however the caller got there', () => {
+    // The bug: a panel launched from a root shell resolved $USER to `root`, and an
+    // entry with User=root looks deliberate while it is only the default of a root
+    // process. The directive is dropped, so nothing about the unit claims a choice.
+    expect(systemdSystemUnit(spec(), 'root')).not.toContain('User=')
+    expect(systemdUserUnit(spec())).not.toContain('User=')
+  })
+
+  it('keeps entries alive across a panel restart with KillMode=process', () => {
+    // This plugin's own non-persistent `dsh` row is the panel's child and shares
+    // its cgroup; under the default control-group kill, a `systemctl restart` takes
+    // that row down with the panel, which is the guarantee `persistent` promises.
+    for (const unit of [systemdUserUnit(spec()), systemdSystemUnit(spec(), 'tester')]) {
+      expect(unit).toContain('KillMode=process')
+      expect(unit).not.toContain('KillMode=control-group')
+    }
+  })
+
   it('quotes values that would otherwise change the unit', () => {
     const unit = systemdUserUnit(spec({
       args: ['/opt/cli.js', '--home', '/home/my user', '--tag', '100%'],
