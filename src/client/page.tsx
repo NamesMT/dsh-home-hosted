@@ -196,15 +196,15 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
         : <ErrorNote error={{ code: 'panel', message: data.lastError }} title={t('errorTitle')} />}
       <ErrorNote error={error} title={t('errorTitle')} />
       <ErrorNote error={actionError} title={t('errorTitle')} />
+      <PanelSection {...sectionProps} />
+      <BootSection {...sectionProps} />
+      <EntriesSection {...sectionProps} />
+      <AgentsSection {...sectionProps} />
       <WorkspacesSection
         {...sectionProps}
         viewing={viewedWorkspace}
         onView={setViewing}
       />
-      <PanelSection {...sectionProps} />
-      <BootSection {...sectionProps} />
-      <EntriesSection {...sectionProps} />
-      <AgentsSection {...sectionProps} />
       <ServersSection
         {...sectionProps}
         workspace={viewedWorkspace}
