@@ -8,6 +8,11 @@
  */
 import type { ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
 
+/** What the panel's `/api/servers*` actually answers with: it names the workspace `workspaceId`. */
+interface ApiServerView extends Omit<ServerEntryView, 'workspace'> {
+  workspaceId?: string
+}
+
 export class PanelError extends Error {
   constructor(
     message: string,
@@ -47,6 +52,15 @@ export class PanelClient {
    * workspace, so `?workspace=` is what selects which one is meant; omitting it
    * on a panel that predates workspaces changes nothing.
    */
+  /**
+   * The panel names a server's workspace `workspaceId`; the plugin's view calls it
+   * `workspace`. One mapping, so a caller never has to know both spellings.
+   */
+  private view(raw: ApiServerView, workspace?: string | null): ServerEntryView {
+    const { workspaceId, ...rest } = raw
+    return { ...rest, workspace: workspaceId ?? workspace ?? this.workspace ?? '' }
+  }
+
   private ws(path: string, workspace?: string | null): string {
     const id = workspace ?? this.workspace
     if (id === null || id === undefined || id.length === 0)
@@ -94,23 +108,23 @@ export class PanelClient {
   }
 
   async listServers(workspace?: string): Promise<ServerEntryView[]> {
-    const answer = await this.request<{ servers: ServerEntryView[] }>('GET', this.ws('/api/servers', workspace))
-    return answer.servers
+    const answer = await this.request<{ servers: ApiServerView[] }>('GET', this.ws('/api/servers', workspace))
+    return answer.servers.map(server => this.view(server, workspace))
   }
 
   async getServer(id: string, workspace?: string): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ServerEntryView }>('GET', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace))
-    return answer.server
+    const answer = await this.request<{ server: ApiServerView }>('GET', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace))
+    return this.view(answer.server, workspace)
   }
 
   async createServer(entry: ServerEntry, workspace?: string): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ServerEntryView }>('POST', this.ws('/api/servers', workspace), entry)
-    return answer.server
+    const answer = await this.request<{ server: ApiServerView }>('POST', this.ws('/api/servers', workspace), entry)
+    return this.view(answer.server, workspace)
   }
 
   async updateServer(id: string, patch: ServerEntryPatch, workspace?: string): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ServerEntryView }>('PATCH', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace), patch)
-    return answer.server
+    const answer = await this.request<{ server: ApiServerView }>('PATCH', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace), patch)
+    return this.view(answer.server, workspace)
   }
 
   async deleteServer(id: string, workspace?: string): Promise<void> {

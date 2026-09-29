@@ -86,6 +86,45 @@ describe('panel client', () => {
     const client = new PanelClient({ baseUrl: url, token: 'secret', timeoutMs: 2000 })
     await expect(client.listServers()).rejects.toMatchObject({ code: 'PANEL_BAD_RESPONSE', status: 200 })
   })
+
+  /**
+   * The panel names a server's workspace `workspaceId`; the plugin's view calls it
+   * `workspace`. A live panel is the only place that spelling shows up, so it is
+   * pinned against a raw payload rather than through the stub.
+   */
+  it('maps the panel\'s workspaceId onto the view and sends the workspace', async () => {
+    const seen: string[] = []
+    let withWorkspaceId = true
+    const server = http.createServer((request, response) => {
+      seen.push(request.url ?? '')
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({
+        servers: [{
+          id: 'worker',
+          ...(withWorkspaceId ? { workspaceId: 'alpha' } : {}),
+          status: 'running',
+          pid: 12,
+          url: null,
+          config: { id: 'worker', command: 'node' },
+        }],
+      }))
+    })
+    extra.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const client = new PanelClient({ baseUrl: url, token: 'secret', workspace: 'default' })
+    const servers = await client.listServers('alpha')
+
+    expect(servers[0]?.workspace).toBe('alpha')
+    expect(servers[0]?.status).toBe('running')
+    expect(seen[0]).toBe('/api/servers?workspace=alpha')
+
+    // A payload with no workspace at all falls back to the client's own.
+    withWorkspaceId = false
+    const fallback = new PanelClient({ baseUrl: url, token: 'secret', workspace: 'alpha' })
+    expect((await fallback.listServers())[0]?.workspace).toBe('alpha')
+  })
 })
 
 describe('token probes', () => {
