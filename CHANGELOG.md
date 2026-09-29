@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.5.3
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.2...v0.5.3)
+
+### 🩹 Fixes
+
+- **panel-client:** Move the Workspaces section above Servers ([aa98b4c](https://github.com/NamesMT/dsh-home-hosted/commit/aa98b4c))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.5.2
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.1...v0.5.2)
