@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.5.1
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.0...v0.5.1)
+
+### 🩹 Fixes
+
+- **panel-client:** Name the workspace the panel answer belongs to ([1e3c1c8](https://github.com/NamesMT/dsh-home-hosted/commit/1e3c1c8))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.5.0
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.4.5...v0.5.0)
