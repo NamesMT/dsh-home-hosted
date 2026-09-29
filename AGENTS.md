@@ -92,6 +92,11 @@ service manager, or restart the harness you are running in to "check" something.
 - The `unsupported` boot candidate is real (no OS entry can work here), not a bug to filter out.
 - The plugin cannot act at boot: it re-asserts entries while dsh runs, and startup `reconcile()`
   repairs an entry that exists — it never installs one.
+- A successful install hands the running panel to the new entry through a detached helper: prove the
+  start, stop the previous mechanism's panel (its own restart policy would revive it), start the entry
+  — *then* retire the other mechanisms, since retiring first deletes the entry currently keeping the
+  panel (and this plugin) alive. A mechanism that cannot start anything (`windows-run`,
+  `xdg-autostart`) reports `activate() → null`, and nothing is stopped.
 - An entry this process runs as is never deleted (the panel is told to stop it); "stop managing" pauses
   or restores it instead.
 - Only the `home-hosted` this plugin pins is supported (`^0.7.1`): the state layout is `.hh`, and

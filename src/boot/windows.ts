@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootSpec } from './types.js'
+import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
   assertArg,
@@ -261,6 +261,30 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         return failed(errorMessage(error))
       }
     },
+
+    /**
+     * The `Run` key is read by the shell at logon; there is no way to make it
+     * start something now. Reporting none is what sends the caller back to the
+     * CLI, which is the only honest way to bring the panel up here.
+     */
+    async activate(): Promise<null> {
+      return null
+    },
+
+    /** Deleting the value and its marker stops nothing that is already running. */
+    async retireCommands(spec: BootSpec): Promise<BootRetirement> {
+      const name = nameOf(spec)
+      return {
+        commands: [
+          ['reg.exe', 'delete', RUN_KEY, '/v', name, '/f'],
+          ['reg.exe', 'delete', MARKER_KEY, '/v', name, '/f'],
+        ],
+        display: [
+          windowsDisplayCommand('reg.exe', ['delete', RUN_KEY, '/v', name, '/f']),
+          windowsDisplayCommand('reg.exe', ['delete', MARKER_KEY, '/v', name, '/f']),
+        ],
+      }
+    },
   }
 }
 
@@ -498,6 +522,32 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
       }
       catch (error) {
         return failed(errorMessage(error))
+      }
+    },
+
+    /**
+     * `/Run` starts the registered task now, and the query proves the task is
+     * really registered before the panel is touched. A task does not restart a
+     * panel it does not own, so the caller stops the one it drove first.
+     */
+    async activate(spec: BootSpec): Promise<BootStart> {
+      const name = nameOf(spec)
+      return {
+        commands: [['schtasks.exe', '/Run', '/TN', name]],
+        requires: { commands: [['schtasks.exe', '/Query', '/TN', name]], files: [] },
+        display: [windowsDisplayCommand('schtasks.exe', ['/Run', '/TN', name])],
+      }
+    },
+
+    /** Unregistering a task stops nothing that is already running. */
+    async retireCommands(spec: BootSpec): Promise<BootRetirement> {
+      const name = nameOf(spec)
+      const cmdlet = await hasRegisterCmdlet()
+      return {
+        commands: [cmdlet
+          ? ['powershell.exe', '-NoProfile', '-Command', unregisterTaskScript(name)]
+          : ['schtasks.exe', '/Delete', '/TN', name, '/F']],
+        display: [windowsDisplayCommand('schtasks.exe', ['/Delete', '/TN', name, '/F'])],
       }
     },
   }

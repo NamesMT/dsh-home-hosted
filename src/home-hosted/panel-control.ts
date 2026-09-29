@@ -91,6 +91,147 @@ export function takeoverLogPath(stateDir: string): string {
   return path.join(launcherDir(stateDir), 'panel-takeover.log')
 }
 
+export function activationHelperPath(stateDir: string): string {
+  return path.join(launcherDir(stateDir), 'panel-activate.mjs')
+}
+
+export function activationLogPath(stateDir: string): string {
+  return path.join(launcherDir(stateDir), 'panel-activate.log')
+}
+
+/**
+ * The generated helper that hands the panel to an autostart mechanism.
+ *
+ * It has to outlive this process for the same reason the takeover helper does:
+ * stopping the panel also stops the servers it supervises, and the plugin is
+ * usually one of them, so nothing here may wait on the answer.
+ *
+ * The order is the whole design. `files` and `requires` are proven first, while
+ * the panel is still up: a start that could never work must never be attempted
+ * after the old panel is already gone. Then the panel is stopped — the CLI's
+ * `down`, which is the only stop that also reports whether the pid went — because
+ * a start over a *running* panel is refused by home-hosted itself (`run.json`
+ * names a live pid). Only then does the start command run, and only after it
+ * succeeded are the other mechanisms' entries removed: retiring them any earlier
+ * would delete the entry that is currently keeping the panel alive.
+ */
+export interface ActivationPlan {
+  /** Steps that start the panel under the mechanism, in order. */
+  commands: string[][]
+  /** Proof commands that must exit 0 before the panel is touched. */
+  requires: string[][]
+  /** Files that must exist before the panel is touched. */
+  files: string[]
+  /** The CLI's own stop, which also reports whether the panel went. */
+  stop: string[]
+  /**
+   * Steps that stop the panel the *previous* mechanism supervises, run before
+   * the CLI's `down`. Without them a switch loses the race: the old entry's own
+   * restart policy brings the panel back as soon as `down` returns, before the
+   * new entry starts one.
+   */
+  detach: string[][]
+  /** The pid of the panel being replaced; escalation waits on it. */
+  oldPid: number | null
+  /** Steps that remove the other mechanisms' entries, run after the start. */
+  retire: string[][]
+  /** The log a person reads when the panel does not come back. */
+  logPath: string
+}
+
+/** The generated helper's source; exported so a test can inspect it. */
+export function buildActivationSource(plan: ActivationPlan, marker = 'managed by dsh-home-hosted'): string {
+  return `#!/usr/bin/env node
+// ${marker} — starts the panel through its autostart entry; do not edit.
+import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
+
+const STEPS = ${JSON.stringify(plan.commands)}
+const REQUIRES = ${JSON.stringify(plan.requires)}
+const FILES = ${JSON.stringify(plan.files)}
+const STOP = ${JSON.stringify(plan.stop)}
+const DETACH = ${JSON.stringify(plan.detach)}
+const OLD_PID = ${JSON.stringify(plan.oldPid)}
+const RETIRE = ${JSON.stringify(plan.retire)}
+const LOG = ${JSON.stringify(plan.logPath)}
+
+function log(line) {
+  try { fs.appendFileSync(LOG, new Date().toISOString() + ' ' + line + '\\n') } catch {}
+}
+
+function fail(line) {
+  log(line)
+  process.exit(1)
+}
+
+function alive(pid) {
+  if (typeof pid !== 'number') return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+// Everything is proven while the panel is still answering: a start that could
+// never work must not be attempted after the old panel is already gone.
+for (const file of FILES) {
+  if (!fs.existsSync(file))
+    fail('refusing to stop the panel: ' + file + ' is not there')
+}
+for (const probe of REQUIRES) {
+  const result = spawnSync(probe[0], probe.slice(1), { stdio: 'ignore' })
+  if (result.error || result.status !== 0)
+    fail('refusing to stop the panel: ' + probe.join(' ') + ' did not confirm (' + String(result.status ?? result.error) + ')')
+}
+
+// A panel the previous mechanism supervises must be stopped through that
+// mechanism first: its restart policy would revive it the moment 'down' ends.
+for (const step of DETACH) {
+  log('detaching from the previous autostart entry: ' + step.join(' '))
+  const result = spawnSync(step[0], step.slice(1), { stdio: 'ignore' })
+  log('exited ' + String(result.status ?? result.error))
+}
+
+// The panel has to be gone before the entry runs: home-hosted refuses to start a
+// second panel while run.json names a live pid, so starting over a running one
+// leaves the entry failed while the old panel keeps the port.
+log('stopping the answering panel: ' + STOP.join(' '))
+const stopped = spawnSync(STOP[0], STOP.slice(1), { stdio: 'ignore', timeout: 90000 })
+log('down exited ' + String(stopped.status ?? stopped.error))
+
+if (alive(OLD_PID)) {
+  log('the panel is still alive; sending SIGTERM')
+  try { process.kill(OLD_PID, 'SIGTERM') } catch {}
+  for (let i = 0; i < 40 && alive(OLD_PID); i += 1)
+    await sleep(250)
+}
+
+if (alive(OLD_PID)) {
+  log('still alive; sending SIGKILL')
+  try { process.kill(OLD_PID, 'SIGKILL') } catch {}
+  for (let i = 0; i < 20 && alive(OLD_PID); i += 1)
+    await sleep(250)
+}
+
+for (const step of STEPS) {
+  log('running ' + step.join(' '))
+  const result = spawnSync(step[0], step.slice(1), { stdio: 'ignore' })
+  log('exited ' + String(result.status ?? result.error))
+  if (result.error || result.status !== 0)
+    fail(step.join(' ') + ' did not succeed, so the panel is down')
+}
+
+// Only now: the entry being removed may be the one that just started the panel,
+// and a failure to remove it is logged rather than fatal — the panel is up.
+for (const step of RETIRE) {
+  log('retiring ' + step.join(' '))
+  const result = spawnSync(step[0], step.slice(1), { stdio: 'ignore' })
+  log('exited ' + String(result.status ?? result.error))
+}
+
+log('the autostart entry was told to start the panel')
+`
+}
+
 /** The generated helper's source; exported so a test can inspect it. */
 export function buildTakeoverSource(deps: PanelControlDeps, oldPid: number | null, marker = 'managed by dsh-home-hosted'): string {
   const program = deps.launch?.program ?? process.execPath
@@ -153,6 +294,38 @@ export function writeTakeoverHelper(deps: PanelControlDeps, oldPid: number | nul
   writeFileAtomic(file, buildTakeoverSource(deps, oldPid), 0o755)
   fs.chmodSync(file, 0o755)
   return file
+}
+
+export function writeActivationHelper(stateDir: string, plan: ActivationPlan): string {
+  const file = activationHelperPath(stateDir)
+  writeFileAtomic(file, buildActivationSource(plan), 0o755)
+  fs.chmodSync(file, 0o755)
+  return file
+}
+
+/**
+ * Spawn the activation helper detached and return immediately: the panel's
+ * shutdown is about to stop this very process when the plugin runs under it, so
+ * waiting for the result would lose the answer.
+ *
+ * The helper is left to it: whatever it does to the panel, the entry it starts
+ * is the one that brings the plugin back.
+ */
+export function spawnActivation(stateDir: string, plan: ActivationPlan, spawnChild: SpawnDetached = spawnDetached): PanelControlResult {
+  const helper = writeActivationHelper(stateDir, plan)
+  let child: ChildProcess
+  try {
+    child = spawnChild(process.execPath, [helper])
+  }
+  catch (error) {
+    return { ok: false, detail: `could not start the autostart helper: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  child.on('error', () => {})
+  child.unref()
+  return {
+    ok: true,
+    detail: `starting the panel through its autostart entry now; this page disconnects and comes back when it answers`,
+  }
 }
 
 /** Spawn a helper process; injected so a test can drive the failure paths. */

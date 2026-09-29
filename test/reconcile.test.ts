@@ -77,6 +77,7 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
       return { ok: true, changed: true, detail: 'repaired', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status }
     },
     uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, status }),
+    activate: async () => null,
   }
 
   const settings = new SettingsStore(path.join(state, 'settings.json'), 'dsh')

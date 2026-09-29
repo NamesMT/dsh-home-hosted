@@ -35,12 +35,77 @@ export interface BootActionResult {
   needsPrivilege: boolean
 }
 
+/**
+ * How to start the panel through an installed mechanism.
+ *
+ * An install has to *prove* the entry starts the panel, and a probe is not it: a
+ * LaunchAgent whose label was never booted reads as installed while nothing
+ * runs. So each mechanism names its own start steps.
+ *
+ * Everything is argv, never a shell: these run later in a detached helper that
+ * has none of this process's context. The panel is stopped before they run: the
+ * CLI refuses to start a second panel while `run.json` names a live pid, so a
+ * start attempted over a running one fails even when the entry itself is right.
+ *
+ * `activate()` answers null when the mechanism cannot start anything now (an
+ * entry the desktop session or the shell reads at login). Killing a panel we
+ * cannot bring back is worse than leaving it up, so that path stops nothing.
+ */
+export interface BootStart {
+  /** argv steps, in order; the first that fails ends the attempt. */
+  commands: string[][]
+  /** Proof that must hold before the panel is touched at all. */
+  requires: {
+    /** Probes that must exit 0. */
+    commands: string[][]
+    /** Files that must exist. */
+    files: string[]
+  }
+  display: string[]
+}
+
+/** What removes a mechanism's entry without waiting for it to stop anything. */
+export interface BootRetirement {
+  commands: string[][]
+  display: string[]
+}
+
+/** A mechanism's start steps plus everything a switch has to clean up. */
+export interface BootActivation extends BootStart {
+  /**
+   * How to stop the panel *this* mechanism supervises, when it supervises one.
+   *
+   * A switch cannot rely on the CLI's `down` alone: the entry it is coming from
+   * would restart the panel it just lost (`Restart=always`, `KeepAlive`), racing
+   * the new entry. Empty means this mechanism supervises nothing here.
+   */
+  stop: string[][]
+  /** Steps that remove the other mechanisms' entries. */
+  retire: string[][]
+  /** Which mechanisms those steps belong to. */
+  retired: BootMechanism[]
+  /** The retirement as one copy-pasteable block. */
+  retireDisplay: string[]
+}
+
 export interface BootProvider {
   mechanism: BootMechanism
   detect(): Promise<BootCandidate>
   status(spec: BootSpec): Promise<{ state: BootState, unitPath: string | null, detail: string, commands: string[] }>
   install(spec: BootSpec): Promise<BootActionResult>
   uninstall(spec: BootSpec): Promise<BootActionResult>
+  /** The start steps for an installed entry; null when this mechanism cannot start one now. */
+  activate?(spec: BootSpec): Promise<BootStart | null>
+  /** Steps that stop the panel this mechanism supervises, without removing its entry. */
+  stopCommands?(spec: BootSpec): Promise<string[][]>
+  /**
+   * Steps that delete this mechanism's entry *without* stopping the panel it may
+   * be running. A switch retires the mechanism it came from inside the helper,
+   * after the panel is already down, so `uninstall()`'s `--now` forms would race
+   * the start. `bootout` is the one exception: launchd has no way to unload a job
+   * without stopping it, which is why retirement runs after the stop, never before.
+   */
+  retireCommands?(spec: BootSpec): Promise<BootRetirement>
 }
 
 /** One injected process result; `run()` from `util/exec.ts` is structurally assignable. */
@@ -86,6 +151,8 @@ export interface BootLadder {
   status(spec: BootSpec, mechanism?: BootMechanism): Promise<BootStatus>
   install(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActionResult & { mechanism: BootMechanism | null, status: BootStatus }>
   uninstall(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActionResult & { status: BootStatus }>
+  /** The start command for an installed entry, after it was confirmed installed. */
+  activate(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActivation | null>
 }
 
 export type BootProviderStatus = Awaited<ReturnType<BootProvider['status']>>

@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootSpec } from './types.js'
+import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
   assertArg,
@@ -417,6 +417,80 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
       }
       catch (error) {
         return failed(errorMessage(error))
+      }
+    },
+
+    /**
+     * A LaunchAgent that was written but never booted is exactly the state an
+     * install leaves behind, and nothing else can start it: `kickstart -k` needs
+     * the label loaded first, so loading it is part of the start.
+     */
+    async activate(spec: BootSpec): Promise<BootStart | null> {
+      const file = pathOf(spec)
+      const label = launchdLabel(spec)
+      const domain = await domainOf()
+      if (domain === null)
+        return null
+      const job = `${domain}/${label}`
+      if (mode === 'daemon') {
+        return {
+          commands: [
+            ['sudo', '-n', 'launchctl', 'bootstrap', 'system', file],
+            ['sudo', '-n', 'launchctl', 'kickstart', '-k', job],
+          ],
+          requires: { commands: [], files: [file] },
+          display: [
+            shellCommand('sudo', ['launchctl', 'bootstrap', 'system', file]),
+            shellCommand('sudo', ['launchctl', 'kickstart', '-k', job]),
+          ],
+        }
+      }
+      const loaded = codeOf(await ctx.run('launchctl', ['print', job])) === 0
+      return {
+        commands: [
+          ...(loaded ? [] : [['launchctl', 'bootstrap', domain, file]]),
+          ['launchctl', 'kickstart', '-k', job],
+        ],
+        requires: { commands: [], files: [file] },
+        display: [
+          ...(loaded ? [] : [shellCommand('launchctl', ['bootstrap', domain, file])]),
+          shellCommand('launchctl', ['kickstart', '-k', job]),
+        ],
+      }
+    },
+
+    /** `KeepAlive` would resurrect the panel, so the job itself has to stop it. */
+    async stopCommands(spec: BootSpec): Promise<string[][]> {
+      const label = launchdLabel(spec)
+      const domain = await domainOf()
+      if (domain === null)
+        return []
+      const job = `${domain}/${label}`
+      return mode === 'daemon'
+        ? [['sudo', '-n', 'launchctl', 'kill', 'SIGTERM', job]]
+        : [['launchctl', 'kill', 'SIGTERM', job]]
+    },
+
+    /**
+     * launchd has no "unload but leave running": `bootout` always stops the job.
+     * That is why retirement is handed to the caller instead of run during the
+     * install — here it runs once the panel is already down, and the entry being
+     * started is a different mechanism's, so stopping this job is harmless.
+     */
+    async retireCommands(spec: BootSpec): Promise<BootRetirement> {
+      const file = pathOf(spec)
+      const label = launchdLabel(spec)
+      const domain = await domainOf()
+      const bootout = mode === 'daemon'
+        ? ['sudo', '-n', 'launchctl', 'bootout', `system/${label}`]
+        : domain === null ? null : ['launchctl', 'bootout', `${domain}/${label}`]
+      const remove = mode === 'daemon' ? ['sudo', '-n', 'rm', '-f', file] : ['rm', '-f', file]
+      return {
+        commands: [...(bootout === null ? [] : [bootout]), remove],
+        display: [
+          ...(bootout === null ? [] : [shellCommand('sudo', ['launchctl', 'bootout', `system/${label}`])]),
+          shellCommand('sudo', ['rm', '-f', file]),
+        ],
       }
     },
   }

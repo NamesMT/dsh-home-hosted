@@ -250,3 +250,71 @@ describe('ladder install and uninstall', () => {
     expect(result.detail).toMatch(/nothing to uninstall/)
   })
 })
+
+describe('ladder activation and switching', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => cleanup(home))
+
+  /** No user bus and no sudo: only the xdg file is a usable entry here. */
+  function xdgLadder() {
+    const runner = fakeRun(noSystemdHandler())
+    return createBootLadder({
+      platform: 'linux',
+      home,
+      env: { USER: 'tester', UID: '1000' },
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+  }
+
+  it('has no start command for a mechanism whose session reads it at login', async () => {
+    const ladder = xdgLadder()
+    await ladder.install(spec(), 'xdg-autostart')
+    // `null` is the signal that keeps a running panel up rather than stopping it
+    // with nothing to bring it back.
+    expect(await ladder.activate(spec(), 'xdg-autostart')).toBeNull()
+  })
+
+  it('does not retire the working entry during an install', async () => {
+    const ladder = xdgLadder()
+    await ladder.install(spec(), 'xdg-autostart')
+    // systemd-user is unavailable here, so this install fails — and must not have
+    // taken the working xdg entry with it on the way out.
+    const result = await ladder.install(spec(), 'systemd-user')
+    expect(result.ok).toBe(false)
+    expect((await ladder.status(spec(), 'xdg-autostart')).state).toBe('enabled-running')
+  })
+
+  it('carries the other mechanisms into the activation plan for retirement', async () => {
+    const runner = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-system-running'))
+        return { code: 0, stdout: 'running\n' }
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 0 }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=yes\n' }
+      return { code: 0 }
+    })
+    const ladder = createBootLadder({
+      platform: 'linux',
+      home,
+      env: { USER: 'tester', UID: '1000' },
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+    // Both entries really exist, which is the state a switch has to clean up.
+    await ladder.install(spec(), 'xdg-autostart')
+    await ladder.install(spec(), 'systemd-user')
+
+    const plan = await ladder.activate(spec(), 'systemd-user')
+    expect(plan).not.toBeNull()
+    expect(plan?.commands).toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
+    // Retirement rides in the same plan: only the detached helper may remove an
+    // entry, and only after the panel is down and the new one has started.
+    expect(plan?.retired).toEqual(['xdg-autostart'])
+    expect(plan?.retire.flat().join(' ')).toContain('autostart/home-hosted.desktop')
+  })
+})

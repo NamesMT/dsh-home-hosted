@@ -10,6 +10,9 @@ import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
+import type { ActivationPlan } from '../src/home-hosted/panel-control.js'
+import type { BootActivation } from '../src/boot/types.js'
+import type { PanelControlResult } from '../src/shared/contracts.js'
 import { SettingsStore } from '../src/settings.js'
 import { bootUnitName } from '../src/util/paths.js'
 import type { RunResult } from '../src/util/exec.js'
@@ -42,6 +45,7 @@ const ladder: BootLadderLike = {
   status: async () => bootStatus,
   install: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: bootStatus }),
   uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: null, status: bootStatus }),
+    activate: async () => null,
 }
 
 let scratch: TempDir | null = null
@@ -82,6 +86,8 @@ async function harness(options: {
   otherPanels?: string[]
   /** Replaces the boot ladder, for tests about what was written or retired. */
   ladder?: BootLadderLike
+  /** Replaces the detached hand-over helper, so no process is spawned. */
+  spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
   /** The project the managed row belongs to; defaults to this process's cwd. */
   projectDir?: string
 } = {}): Promise<Harness> {
@@ -123,6 +129,7 @@ async function harness(options: {
     homeDir: scratch.path,
     settings,
     createLadder: () => options.ladder ?? ladder,
+    spawnActivation: options.spawnActivation ?? (() => ({ ok: true, detail: 'handed over' })),
     resolveDsh: options.resolveDsh,
     projectDir: options.projectDir,
     execCli: options.execCli ?? (async (args, env): Promise<RunResult> => {
@@ -688,6 +695,7 @@ describe('retiring the pre-per-instance boot artifact', () => {
           retired.push(spec.unitName)
           return { ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: stateFor(spec.unitName, 'not-installed', null) }
         },
+        activate: async () => null,
       },
     }
   }
@@ -725,6 +733,142 @@ describe('retiring the pre-per-instance boot artifact', () => {
     dir.cleanup()
   })
 })
+
+describe('handing the panel to the entry that was just installed', () => {
+  const plan: BootActivation = {
+    commands: [['systemctl', '--user', 'restart', 'home-hosted.service']],
+    requires: { commands: [], files: [] },
+    display: ['systemctl --user restart home-hosted.service'],
+    stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+    retire: [['rm', '-f', '/x.desktop']],
+    retired: ['xdg-autostart'],
+    retireDisplay: ['rm -f /x.desktop'],
+  }
+
+  /**
+   * A ladder whose entry is *not* installed yet, which is the state a switch or
+   * a first enable starts from: reporting it installed would read as "already
+   * running under it" and skip exactly the path under test.
+   */
+  const freshStatus: BootStatus = { ...bootStatus, mechanism: null, state: 'not-installed', unitPath: null }
+
+  function activatingLadder(activation: BootActivation | null): BootLadderLike {
+    return {
+      status: async () => freshStatus,
+      install: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: bootStatus }),
+      uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: null, status: bootStatus }),
+      activate: async () => activation,
+    }
+  }
+
+  it('hands a running panel to the entry, in a helper that outlives this process', async () => {
+    const calls: Array<{ stateDir: string, plan: ActivationPlan }> = []
+    const { service } = await harness({
+      panel: await withPanel(),
+      ladder: activatingLadder(plan),
+      spawnActivation: (stateDir, handed) => {
+        calls.push({ stateDir, plan: handed })
+        return { ok: true, detail: 'starting the panel through its autostart entry now' }
+      },
+    })
+
+    const { result } = await service.installBoot('systemd-user')
+
+    expect(calls).toHaveLength(1)
+    // The stop always precedes the start: home-hosted refuses a second panel while
+    // run.json names a live pid, so the old one has to be gone first.
+    expect(calls[0]?.plan).toMatchObject({
+      commands: [['systemctl', '--user', 'restart', 'home-hosted.service']],
+      retire: [['rm', '-f', '/x.desktop']],
+    })
+    expect(calls[0]?.plan.stop.join(' ')).toContain('down')
+    expect(result.detail).toContain('retiring xdg-autostart')
+  })
+
+  it('stops the panel through the CLI first, naming the pid to wait on', async () => {
+    let handed: ActivationPlan | null = null
+    const { service } = await harness({
+      panel: await withPanel(),
+      ladder: activatingLadder({ ...plan, commands: [['launchctl', 'kickstart', '-k', 'gui/1000/x']] }),
+      spawnActivation: (_stateDir, value) => {
+        handed = value
+        return { ok: true, detail: 'handed over' }
+      },
+    })
+
+    await service.installBoot('systemd-user')
+    expect(handed).not.toBeNull()
+    expect(handed!.stop.join(' ')).toContain('down')
+    expect(handed!.stop.join(' ')).toContain('--home')
+    expect(handed!.oldPid).toBe(process.pid)
+  })
+
+  it('leaves a running panel alone when the mechanism has no start command', async () => {
+    let spawned = 0
+    const { service } = await harness({
+      panel: await withPanel(),
+      ladder: activatingLadder(null),
+      spawnActivation: () => {
+        spawned += 1
+        return { ok: true, detail: 'handed over' }
+      },
+    })
+
+    const { result } = await service.installBoot('xdg-autostart')
+    // Killing a panel nothing would start again is worse than leaving it up.
+    expect(spawned).toBe(0)
+    expect(result.detail).toMatch(/cannot start the panel itself/)
+  })
+
+  it('does not hand over when no panel is answering', async () => {
+    let spawned = 0
+    const { service } = await harness({
+      ladder: activatingLadder(plan),
+      spawnActivation: () => {
+        spawned += 1
+        return { ok: true, detail: 'handed over' }
+      },
+    })
+
+    const { result } = await service.installBoot('systemd-user')
+    expect(spawned).toBe(0)
+    expect(result.detail).toMatch(/not started now/)
+  })
+
+  it('never hands over after a failed install', async () => {
+    const ladder = activatingLadder(plan)
+    ladder.install = async (): Promise<BootInstallResult> => ({ ok: false, changed: false, detail: 'refused', commands: [], needsPrivilege: false, mechanism: null, status: bootStatus })
+    let spawned = 0
+    const { service } = await harness({
+      panel: await withPanel(),
+      ladder,
+      spawnActivation: () => {
+        spawned += 1
+        return { ok: true, detail: 'handed over' }
+      },
+    })
+
+    const { result } = await service.installBoot('systemd-user')
+    expect(spawned).toBe(0)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toBe('refused')
+  })
+
+  it('reports the exact commands when the handover could not be spawned', async () => {
+    const { service } = await harness({
+      panel: await withPanel(),
+      ladder: activatingLadder(plan),
+      spawnActivation: () => ({ ok: false, detail: 'could not start the autostart helper: EPERM' }),
+    })
+
+    const { result } = await service.installBoot('systemd-user')
+    // The panel is still up; a person needs the commands to do it by hand.
+    expect(result.detail).toMatch(/EPERM/)
+    // The helper never ran, so the panel is up and the steps are printed instead.
+    expect(result.commands).toContain('systemctl --user restart home-hosted.service')
+  })
+})
+
 
 
 

@@ -26,6 +26,12 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
   const switching = isSwitchingMechanism(boot.mechanism, autostart.mechanism)
   const installed = boot.mechanism !== null
 
+  // Enabling an entry that does not start anything proves nothing, so the host
+  // hands the running panel to it; the page says so before the button is pressed,
+  // because that stop takes this session's connection with it.
+  const handover = status.panel.reachable && !switching && !installed
+  const switchWarning = status.panel.reachable && switching
+
   const actionLabel = (action: 'install' | 'uninstall'): string =>
     t(action === 'install' ? 'bootActionInstall' : 'bootActionUninstall')
 
@@ -65,6 +71,9 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
         />
       )}
     >
+      {handover ? <Hint>{t('bootHandover')}</Hint> : null}
+      {switchWarning ? <Note tone="warn">{t('bootSwitchRetires')}</Note> : null}
+
       <div className="hh-btn-row">
         <Button
           variant={installed ? 'default' : 'primary'}

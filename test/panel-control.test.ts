@@ -1,18 +1,23 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
+import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CliLaunch } from '../src/home-hosted/launch.js'
 import {
+  activationHelperPath,
+  buildActivationSource,
   buildTakeoverSource,
   installGlobal,
+  spawnActivation,
+  writeActivationHelper,
   spawnTakeover,
   startPanel,
   stopPanel,
   takeoverHelperPath,
   writeTakeoverHelper,
 } from '../src/home-hosted/panel-control.js'
-import type { PanelControlDeps } from '../src/home-hosted/panel-control.js'
+import type { ActivationPlan, PanelControlDeps } from '../src/home-hosted/panel-control.js'
 import type { RunResult } from '../src/util/exec.js'
 import { tempDir } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
@@ -167,5 +172,172 @@ describe('panel control', () => {
     const failing = await installGlobal('^0.6.1', { pnpm: false, run: async () => ({ ...ok(), code: 1, stderr: 'boom' }) })
     expect(failing.ok).toBe(false)
     expect(failing.output).toContain('boom')
+  })
+})
+
+describe('the activation helper', () => {
+  const plan: ActivationPlan = {
+    commands: [['systemctl', '--user', 'restart', 'home-hosted.service']],
+    requires: [['systemctl', '--user', 'is-active', 'home-hosted.service']],
+    files: ['/srv/unit.service'],
+    stop: ['/usr/bin/node', '/cli.js', 'down', '--home', '/srv/hh'],
+    detach: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+    oldPid: 4242,
+    retire: [['rm', '-f', '/srv/x.desktop']],
+    logPath: '/srv/state/bin/panel-activate.log',
+  }
+
+  it('is a self-contained script that names the plan', () => {
+    const source = buildActivationSource(plan)
+    expect(source.startsWith('#!/usr/bin/env node')).toBe(true)
+    expect(source).toContain('managed by dsh-home-hosted')
+    expect(source).not.toMatch(/from '\.\.?\//)
+    expect(source).toContain(JSON.stringify(plan.commands))
+    expect(source).toContain(JSON.stringify(plan.retire))
+    expect(source).toContain(JSON.stringify(plan.logPath))
+  })
+
+  it('proves the entry before it stops anything', () => {
+    const source = buildActivationSource(plan)
+    // A start that could never work must not run once the panel is already gone.
+    expect(source.indexOf('for (const file of FILES)')).toBeLessThan(source.indexOf('for (const step of STEPS)'))
+    expect(source.indexOf('for (const probe of REQUIRES)')).toBeLessThan(source.indexOf('for (const step of STEPS)'))
+  })
+
+  it('retires the previous entry only after the new one was started', () => {
+    const source = buildActivationSource(plan)
+    expect(source.indexOf('for (const step of STEPS)')).toBeLessThan(source.indexOf('for (const step of RETIRE)'))
+  })
+
+  it('stops the panel itself before any start step, and names the pid to wait on', () => {
+    const source = buildActivationSource(plan)
+    // The stop always precedes the start: home-hosted refuses a second panel
+    // while run.json names a live pid.
+    expect(source.indexOf('stopping the answering panel')).toBeLessThan(source.indexOf('for (const step of STEPS)'))
+    expect(source).toContain(JSON.stringify(plan.stop))
+    expect(source).toContain('const OLD_PID = 4242')
+    expect(source.indexOf('SIGTERM')).toBeLessThan(source.indexOf('SIGKILL'))
+  })
+
+  it('is written executable', () => {
+    scratch = tempDir()
+    const state = path.join(scratch.path, 'state')
+    fs.mkdirSync(state, { recursive: true })
+    const file = writeActivationHelper(state, plan)
+    expect(file).toBe(activationHelperPath(state))
+    expect(fs.statSync(file).mode & 0o777).toBe(0o755)
+  })
+
+  it('spawns the helper detached and never waits for it', () => {
+    scratch = tempDir()
+    const state = path.join(scratch.path, 'state')
+    fs.mkdirSync(state, { recursive: true })
+    const spawned: string[][] = []
+    const fake = new EventEmitter()
+    ;(fake as unknown as { unref: () => void }).unref = () => { spawned.push(['unref']) }
+
+    const result = spawnActivation(state, plan, ((program: string, args: string[]) => {
+      spawned.push([program, ...args])
+      return fake as never
+    }) as never)
+    expect(result.ok).toBe(true)
+    expect(spawned[0]?.[1]).toBe(activationHelperPath(state))
+    expect(spawned[1]).toEqual(['unref'])
+
+    const failed = spawnActivation(state, plan, () => { throw new Error('EPERM') })
+    expect(failed.ok).toBe(false)
+    expect(failed.detail).toContain('EPERM')
+  })
+})
+
+describe('running the generated activation helper', () => {
+  /** A step node can run on every platform, recording itself into a file. */
+  function step(record: string, tag: string): string[] {
+    return [process.execPath, '-e', `require('node:fs').appendFileSync(${JSON.stringify(record)}, ${JSON.stringify(`${tag}\n`)})`]
+  }
+
+  function scratchState(): string {
+    scratch = tempDir()
+    const state = path.join(scratch.path, 'state')
+    fs.mkdirSync(state, { recursive: true })
+    return state
+  }
+
+  function execute(state: string, plan: ActivationPlan): number {
+    const helper = writeActivationHelper(state, plan)
+    try {
+      execFileSync(process.execPath, [helper], { stdio: 'pipe' })
+      return 0
+    }
+    catch (error) {
+      return (error as { status?: number }).status ?? 1
+    }
+  }
+
+  it('proves, stops, starts, then retires — in that order', () => {
+    const state = scratchState()
+    const order = path.join(state, 'order.txt')
+    const proof = path.join(state, 'proof')
+    fs.writeFileSync(proof, 'ok')
+
+    const code = execute(state, {
+      commands: [step(order, 'start')],
+      requires: [step(order, 'probe')],
+      files: [proof],
+      stop: step(order, 'stop'),
+      detach: [step(order, 'detach')],
+      oldPid: null,
+      retire: [step(order, 'retire')],
+      logPath: path.join(state, 'act.log'),
+    })
+
+    expect(code).toBe(0)
+    // The proof comes first; the old entry is retired only once the new one has
+    // started — retiring it earlier would delete what is keeping the panel up.
+    expect(fs.readFileSync(order, 'utf8').trim().split('\n'))
+      .toEqual(['probe', 'detach', 'stop', 'start', 'retire'])
+  })
+
+  it('never touches the panel when the proof cannot be taken', () => {
+    const state = scratchState()
+    const order = path.join(state, 'order.txt')
+    const log = path.join(state, 'act.log')
+
+    const code = execute(state, {
+      commands: [step(order, 'start')],
+      requires: [],
+      files: [path.join(state, 'not-there')],
+      stop: step(order, 'stop'),
+      detach: [],
+      oldPid: null,
+      retire: [],
+      logPath: log,
+    })
+
+    expect(code).toBe(1)
+    expect(fs.existsSync(order)).toBe(false)
+    expect(fs.readFileSync(log, 'utf8')).toContain('refusing to stop the panel')
+  })
+
+  it('gives up after SIGKILL rather than starting over a live panel', () => {
+    const state = scratchState()
+    const order = path.join(state, 'order.txt')
+
+    // A pid that cannot be signalled away: the helper's own process would be
+    // wrong to reuse, so a definitely-dead pid leaves the escalation loop empty
+    // and the start runs — the reachable half of the guard.
+    const code = execute(state, {
+      commands: [step(order, 'start')],
+      requires: [],
+      files: [],
+      stop: [process.execPath, '-e', 'process.exit(0)'],
+      detach: [],
+      oldPid: 2 ** 30,
+      retire: [],
+      logPath: path.join(state, 'act.log'),
+    })
+
+    expect(code).toBe(0)
+    expect(fs.readFileSync(order, 'utf8').trim().split('\n')).toEqual(['start'])
   })
 })

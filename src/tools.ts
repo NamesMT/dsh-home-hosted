@@ -238,7 +238,7 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   autostart_manage: {
-    description: 'Install or remove the OS entry that starts home-hosted at boot or login. The entry is machine-wide and always starts the panel this plugin manages.',
+    description: 'Install or remove the OS entry that starts home-hosted at boot or login. The entry is machine-wide and always starts the panel this plugin manages. Installing hands the running panel to that entry: it stops the panel (and every server it supervises, which can include this session) and starts it again, then removes any other autostart entry.',
     parameters: {
       instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'install or uninstall' },

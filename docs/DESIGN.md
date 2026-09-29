@@ -405,6 +405,56 @@ Recovery runs from a read, which the page polls, so it is throttled
 a panel that refuses the create must not be hit once per poll, and two status
 calls racing each other must not both create the same entry.
 
+## Enabling autostart hands the panel over
+
+An install alone proves nothing. The panel the plugin started keeps running, so
+nothing shows whether the entry would ever start one — and the CLI refuses to
+start a second panel while `run.json` names a live pid, so `enable --now` on a
+freshly written unit leaves it *failed* while an orphan panel holds the port. So
+a successful install hands the running panel to the entry: the panel stops, and
+the entry starts it. That is the only way to know autostart works rather than
+merely that a file was written.
+
+The stop takes the panel's servers with it, and this plugin is usually one of
+them, so the work goes to a generated detached helper (`bin/panel-activate.mjs`)
+that outlives the process. Its order is the whole design:
+
+1. prove the start can work — the unit file exists, `systemctl is-active` agrees
+   — while the panel is still up, because a start that could never work must not
+   be attempted once the old panel is already gone;
+2. on a switch, stop the panel through the *previous* mechanism
+   (`systemctl stop`, `launchctl kill`): its own restart policy
+   (`Restart=always`, `KeepAlive`) would bring the panel back the moment `down`
+   returned, racing the new entry;
+3. stop it with the CLI's `down`, then wait for the pid, escalating to SIGTERM
+   and SIGKILL;
+4. start the entry;
+5. only then remove the other mechanisms' entries.
+
+The stop is always the CLI's `down`, never the new mechanism's own `restart`: the
+entry would then be starting a *second* panel, which home-hosted refuses while
+`run.json` names a live pid, so a restart-in-place over an orphan only produces a
+failed unit. Waiting on the pid matters for the same reason — a `down` that
+returned before the process exited would race the start.
+
+Retirement is last, and deliberately not part of `install()`. Switching mechanism
+has to uninstall the old one, but the old entry is often what is currently
+running the panel: removing it during the install would stop the panel — and this
+plugin — before the new entry was ever told to start. So the ladder carries the
+other mechanisms' removal steps in the activation plan, and each provider's
+`retireCommands()` is the no-`--now` form for the same reason. launchd has no
+unload-without-stopping, so its retirement is only safe once the panel is down
+and the new entry is up.
+
+A mechanism that cannot start anything now answers `activate() → null`: a `Run`
+value and a `.desktop` file are read by the shell or the session at login.
+Nothing is stopped then — leaving a working panel up beats killing it for an
+entry that would not bring it back. A handover that could not be spawned is
+reported with the exact commands, and the panel is still up.
+
+Enabling and switching differ only in the retirement: a switch already has an
+entry keeping the panel alive, so its plan carries the old mechanism's removal.
+
 ## Privilege
 
 Boot scope needs privilege somewhere on every platform: a system unit, or

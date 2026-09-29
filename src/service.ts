@@ -13,7 +13,8 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import type { BootMechanism, BootStatus, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
 import { FOREIGN_MECHANISMS, isOnPortConflict, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
-import type { BootSpec } from './boot/types.js'
+import type { BootActivation, BootSpec } from './boot/types.js'
+import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
 import { findEntry, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
@@ -27,7 +28,7 @@ import type { CliResolution } from './home-hosted/resolve.js'
 import { EXPECTED_RANGE, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted/resolve.js'
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
-import { installGlobal, spawnTakeover, startPanel as startPanelProcess, stopPanel as stopPanelProcess } from './home-hosted/panel-control.js'
+import { activationLogPath, installGlobal, spawnActivation, spawnTakeover, startPanel as startPanelProcess, stopPanel as stopPanelProcess } from './home-hosted/panel-control.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot } from './home-hosted/token.js'
@@ -75,6 +76,7 @@ export interface BootLadderLike {
   status: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootStatus>
   install: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
   uninstall: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
+  activate: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootActivation | null>
 }
 
 export class HomeHostedError extends Error {
@@ -111,6 +113,8 @@ export interface HomeHostedServiceOptions {
   execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
   /** Test seam: supply the boot ladder instead of probing the real OS. */
   createLadder?: () => BootLadderLike
+  /** Test seam: hand the panel to an autostart entry without spawning a helper. */
+  spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
   /** The project the managed `dsh` row belongs to; defaults to this process's cwd. */
   projectDir?: string
   /** Test seam: resolve the running harness instead of reading this process. */
@@ -1109,9 +1113,21 @@ export class HomeHostedService extends Service {
     const spec = await this.bootSpec()
     if (spec === null)
       throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
+
+    // Read what the panel is doing *before* the install: this decides whether the
+    // entry has to be started, and whether that start must stop anything first.
+    const panel = await this.panelStatus()
+    const before = await this.bootStatus(mechanism)
     const result = await this.ladder().install(spec, mechanism)
     if (result.ok)
       await this.retireLegacyBootEntry(spec, mechanism)
+    const installed = mechanism ?? result.mechanism ?? null
+    const handover = result.ok
+      ? await this.bootHandoverPlan(spec, installed ?? undefined, panel, before.mechanism)
+      : { detail: null, commands: [], stateDir: null, plan: null, display: [] }
+
+    const detail = [result.detail, handover.detail].filter((line): line is string => line !== null).join('; ')
+    const commands = [...result.commands, ...handover.commands]
     const current = this.options.settings.get().autostart
     this.options.settings.update({
       autostart: {
@@ -1125,13 +1141,115 @@ export class HomeHostedService extends Service {
           ok: result.ok,
           action: 'install',
           mechanism: result.mechanism ?? mechanism ?? null,
-          detail: result.detail,
-          commands: result.commands,
+          detail,
+          commands,
           at: Date.now(),
         },
       },
     })
-    return { result, status: await this.bootStatus(mechanism) }
+
+    // Only now, with the intent already on disk: the helper stops the panel, and
+    // this process may not survive to write anything after that.
+    if (handover.plan !== null && handover.stateDir !== null) {
+      const spawned = (this.options.spawnActivation ?? spawnActivation)(handover.stateDir, handover.plan)
+      this.clientCache = null
+      this.tokenProof = null
+      return {
+        result: {
+          ...result,
+          detail: `${detail}; ${spawned.detail}`,
+          // A helper that never started leaves the panel up, so a person needs the
+          // exact steps to do it by hand.
+          commands: spawned.ok ? commands : [...commands, ...handover.display],
+        },
+        status: await this.bootStatus(mechanism),
+      }
+    }
+
+    return {
+      result: { ...result, detail, commands },
+      status: await this.bootStatus(mechanism),
+    }
+  }
+
+  /**
+   * The hand-over this install needs, if any: the plan for a detached helper, or
+   * just the note explaining why the panel is being left alone.
+   *
+   * An install alone proves nothing: the panel the plugin drove keeps running, so
+   * nothing shows whether the entry would ever start one. Starting it is the only
+   * way to know. Nothing is spawned here — the caller persists the intent first,
+   * because the helper stops the panel and this process may not outlive it.
+   *
+   * When the mechanism cannot start anything (a `Run` value, a `.desktop` file the
+   * session reads at login), nothing is stopped: leaving a working panel up beats
+   * killing it for an entry that would not bring it back.
+   */
+  private async bootHandoverPlan(
+    spec: BootSpec,
+    mechanism: BootMechanism | undefined,
+    panel: PanelStatus,
+    previousMechanism: BootMechanism | null,
+  ): Promise<{ detail: string | null, commands: string[], stateDir: string | null, plan: ActivationPlan | null, display: string[] }> {
+    const activation = await this.ladder().activate(spec, mechanism)
+    if (activation === null) {
+      return {
+        detail: panel.reachable
+          ? `${mechanism ?? 'this mechanism'} cannot start the panel itself, so it was left running rather than stopped with nothing to bring it back`
+          : null,
+        commands: [],
+        stateDir: null,
+        plan: null,
+        display: [],
+      }
+    }
+
+    if (!panel.reachable) {
+      return {
+        detail: 'no panel is answering, so the entry was not started now; it starts the panel at boot or login',
+        commands: [],
+        stateDir: null,
+        plan: null,
+        display: [],
+      }
+    }
+    // A panel already running under this mechanism is where this is trying to
+    // get to; stopping it would only interrupt a working panel.
+    if (previousMechanism !== null && previousMechanism === mechanism) {
+      return {
+        detail: `the panel is already running under ${mechanism}, so it was left alone`,
+        commands: [],
+        stateDir: null,
+        plan: null,
+        display: [],
+      }
+    }
+
+    const deps = await this.panelControlDeps()
+    if (deps.launch === null)
+      throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
+
+    const retire = activation.retired.length > 0 ? `; retiring ${activation.retired.join(', ')}` : ''
+    return {
+      detail: `handing the panel to ${mechanism ?? 'the entry'} now; this page disconnects and comes back when it answers${retire}`,
+      commands: [],
+      stateDir: deps.stateDir,
+      display: [...activation.display, ...activation.retireDisplay],
+      plan: {
+        commands: activation.commands,
+        requires: activation.requires.commands,
+        files: activation.requires.files,
+        // The CLI's own `down`, never the mechanism's `restart`: home-hosted
+        // refuses to start a second panel while `run.json` names a live pid, so
+        // the old one has to be gone first or the entry just fails while the
+        // orphan keeps the port.
+        stop: [...deps.launch.args, 'down', '--home', deps.home],
+        detach: activation.stop,
+        oldPid: panel.pid,
+        retire: activation.retire,
+        logPath: activationLogPath(deps.stateDir),
+      },
+    }
   }
 
   async uninstallBoot(mechanism?: BootMechanism): Promise<{ result: BootInstallResult, status: BootStatus }> {

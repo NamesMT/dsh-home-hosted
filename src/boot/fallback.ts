@@ -75,6 +75,10 @@ export function createContainerProvider(ctx: BootProviderContext): BootProvider 
     async uninstall(): Promise<BootActionResult> {
       return failed('nothing to uninstall: this plugin installed no OS boot entry for a container; the container restart policy is what starts it')
     },
+
+    async activate(): Promise<null> {
+      return null
+    },
   }
 }
 
@@ -98,6 +102,10 @@ export function createUnsupportedProvider(platform: NodeJS.Platform): BootProvid
 
     async uninstall(_spec: BootSpec): Promise<BootActionResult> {
       return failed(`this plugin has no boot mechanism for ${platform}, so it installed nothing to remove`)
+    },
+
+    async activate(): Promise<null> {
+      return null
     },
   }
 }

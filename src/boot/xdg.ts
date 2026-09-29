@@ -7,8 +7,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootSpec } from './types.js'
-import { assertAbsolute, assertArg, assertEnvKey, assertLabel, assertMarker, assertUnitName, desktopExec } from './escape.js'
+import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec } from './types.js'
+import { assertAbsolute, assertArg, assertEnvKey, assertLabel, assertMarker, assertUnitName, desktopExec, shellCommand } from './escape.js'
 import { bootState, configHome, errorMessage, failed, inspectOwned, posixJoin, removeOwned, writeOwned } from './common.js'
 
 function validate(spec: BootSpec): void {
@@ -142,6 +142,21 @@ export function createXdgAutostartProvider(ctx: BootProviderContext): BootProvid
       catch (error) {
         return failed(errorMessage(error))
       }
+    },
+
+    /**
+     * A `.desktop` entry has no launcher of its own: the desktop session reads
+     * the file at login. Nothing here can start the panel, and claiming a start
+     * command would be a fiction, so the caller falls back to the CLI.
+     */
+    async activate(): Promise<null> {
+      return null
+    },
+
+    /** A file the session reads at login: deleting it stops nothing. */
+    async retireCommands(spec: BootSpec): Promise<BootRetirement> {
+      const file = pathOf(spec)
+      return { commands: [['rm', '-f', file]], display: [shellCommand('rm', ['-f', file])] }
     },
   }
 }

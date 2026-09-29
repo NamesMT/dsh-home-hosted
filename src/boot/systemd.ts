@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootSpec } from './types.js'
+import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
   assertArg,
@@ -345,6 +345,44 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
         return failed(errorMessage(error))
       }
     },
+
+    /**
+     * `restart` stops the panel and starts it again under the unit, so nothing
+     * else may stop it first: stopping it from outside would race this call.
+     * `is-active` is the proof the unit is really there, before anything is
+     * killed.
+     */
+    async activate(spec: BootSpec): Promise<BootStart> {
+      const unit = unitOf(spec)
+      return {
+        commands: [['systemctl', '--user', 'restart', unit]],
+        requires: { commands: [['systemctl', '--user', 'is-active', unit]], files: [] },
+        display: [shellCommand('systemctl', ['--user', 'restart', unit])],
+      }
+    },
+
+    /** Stops the panel the unit supervises, keeping the unit enabled. */
+    async stopCommands(spec: BootSpec): Promise<string[][]> {
+      return [['systemctl', '--user', 'stop', unitOf(spec)]]
+    },
+
+    /** No `--now`: the panel is already down when a switch runs this. */
+    async retireCommands(spec: BootSpec): Promise<BootRetirement> {
+      const unit = unitOf(spec)
+      const file = pathOf(spec)
+      return {
+        commands: [
+          ['systemctl', '--user', 'disable', unit],
+          ['rm', '-f', file],
+          ['systemctl', '--user', 'daemon-reload'],
+        ],
+        display: [
+          shellCommand('systemctl', ['--user', 'disable', unit]),
+          shellCommand('rm', ['-f', file]),
+          shellCommand('systemctl', ['--user', 'daemon-reload']),
+        ],
+      }
+    },
   }
 }
 
@@ -553,6 +591,54 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
       }
       catch (error) {
         return failed(errorMessage(error))
+      }
+    },
+
+    /**
+     * `restart` stops the panel and starts it again under the unit, so nothing
+     * else may stop it first. A system unit needs root; `sudo -n` never prompts,
+     * which is the only elevation a detached helper can get.
+     */
+    async activate(spec: BootSpec): Promise<BootStart> {
+      const unit = unitOf(spec)
+      const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
+      return {
+        commands: [elevate(['systemctl', 'restart', unit])],
+        requires: { commands: [elevate(['systemctl', 'is-active', unit])], files: [] },
+        display: [shellCommand('sudo', ['systemctl', 'restart', unit])],
+      }
+    },
+
+    /**
+     * Stops the panel the unit supervises. Without this a switch would lose the
+     * race: `Restart=always` brings the panel back as soon as the CLI's `down`
+     * ends, before the new entry starts one.
+     */
+    async stopCommands(spec: BootSpec): Promise<string[][]> {
+      const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
+      return [elevate(['systemctl', 'stop', unitOf(spec)])]
+    },
+
+    /**
+     * The retirement for a switch. Deliberately no `--now`: this runs in the
+     * helper *after* the panel is already down, and `--now` here would race the
+     * start command that follows.
+     */
+    async retireCommands(spec: BootSpec): Promise<BootRetirement> {
+      const unit = unitOf(spec)
+      const file = pathOf(spec)
+      const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
+      return {
+        commands: [
+          elevate(['systemctl', 'disable', unit]),
+          elevate(['rm', '-f', file]),
+          elevate(['systemctl', 'daemon-reload']),
+        ],
+        display: [
+          shellCommand('sudo', ['systemctl', 'disable', unit]),
+          shellCommand('sudo', ['rm', '-f', file]),
+          shellCommand('sudo', ['systemctl', 'daemon-reload']),
+        ],
       }
     },
   }

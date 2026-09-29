@@ -10,12 +10,15 @@ import type { BootCandidate, BootMechanism, BootStatus } from '../shared/contrac
 import { run as execRun, sudoAvailable } from '../util/exec.js'
 import type {
   BootActionResult,
+  BootActivation,
   BootLadder,
   BootLadderOptions,
   BootProvider,
   BootProviderContext,
   BootProviderStatus,
+  BootRetirement,
   BootSpec,
+  BootStart,
 } from './types.js'
 import { errorMessage, failed, isInstalledState } from './common.js'
 import { createSystemdSystemProvider, createSystemdUserProvider } from './systemd.js'
@@ -188,6 +191,61 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     }
   }
 
+  async function safeActivate(provider: BootProvider, spec: BootSpec): Promise<BootStart | null> {
+    if (provider.activate === undefined)
+      return null
+    try {
+      return await provider.activate(spec)
+    }
+    catch {
+      return null
+    }
+  }
+
+  async function safeRetirement(provider: BootProvider, spec: BootSpec): Promise<BootRetirement | null> {
+    if (provider.retireCommands === undefined)
+      return null
+    try {
+      return await provider.retireCommands(spec)
+    }
+    catch {
+      return null
+    }
+  }
+
+  async function safeStop(provider: BootProvider, spec: BootSpec): Promise<string[][]> {
+    if (provider.stopCommands === undefined)
+      return []
+    try {
+      return await provider.stopCommands(spec)
+    }
+    catch {
+      return []
+    }
+  }
+
+  /** Every mechanism the OS currently has an entry for, whatever it is doing. */
+  async function installedMechanisms(spec: BootSpec): Promise<BootProvider[]> {
+    const probes = await Promise.all(providers.map(async provider => [provider, await safeStatus(provider, spec)] as const))
+    return probes.filter(([, status]) => isInstalledState(status.state)).map(([provider]) => provider)
+  }
+
+  /**
+   * Which mechanism a call means. An install may fall back to the
+   * recommendation; every other call means one the OS actually has an entry
+   * for, because uninstalling or starting a mechanism that was never installed
+   * cannot succeed and must not be invented.
+   */
+  function pick(status: BootStatus, mechanism?: BootMechanism): BootProvider | undefined {
+    return pickOf(mechanism ?? status.mechanism)
+  }
+
+  function pickOf(mechanism: BootMechanism | null | undefined): BootProvider | undefined {
+    return mechanism === null || mechanism === undefined
+      ? undefined
+      : providers.find(provider => provider.mechanism === mechanism)
+  }
+
   return {
     providers,
 
@@ -197,8 +255,7 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
 
     async install(spec: BootSpec, mechanism?: BootMechanism) {
       const before = await buildStatus(spec, mechanism)
-      const chosen = mechanism ?? before.mechanism ?? before.recommended
-      const target = chosen ? providers.find(provider => provider.mechanism === chosen) : undefined
+      const target = pickOf(mechanism ?? before.mechanism ?? before.recommended)
       if (!target) {
         return {
           ...failed(`no boot mechanism is available on ${platform}`),
@@ -206,6 +263,11 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
           status: before,
         }
       }
+
+      // Retiring the mechanism we came from is *not* done here: its entry is the
+      // one currently running the panel (and often this plugin), so removing it
+      // first would stop everything before the new entry was told to start.
+      // `activate()` carries that retirement, for the caller that stops the panel.
       const result = await safeInstall(target, spec)
       const status = await buildStatus(spec, mechanism)
       return {
@@ -217,8 +279,7 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
 
     async uninstall(spec: BootSpec, mechanism?: BootMechanism) {
       const before = await buildStatus(spec, mechanism)
-      const chosen = mechanism ?? before.mechanism
-      const target = chosen ? providers.find(provider => provider.mechanism === chosen) : undefined
+      const target = pick(before, mechanism)
       if (!target) {
         return {
           ok: true,
@@ -232,6 +293,49 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
       const result = await safeUninstall(target, spec)
       const status = await buildStatus(spec, mechanism)
       return { ...result, status }
+    },
+
+    /**
+     * The start steps for the installed mechanism, plus the retirement of every
+     * other entry on this machine.
+     *
+     * A switch is the whole reason this exists: the old entry has to go, and it
+     * can only go after the panel is down — retiring it first would stop the
+     * panel, and the plugin with it, before the new entry was ever told to
+     * start. So both halves are handed to one caller that runs them in order,
+     * detached. Nothing is stopped here.
+     */
+    async activate(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActivation | null> {
+      const status = await buildStatus(spec, mechanism)
+      const target = pick(status, mechanism)
+      if (!target)
+        return null
+      const start = await safeActivate(target, spec)
+      if (start === null)
+        return null
+
+      const others = (await installedMechanisms(spec))
+        .filter(provider => provider.mechanism !== target.mechanism)
+      const retirements = await Promise.all(others.map(async provider => [provider, await safeRetirement(provider, spec)] as const))
+      const usable = retirements.filter((pair): pair is [BootProvider, BootRetirement] => pair[1] !== null)
+
+      // The mechanism we are leaving has to stop the panel itself: its own
+      // restart policy would bring the panel back the moment the CLI's `down`
+      // returns, racing the entry that is about to start one.
+      const supervised = status.mechanism !== null
+        ? providers.find(provider => provider.mechanism === status.mechanism)
+        : others.find(provider => provider.mechanism !== target.mechanism)
+      const stop = supervised === undefined ? [] : await safeStop(supervised, spec)
+
+      return {
+        ...start,
+        stop,
+        // A mechanism whose entry cannot be removed without stopping the panel is
+        // left alone here: one stale entry is better than a panel nothing starts.
+        retire: usable.flatMap(([, retirement]) => retirement.commands),
+        retired: usable.map(([provider]) => provider.mechanism),
+        retireDisplay: usable.flatMap(([, retirement]) => retirement.display),
+      }
     },
   }
 }
