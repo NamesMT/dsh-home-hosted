@@ -1,23 +1,19 @@
 import { useState } from 'react'
 import type { BootMechanism, Envelope } from '../shared/contracts.js'
 import { rpc } from './api.js'
-import type { BootAttemptView } from './boot.js'
-import { bootAttemptView, bootMechanisms, bootRefusal, isStaleAttempt, isSwitchingMechanism } from './boot.js'
+import type { FreshBootAttempt } from './boot.js'
+import { bootAttemptView, bootMechanisms, bootRefusal, isSwitchingMechanism, visibleBootAttempt } from './boot.js'
 import { BOOT_STATE_KEYS, dash } from './format.js'
 import { IconPower } from './icons.js'
 import type { SectionProps } from './props.js'
 import { Button, Code, CommandBox, Details, FailureNote, Hint, Note, Section, Select, Spec } from './ui.js'
-
-interface FreshFailure extends BootAttemptView {
-  ok: false
-}
 
 export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: SectionProps) {
   const boot = status.boot
   const autostart = status.settings.autostart
   const candidates = boot.candidates ?? []
   const commands = boot.commands ?? []
-  const [freshFailure, setFreshFailure] = useState<FreshFailure | null>(null)
+  const [freshFailure, setFreshFailure] = useState<FreshBootAttempt | null>(null)
   const installing = busy === 'boot.install' || busy === 'boot.uninstall'
 
   // `unsupported` is only worth offering when it is the only thing on this platform.
@@ -42,13 +38,15 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
       return
     }
     const refusal = bootRefusal(envelope.value)
-    setFreshFailure(refusal === null ? null : { ok: false, action, detail: refusal.detail, commands: refusal.commands })
+    setFreshFailure(refusal === null
+      ? null
+      : { ok: false, action, detail: refusal.detail, commands: refusal.commands, state: boot.state, mechanism: boot.mechanism })
   }
 
-  // A persisted failure the live state contradicts is history, not news.
+  // A persisted failure the live state contradicts is history, not news; a fresh
+  // one stops being news as soon as that state moves.
   const persisted = bootAttemptView(autostart.lastAttempt)
-  const stale = isStaleAttempt(persisted, boot.state)
-  const shown: BootAttemptView | null = freshFailure ?? (stale ? null : persisted)
+  const shown = visibleBootAttempt(freshFailure, persisted, boot.state, boot.mechanism)
 
   return (
     <Section

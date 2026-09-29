@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { bootAttemptView, bootMechanisms, bootRefusal, isStaleAttempt, isSwitchingMechanism } from '../../src/client/boot.js'
+import { bootAttemptView, bootMechanisms, bootRefusal, isStaleAttempt, isSwitchingMechanism, visibleBootAttempt } from '../../src/client/boot.js'
+import type { BootAttemptView, FreshBootAttempt } from '../../src/client/boot.js'
 import type { BootCandidate, BootMechanism } from '../../src/shared/contracts.js'
 
 function candidate(mechanism: BootMechanism, available = true): BootCandidate {
@@ -141,5 +142,59 @@ describe('isStaleAttempt', () => {
   it('never hides a success or an absent attempt', () => {
     expect(isStaleAttempt(okInstall, 'enabled-running')).toBe(false)
     expect(isStaleAttempt(null, 'enabled-running')).toBe(false)
+  })
+})
+
+describe('visibleBootAttempt', () => {
+  const failedInstall = (): BootAttemptView => bootAttemptView({
+    ok: false,
+    action: 'install',
+    mechanism: null,
+    detail: 'needs root',
+    commands: ['sudo x'],
+    at: 1,
+  })!
+
+  const fresh = (over: Partial<FreshBootAttempt> = {}): FreshBootAttempt => ({
+    ok: false,
+    action: 'install',
+    detail: 'writing /Library/LaunchDaemons needs root',
+    commands: ['sudo install -m 0644 /tmp/x.plist /Library/LaunchDaemons/x.plist'],
+    state: 'not-installed',
+    mechanism: null,
+    ...over,
+  })
+
+  it('keeps a fresh refusal the live status still matches', () => {
+    const refusal = fresh()
+    expect(visibleBootAttempt(refusal, null, 'not-installed', null)).toBe(refusal)
+  })
+
+  // The reported case: the commands were run and Re-check now proves the entry,
+  // so the "install failed" note must not sit there forever.
+  it('retires a fresh refusal once the state it answered has moved', () => {
+    expect(visibleBootAttempt(fresh(), null, 'enabled-running', 'launchd-daemon')).toBeNull()
+  })
+
+  it('retires a fresh refusal when only the mechanism moved', () => {
+    const switching = fresh({ state: 'enabled-running', mechanism: 'launchd-agent' })
+    expect(visibleBootAttempt(switching, null, 'enabled-running', 'launchd-agent')).toBe(switching)
+    expect(visibleBootAttempt(switching, null, 'enabled-running', 'launchd-daemon')).toBeNull()
+  })
+
+  it('keeps a failed switch visible while the entry it kept is unmoved', () => {
+    // An install refusal while a boot entry already exists is still news, unlike
+    // the same persisted attempt.
+    const refusal = fresh({ state: 'enabled-running', mechanism: 'launchd-agent' })
+    expect(visibleBootAttempt(refusal, null, 'enabled-running', 'launchd-agent')).toBe(refusal)
+  })
+
+  it('falls back to the persisted attempt while it is still news', () => {
+    const persisted = failedInstall()
+    expect(visibleBootAttempt(null, persisted, 'not-installed', null)).toBe(persisted)
+  })
+
+  it('drops the persisted attempt the live state contradicts', () => {
+    expect(visibleBootAttempt(null, failedInstall(), 'enabled-running', null)).toBeNull()
   })
 })

@@ -382,6 +382,11 @@ Windows. Login scope needs none. When this process cannot elevate, the page show
 the exact commands instead of prompting for a password — a headless panel has no
 askpass and `sudo -n` is the only honest probe.
 
+That refusal is shown with the status it answered, and the page retires it as soon
+as the status moves: a person runs the commands and presses Re-check, and the note
+must not outlive the state it described. The persisted last attempt follows the
+same rule, so a failed install is not re-shown once an entry exists.
+
 ## Tests
 
 No fixed ports: every stub listener binds `127.0.0.1` with port 0 and reads the

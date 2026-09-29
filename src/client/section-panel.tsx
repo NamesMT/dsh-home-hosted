@@ -233,6 +233,8 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
             </Details>
           )}
 
+      {needsReplace ? <Hint>{t('panelOutdated')}</Hint> : null}
+
       <div className="hh-btn-row">
         {panel.reachable
           ? null

@@ -15,6 +15,13 @@ export interface BootAttemptView extends BootFailure {
   action: BootAttempt['action']
 }
 
+/** A refusal answered in this turn, together with the live status it answered. */
+export interface FreshBootAttempt extends BootAttemptView {
+  ok: false
+  state: BootState
+  mechanism: BootMechanism | null
+}
+
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 }
@@ -79,4 +86,20 @@ export function isStaleAttempt(view: BootAttemptView | null, state: BootState): 
   if (view === null || view.ok) return false
   if (view.action === 'install') return INSTALLED_STATES.includes(state)
   return state === 'not-installed'
+}
+
+/**
+ * Which attempt note the section shows. A fresh refusal is news only while the
+ * live status still matches the one it answered: someone who ran the printed
+ * commands and pressed Re-check has a new status, and the old note goes with it.
+ * A persisted refusal the live state contradicts is history, not news.
+ */
+export function visibleBootAttempt(
+  fresh: FreshBootAttempt | null,
+  persisted: BootAttemptView | null,
+  state: BootState,
+  mechanism: BootMechanism | null,
+): BootAttemptView | null {
+  if (fresh !== null && fresh.state === state && fresh.mechanism === mechanism) return fresh
+  return isStaleAttempt(persisted, state) ? null : persisted
 }
