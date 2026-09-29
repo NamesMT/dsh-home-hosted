@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.6.0
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.3...v0.6.0)
+
+### 🚀 Enhancements
+
+- **autostart:** Hand the running panel to the installed entry ([7e7747e](https://github.com/NamesMT/dsh-home-hosted/commit/7e7747e))
+
+### ✅ Tests
+
+- **boot:** Scope the ladder fake to the user systemd scope ([1db26de](https://github.com/NamesMT/dsh-home-hosted/commit/1db26de))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.5.3
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.2...v0.5.3)
