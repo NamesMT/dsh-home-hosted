@@ -125,6 +125,13 @@ export interface BootRunOptions {
 /** argv-only, never a shell. `run` from `util/exec.ts` satisfies this. */
 export type BootRunner = (command: string, args: string[], options?: BootRunOptions) => Promise<BootRunResult>
 
+/** One row of the user database, as account resolution needs it. */
+export interface PasswdEntry {
+  name: string
+  uid: number
+  home: string
+}
+
 /**
  * The account a boot entry should run as — deliberately not `$USER`.
  *
@@ -153,6 +160,8 @@ export interface BootProviderContext {
   uid?: number | null
   /** Directories whose owner names the human a root-launched panel belongs to. */
   ownerPaths?: readonly string[]
+  /** The user database to resolve against; defaults to the real one. */
+  passwd?: readonly PasswdEntry[]
   /** Where a refusal or a root-account fallback is said out loud. */
   warn?: (message: string) => void
   /** Existence probe; defaults to `fs.existsSync`. Injected so container/PID-1 detection is testable. */
@@ -168,6 +177,7 @@ export interface BootLadderOptions {
   exists?: (file: string) => boolean
   uid?: number | null
   ownerPaths?: readonly string[]
+  passwd?: readonly PasswdEntry[]
   warn?: (message: string) => void
 }
 

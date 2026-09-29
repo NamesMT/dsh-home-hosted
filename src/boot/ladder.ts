@@ -67,6 +67,7 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     isRoot,
     uid: options.uid,
     ownerPaths: options.ownerPaths,
+    passwd: options.passwd,
     warn: options.warn,
     exists: options.exists,
   }

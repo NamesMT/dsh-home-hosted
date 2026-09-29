@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createBootLadder } from '../../src/boot/ladder.js'
 import type { FakeHandler } from './harness.js'
-import { cleanup, fakeRun, spec, tempHome } from './harness.js'
+import { cleanup, fakeRun, spec, tempHome, TEST_PASSWD } from './harness.js'
 
 /** A machine with a working systemd user manager and linger on. */
 function systemdHandler(): FakeHandler {
@@ -59,7 +59,9 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: file => file === '/run/systemd/system',
@@ -81,7 +83,9 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: () => false,
@@ -109,7 +113,9 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
       run: runner.run,
       sudo: async () => true,
       exists: file => file === '/run/systemd/system',
@@ -132,7 +138,9 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: file => file === '/.dockerenv',
@@ -157,6 +165,7 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'darwin',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
       // A non-root process with no passwordless sudo: the state the LaunchAgent
       // recommendation exists for, and not a fact about the machine running this.
@@ -176,7 +185,9 @@ describe('ladder selection', () => {
     const ladder = createBootLadder({
       platform: 'win32',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', LOCALAPPDATA: path.join(home, 'AppData', 'Local') },
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: () => false,
@@ -212,7 +223,9 @@ describe('ladder install and uninstall', () => {
       ladder: createBootLadder({
         platform: 'linux',
         home,
+        passwd: TEST_PASSWD,
         env: { USER: 'tester', UID: '1000' },
+        uid: 1000,
         run: runner.run,
         sudo: async () => false,
         exists: () => false,
@@ -265,7 +278,9 @@ describe('ladder activation and switching', () => {
     return createBootLadder({
       platform: 'linux',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: () => false,
@@ -305,7 +320,9 @@ describe('ladder activation and switching', () => {
     const ladder = createBootLadder({
       platform: 'linux',
       home,
+      passwd: TEST_PASSWD,
       env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
       run: runner.run,
       sudo: async () => false,
       exists: () => false,

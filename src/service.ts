@@ -17,7 +17,7 @@ import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
 import { accountOf } from './boot/index.js'
-import type { AccountInput } from './boot/index.js'
+import type { AccountInput, PasswdEntry } from './boot/index.js'
 import { findEntry, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
 import type { RawConfig } from './home-hosted/config-file.js'
@@ -125,6 +125,8 @@ export interface HomeHostedServiceOptions {
   env?: Readonly<Record<string, string | undefined>>
   /** Test seam: this process's uid; defaults to `process.getuid()`. */
   uid?: number | null
+  /** Test seam: the user database to resolve the entry's account against. */
+  passwd?: readonly PasswdEntry[]
 }
 
 interface CachedClient {
@@ -1072,28 +1074,31 @@ export class HomeHostedService extends Service {
   // Boot autostart
   // -------------------------------------------------------------------------
 
-  private ladder(): BootLadderLike {
-    if (this.options.createLadder !== undefined)
-      return this.options.createLadder()
-    return createBootLadder({
-      env: process.env,
-      // The ladder resolves the account once for every provider it builds, so a
-      // root-launched install and a per-provider call cannot disagree about it.
-      ownerPaths: [this.options.home, this.options.stateDir],
-    })
-  }
-
   /**
-   * What account resolution reads. The state paths name the person a panel
-   * belongs to, so a root process launched at boot (a system unit that names no
-   * `User=`) can still be told whose panel it is running.
+   * Everything account resolution reads.
+   *
+   * The state paths matter: they name the person the panel belongs to, so a root
+   * process launched at boot (a system unit that names no `User=`) can still be
+   * told whose panel it is running.
    */
-  private accountFacts(): AccountInput {
+  private accountFacts(): Omit<AccountInput, 'warn'> {
     return {
       env: (this.options.env ?? process.env) as Record<string, string | undefined>,
       uid: this.options.uid,
       ownerPaths: [this.options.home, this.options.stateDir],
+      passwd: this.options.passwd,
     }
+  }
+
+  /**
+   * The ladder resolves the account per provider, and the spec below resolves it
+   * for the entry's environment. Both are handed the *same* facts, so the `User=`
+   * line and the `HOME=` line can never describe two different people.
+   */
+  private ladder(): BootLadderLike {
+    if (this.options.createLadder !== undefined)
+      return this.options.createLadder()
+    return createBootLadder(this.accountFacts())
   }
 
   private async bootSpec(): Promise<BootSpec | null> {

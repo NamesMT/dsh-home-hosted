@@ -4,6 +4,8 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BootStatus } from '../src/shared/contracts.js'
 import type { BootSpec } from '../src/boot/types.js'
+import { parsePasswd } from '../src/boot/common.js'
+import type { PasswdEntry } from '../src/boot/types.js'
 import { HomeHostedService } from '../src/service.js'
 import type { BootInstallResult, BootLadderLike } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
@@ -49,7 +51,7 @@ interface Harness {
  * written when `unitFile: true`, so a test can describe "reported installed, but
  * nothing on disk".
  */
-function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean, env?: Record<string, string | undefined>, uid?: number | null } = {}): Harness {
+function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: boolean, enabled?: boolean, installFails?: boolean, env?: Record<string, string | undefined>, uid?: number | null, passwd?: readonly PasswdEntry[] } = {}): Harness {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
   const state = path.join(scratch.path, 'state')
@@ -92,6 +94,7 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     // Pinned so account resolution never depends on who runs the suite.
     env: options.env ?? {},
     uid: options.uid === undefined ? null : options.uid,
+    passwd: options.passwd,
   })
 
   return { service, installs, unitPath, state, fakeCli, specs, settings }
@@ -153,31 +156,20 @@ describe('boot entry target', () => {
 })
 
 describe('the account an entry runs as', () => {
-  /** The home of the first *login* account in this machine's user database. */
-  function realHome(): string {
-    const row = fs.readFileSync('/etc/passwd', 'utf8')
-      .split('\n')
-      .map(line => line.split(':'))
-      // The lowest login uid: `nobody` (65534) also owns a home, but `/` is not
-      // the account the elevating login named.
-      .find((fields) => {
-        const uid = Number.parseInt(fields[2] ?? '', 10)
-        return uid >= 1000 && uid < 60000 && (fields[0] ?? '').length > 0
-      })
-    if (row === undefined)
-      throw new Error('this machine has no login account to resolve')
-    return row[5] ?? ''
-  }
+  // The user database is injected, so the expected home below is a fixture rather
+  // than a fact about the accounts the CI machine was provisioned with.
+  const PASSWD = parsePasswd(['root:x:0:0:root:/root:/bin/sh', 'ci:x:1000:1000:CI:/home/ci:/bin/sh'].join('\n'))
+  const OTHER_UID = '1000'
 
   it('takes HOME from the login that elevated, not from a root environment', async () => {
     // The bug's fingerprint: `sudo` leaves USER=root and HOME=/root behind, so the
     // entry it wrote told the panel its home was root's.
     const { service, specs } = harness(
       unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
-      { env: { USER: 'root', HOME: '/root', SUDO_UID: '1000' }, uid: 0 },
+      { env: { USER: 'root', HOME: '/root', SUDO_UID: OTHER_UID }, uid: 0, passwd: PASSWD },
     )
     await service.installBoot()
-    expect(specs[0]?.env.HOME).toBe(realHome())
+    expect(specs[0]?.env.HOME).toBe('/home/ci')
     expect(specs[0]?.env.HOME).not.toBe('/root')
     // `User=` makes systemd set $USER itself, so the spec does not need to guess it.
     expect(specs[0]?.env.USER).toBeUndefined()
@@ -186,7 +178,7 @@ describe('the account an entry runs as', () => {
   it('keeps the environment it was given when nothing elevated it', async () => {
     const { service, specs } = harness(
       unit => statusWith({ state: 'not-installed', mechanism: null, unitPath: unit }),
-      { env: { USER: 'tester', HOME: '/home/tester', UID: '1000' }, uid: null },
+      { env: { USER: 'tester', HOME: '/home/tester', UID: '1000' }, uid: null, passwd: PASSWD },
     )
     await service.installBoot()
     expect(specs[0]?.env.HOME).toBe('/home/tester')

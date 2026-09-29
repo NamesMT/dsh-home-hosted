@@ -630,16 +630,19 @@ describe('panel lifecycle from the page', () => {
   })
 
   it('still installs a local zip, and refuses a source that names neither', async () => {
-    const file = path.join(os.tmpdir(), 'ui.zip')
+    // Inside this test's own scratch dir, never a fixed name in the shared tmpdir:
+    // a leftover `/tmp/ui.zip` owned by another user turned this into EACCES, which
+    // is a property of the machine rather than of the code under test.
+    const { service, cliCalls, home } = await harness()
+    const file = path.join(home, 'ui.zip')
     fs.writeFileSync(file, 'zip')
-    const { service, cliCalls } = await harness()
     const result = await service.uiManage('switch', { file })
     expect(result.ok).toBe(true)
     expect(cliCalls.at(-1)?.args.slice(1)).toEqual(['ui-switch', '--file', file, '--yes', '--home', expect.any(String)])
 
     await expect(service.uiManage('switch', {}))
       .rejects.toMatchObject({ code: 'UI_SOURCE_REQUIRED' })
-    await expect(service.uiManage('switch', { file: path.join(os.tmpdir(), 'nope.zip') }))
+    await expect(service.uiManage('switch', { file: path.join(home, 'nope.zip') }))
       .rejects.toMatchObject({ code: 'UI_FILE_MISSING' })
   })
 

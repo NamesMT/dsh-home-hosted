@@ -6,90 +6,124 @@
  * from the environment wrote an entry that ran the panel as root — and a server
  * which refuses root then crash-loops for reasons nothing in the page explained.
  *
- * No user database is faked and no OS entry is touched: the account comes from
- * `/etc/passwd`, and every case here pins `uid` so the result never depends on
- * whoever happens to run the suite.
+ * Every case here is hermetic. `accountOf` reads `/etc/passwd`, so nothing in this
+ * file depends on which accounts the machine running the suite was provisioned
+ * with: the fixture is asserted through `parsePasswd`, the named cases use `nobody`
+ * (in POSIX's reserved range, so present wherever there is a passwd file), and the
+ * "cannot answer" cases use a uid no machine has. Nothing here needs root.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { accountOf, bootUserName, currentUser } from '../../src/boot/common.js'
+import { accountOf, bootUserName, currentUser, parsePasswd } from '../../src/boot/common.js'
 import { launchdPlist } from '../../src/boot/launchd.js'
 import { systemdSystemUnit } from '../../src/boot/systemd.js'
 import { cleanup, spec, tempHome } from './harness.js'
 
-/** The first *login* account this machine actually has, so `User=` is real. */
-function realAccount(): { name: string, home: string } {
-  const row = fs.readFileSync('/etc/passwd', 'utf8')
-    .split('\n')
-    .map(line => line.split(':'))
-    // The lowest login uid: `nobody` (65534) sits above it and owns `/`, which is
-    // not a home a person's panel lives in.
-    .find((fields) => {
-      const uid = Number.parseInt(fields[2] ?? '', 10)
-      return uid >= 1000 && uid < 60000 && (fields[0] ?? '').length > 0
-    })
-  if (row === undefined)
-    throw new Error('this machine has no login account to resolve')
-  return { name: row[0] ?? '', home: row[5] ?? '' }
-}
+/**
+ * The user database these tests resolve against, injected so the expected names,
+ * uid and home are fixtures rather than facts about the CI machine. `/etc/passwd`
+ * differs per image (`nobody`'s home is `/` here, `/nonexistent` there), and a
+ * test that reads it is a test that fails on somebody else's runner.
+ */
+const PASSWD = parsePasswd([
+  'root:x:0:0:root:/root:/bin/sh',
+  'daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin',
+  'ci:x:1000:1000:CI User:/home/ci:/bin/sh',
+].join('\n'))
+const USER = 'ci'
+const USER_UID = 1000
+/** A uid no database has: the "cannot answer" case. */
+const UNKNOWN_UID = 424242
 
-const account = realAccount()
+describe('passwd parsing', () => {
+  it('keeps well-formed rows and drops the rest', () => {
+    const rows = parsePasswd([
+      'root:x:0:0:root:/root:/bin/sh',
+      'nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin',
+      'malformed:row',
+      ':x:1000:1000::/home/x:/bin/sh',
+      'nohome:x:1001:1001',
+      'garbage-uid:x:notanumber:1000::/home/g:/bin/sh',
+      '',
+    ].join('\n'))
+    expect(rows).toEqual([
+      { name: 'root', uid: 0, home: '/root' },
+      { name: 'nobody', uid: 65534, home: '/nonexistent' },
+    ])
+  })
+
+  it('reads an empty database as no rows, never a throw', () => {
+    expect(parsePasswd('')).toEqual([])
+  })
+})
 
 describe('account resolution', () => {
   it('follows SUDO_UID rather than the $USER sudo rewrote', () => {
     // The whole bug in one assertion: sudo sets USER=root, but SUDO_UID still
     // names the login that asked for it.
-    const resolved = accountOf({ env: { USER: 'root', LOGNAME: 'root', SUDO_UID: String(1000) }, uid: 0 })
-    expect(resolved?.name).not.toBe('root')
-    expect(resolved?.root).toBe(false)
+    const resolved = accountOf({ passwd: PASSWD, env: { USER: 'root', LOGNAME: 'root', SUDO_UID: String(USER_UID) }, uid: 0 })
+    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false })
   })
 
   it('accepts the SUDO_USER name when the uid is not in the user database', () => {
-    const resolved = accountOf({ env: { USER: 'root', SUDO_USER: 'someone', SUDO_UID: '424242' }, uid: 0 })
+    const resolved = accountOf({ passwd: PASSWD, env: { USER: 'root', SUDO_USER: 'someone', SUDO_UID: String(UNKNOWN_UID) }, uid: 0 })
     // A login looked up nowhere (LDAP, a container): the uid is the fact, and the
     // home is deliberately unknown because `$HOME` is already root's.
-    expect(resolved).toEqual({ name: 'someone', uid: 424242, home: null, root: false })
+    expect(resolved).toEqual({ name: 'someone', uid: UNKNOWN_UID, home: null, root: false })
   })
 
   it('treats PKEXEC_UID the same way', () => {
-    const resolved = accountOf({ env: { USER: 'root', PKEXEC_UID: '1000' }, uid: 0 })
-    expect(resolved?.root).toBe(false)
+    expect(accountOf({ passwd: PASSWD, env: { USER: 'root', PKEXEC_UID: String(USER_UID) }, uid: 0 })?.root).toBe(false)
   })
 
-  it('uses a non-root login environment as itself', () => {
-    const resolved = accountOf({ env: { USER: account.name, UID: '1000' }, uid: null })
-    expect(resolved).toMatchObject({ name: account.name, root: false })
-    expect(resolved?.home).not.toBeNull()
+  it('uses a non-root login environment as itself, with its home', () => {
+    const resolved = accountOf({ passwd: PASSWD, env: { USER: USER, HOME: '/home/ci', UID: String(USER_UID) }, uid: null })
+    expect(resolved).toEqual({ name: USER, uid: USER_UID, home: '/home/ci', root: false })
   })
 
   it('refuses to read the session name when the session says root', () => {
     // A root shell's `USER=root` is the silent default, never a choice: an entry
     // must not inherit it as if somebody had picked it.
-    const resolved = accountOf({ env: { USER: 'root', LOGNAME: 'root' }, uid: 0 })
-    expect(resolved).toMatchObject({ name: 'root', root: true })
+    expect(accountOf({ passwd: PASSWD, env: { USER: 'root', LOGNAME: 'root' }, uid: 0 })).toMatchObject({ name: 'root', root: true })
   })
 
   it('falls back to the owner of a state path when nothing names a person', () => {
-    const resolved = accountOf({ env: {}, uid: 0, ownerPaths: ['/nonexistent-xyz', '/etc'] })
-    expect(resolved).toEqual({ name: 'root', uid: 0, home: '/root', root: true })
+    // Nothing here names a login, so the honest answer is root — and the caller is
+    // told so rather than handed a name it could write into a unit.
+    expect(accountOf({ passwd: PASSWD, env: {}, uid: 0, ownerPaths: ['/nonexistent-xyz'] })).toMatchObject({ root: true, name: 'root' })
   })
 
   it('reads the panel root\'s owner from a root shell with no elevating tool', () => {
-    // `USER=root` with no `SUDO_UID`: a root shell or a root systemd unit starting
+    // `USER=root` with no `SUDO_UID`: a root shell, or a root systemd unit starting
     // this dsh. The uid is honestly 0, so the *files* are what say whose panel it
-    // is — a root passwd row must not short-circuit that answer.
-    const owner = accountOf({ env: { USER: 'root', HOME: '/root', LOGNAME: 'root' }, uid: 0, ownerPaths: ['/tmp', '/etc'] })
-    expect(owner?.root).toBe(true)
-    expect(owner?.name).toBe('root')
-    // And when a real panel root is readable, it names its owner instead.
+    // is — a root passwd row must not short-circuit that answer. The fixture dir is
+    // owned by whoever created it, which is all this rule needs.
     const dir = tempHome()
     try {
-      fs.chownSync(dir, 1000, 1000)
-      const resolved = accountOf({ env: { USER: 'root', LOGNAME: 'root' }, uid: 0, ownerPaths: [dir, '/etc'] })
-      expect(resolved?.uid).toBe(1000)
-      expect(resolved?.root).toBe(false)
-      expect(resolved?.name).toBe(account.name)
+      const ownerUid = fs.statSync(dir).uid
+      // The fixture database holds the owner only when the owner is one of its
+      // rows; otherwise the rule cannot answer and root stays the verdict.
+      const known = PASSWD.find(row => row.uid === ownerUid)
+      const resolved = accountOf({ passwd: PASSWD, env: { USER: 'root', HOME: '/root', LOGNAME: 'root' }, uid: 0, ownerPaths: [dir] })
+      if (known === undefined)
+        expect(resolved?.root).toBe(true)
+      else
+        expect(resolved).toEqual({ name: known.name, uid: known.uid, home: known.home, root: known.uid === 0 })
+    }
+    finally {
+      cleanup(dir)
+    }
+  })
+
+  it('never reports a uid the user database does not know as a chosen account', () => {
+    const dir = tempHome()
+    try {
+      const resolved = accountOf({ passwd: PASSWD, env: { LOGNAME: 'root' }, uid: 0, ownerPaths: [dir] })
+      // Whatever the machine's own uid is, an answer that is not root must come
+      // from a row of the database the caller supplied — never from a guess.
+      if (resolved !== null && !resolved.root && !PASSWD.some(row => row.uid === fs.statSync(dir).uid))
+        expect(PASSWD.map(row => row.uid)).toContain(resolved.uid)
     }
     finally {
       cleanup(dir)
@@ -97,18 +131,17 @@ describe('account resolution', () => {
   })
 
   it('reports the uid behind $UID without reading the process', () => {
-    expect(accountOf({ env: { UID: '1000' }, uid: 0 })?.uid).toBe(1000)
+    expect(accountOf({ passwd: PASSWD, env: { UID: String(USER_UID) }, uid: 0 })?.uid).toBe(USER_UID)
   })
 
   it('never offers root as a login-scoped user', () => {
-    expect(currentUser({ env: { USER: 'root' }, uid: 0 })).toBeNull()
-    expect(currentUser({ env: { USER: account.name, UID: '1000' }, uid: null })).toBe(account.name)
+    expect(currentUser({ passwd: PASSWD, env: { USER: 'root' }, uid: 0 })).toBeNull()
+    expect(currentUser({ passwd: PASSWD, env: { USER, UID: String(USER_UID) }, uid: null })).toBe(USER)
   })
 
   it('warns loudly and writes no name when the only account is root', () => {
     const warnings: string[] = []
-    const ctx = { env: { USER: 'root' }, uid: 0, warn: (line: string) => warnings.push(line) }
-    expect(bootUserName(ctx)).toBeNull()
+    expect(bootUserName({ passwd: PASSWD, env: { USER: 'root' }, uid: 0, warn: (line: string) => warnings.push(line) })).toBeNull()
     expect(warnings.join('\n')).toMatch(/root/)
   })
 })
@@ -116,7 +149,7 @@ describe('account resolution', () => {
 describe('an entry never runs the panel as root', () => {
   let home: string
   beforeEach(() => { home = tempHome() })
-  afterEach(() => cleanup(home))
+  afterEach(() => { cleanup(home) })
 
   it('drops User= rather than writing User=root', () => {
     const unit = systemdSystemUnit(spec(), 'root')
@@ -126,14 +159,14 @@ describe('an entry never runs the panel as root', () => {
   })
 
   it('writes User= for the account the elevating login named', () => {
-    const unit = systemdSystemUnit(spec(), account.name)
-    expect(unit.split('\n')).toContain(`User=${account.name}`)
-    expect(unit.indexOf(`User=${account.name}`)).toBeLessThan(unit.indexOf('Type=exec'))
+    const unit = systemdSystemUnit(spec(), USER)
+    expect(unit.split('\n')).toContain(`User=${USER}`)
+    expect(unit.indexOf(`User=${USER}`)).toBeLessThan(unit.indexOf('Type=exec'))
   })
 
   it('names the invoking account for a LaunchDaemon, never root', () => {
-    const daemon = launchdPlist(spec({ logDir: path.join(home, 'logs') }), { userName: account.name })
-    expect(daemon).toContain(`<string>${account.name}</string>`)
+    const daemon = launchdPlist(spec({ logDir: path.join(home, 'logs') }), { userName: USER })
+    expect(daemon).toContain(`<string>${USER}</string>`)
     expect(daemon).not.toContain('<string>root</string>')
   })
 })

@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { readText, writeFileAtomic } from '../util/fsx.js'
 import type { BootState } from '../shared/contracts.js'
-import type { BootAccount, BootActionResult, BootProviderContext } from './types.js'
+import type { BootAccount, BootActionResult, BootProviderContext, PasswdEntry } from './types.js'
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -45,25 +45,36 @@ export function tempDir(ctx: BootProviderContext): string {
 // The invoking account
 // ---------------------------------------------------------------------------
 
-/** One `/etc/passwd` row. Read directly: every platform this plugin targets has one, and it needs no subprocess. */
-interface PasswdEntry {
-  name: string
-  uid: number
-  home: string
+/**
+ * Parse a passwd-format file. Exported so a test can read a fixture: the only
+ * alternative is asserting against whatever accounts the machine running the
+ * suite happens to have, which is exactly the host dependency this module exists
+ * to remove from unit generation.
+ */
+export function parsePasswd(text: string): PasswdEntry[] {
+  return text
+    .split('\n')
+    .map((line) => {
+      const fields = line.split(':')
+      const uid = Number.parseInt(fields[2] ?? '', 10)
+      return fields.length < 6 || !Number.isFinite(uid) || (fields[0] ?? '').length === 0
+        ? null
+        : { name: fields[0] ?? '', uid, home: fields[5] ?? '' }
+    })
+    .filter((entry): entry is PasswdEntry => entry !== null)
 }
 
+/**
+ * Read the user database: a file read, never a subprocess.
+ *
+ * An empty result is a normal outcome, not a failure — macOS keeps local accounts
+ * in Open Directory and its `/etc/passwd` holds system accounts only. Nothing here
+ * depends on the lookup succeeding: a session name is used as itself, and the
+ * database only supplies the home and confirms a uid.
+ */
 function readPasswd(): PasswdEntry[] {
   try {
-    return fs.readFileSync('/etc/passwd', 'utf8')
-      .split('\n')
-      .map((line) => {
-        const fields = line.split(':')
-        const uid = Number.parseInt(fields[2] ?? '', 10)
-        return fields.length < 6 || !Number.isFinite(uid) || (fields[0] ?? '').length === 0
-          ? null
-          : { name: fields[0] ?? '', uid, home: fields[5] ?? '' }
-      })
-      .filter((entry): entry is PasswdEntry => entry !== null)
+    return parsePasswd(fs.readFileSync('/etc/passwd', 'utf8'))
   }
   catch {
     return []
@@ -95,7 +106,7 @@ function sessionName(env: Record<string, string | undefined>): string | null {
 }
 
 /** The owner of the first of `paths` that exists and is not root, as an account. */
-function ownerAccount(paths: readonly string[] | undefined, passwd: PasswdEntry[]): BootAccount | null {
+function ownerAccount(paths: readonly string[] | undefined, passwd: readonly PasswdEntry[]): BootAccount | null {
   for (const path of paths ?? []) {
     try {
       const uid = fs.statSync(path).uid
@@ -119,6 +130,8 @@ export interface AccountInput {
   uid?: number | null
   /** Paths whose owner names the person a root process's panel belongs to. */
   ownerPaths?: readonly string[]
+  /** The user database to resolve against; defaults to the real one. */
+  passwd?: readonly PasswdEntry[]
   /** Where a refusal or a root-account fallback is said out loud. */
   warn?: (message: string) => void
 }
@@ -145,7 +158,7 @@ export interface AccountInput {
  * for the writers to refuse rather than write it as if it were deliberate.
  */
 export function accountOf(input: AccountInput): BootAccount | null {
-  const passwd = readPasswd()
+  const passwd = input.passwd ?? readPasswd()
   const byUid = (uid: number | null): PasswdEntry | null => uid === null ? null : passwd.find(entry => entry.uid === uid) ?? null
   const byName = (name: string | null): PasswdEntry | null => name === null ? null : passwd.find(entry => entry.name === name) ?? null
 

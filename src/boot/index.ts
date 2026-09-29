@@ -15,9 +15,10 @@ export type {
   BootRunResult,
   BootRunner,
   BootSpec,
+  PasswdEntry,
 } from './types.js'
 
-export { accountOf } from './common.js'
+export { accountOf, parsePasswd } from './common.js'
 export type { AccountInput } from './common.js'
 export { bootProviders, createBootLadder } from './ladder.js'
 export { launchdLabel, launchdPlist } from './launchd.js'
