@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.5.2
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.1...v0.5.2)
+
+### 💅 Refactors
+
+- **workspace:** Pin the managed workspace to `default` ([3a61525](https://github.com/NamesMT/dsh-home-hosted/commit/3a61525))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.5.1
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.5.0...v0.5.1)
