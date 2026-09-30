@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.7.0
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.3...v0.7.0)
+
+### 🚀 Enhancements
+
+- Dsh 0.2.0-rc.2 support, Desktop surface, and server-first identity ([78956a5](https://github.com/NamesMT/dsh-home-hosted/commit/78956a5))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.6.3
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.2...v0.6.3)
