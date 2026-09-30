@@ -1,10 +1,14 @@
 # AGENTS.md
 
-`dsh-home-hosted` is a DeepSeek Harness (dsh) plugin: it runs the `home-hosted` panel from the pinned
-copy it ships, installs the OS entry that starts the panel at boot, and manages the panel's servers.
+`dsh-home-hosted` is a DeepSeek Harness (dsh) plugin: it sets up and manages the servers in a
+`home-hosted` panel — a Gitea, a Jellyfin, anything — from the page or by prompt, using the pinned
+copy of the panel it ships. Managing the `dsh` entry and the OS boot entry is the highlight on top
+of that, not the point of the plugin.
 One package, two halves — host `src/**`, browser `src/client/**` — declared through `dsh.bundle`
-(`cordis.patch.yml`) and `dsh.client`. Depth lives in `docs/DESIGN.md`; read it before touching the
-panel, token, boot, entry or sign-in code, and keep it updated with the decision, not the diff.
+(`cordis.patch.yml`) and `dsh.client`. Depth is split by topic under `docs/`, the way `home-hosted`
+splits its own: `DESIGN.md` (index) · `BOOT.md` · `PANEL.md` · `ENTRIES.md` · `WORKSPACES.md` ·
+`AGENT-TOOLS.md`. Read the file for the area you touch, and keep it updated with the decision, not
+the diff.
 
 ## Commands
 
@@ -27,6 +31,7 @@ service manager, or restart the harness you are running in to "check" something.
 - `src/service.ts` — the orchestrator: panel lifecycle, entries, boot, tokens, servers, dispatch.
 - `src/rpc.ts` — the page's transport, `POST /api/home-hosted` (`RPC_PATH` + `API_BASE`).
 - `src/tools.ts` — the agent tools; `src/settings.ts` — the versioned settings file.
+- `src/util/**` — paths, fs/exec seams, and `surface.ts` (which dsh surface this is: web or Desktop).
 - `src/home-hosted/**` — resolution and version constants, launchers, panel API, panel control, token,
   owned keys, config file, the managed `dsh` entry, the 401 notice.
 - `src/boot/**` — the autostart ladder: one provider per mechanism, plus payload builders and the
@@ -65,6 +70,9 @@ service manager, or restart the harness you are running in to "check" something.
   another asks the user first, then reaches it by editing that panel's config file, running the CLI
   against its state root, or minting a token and using its API — the three ways `FOREIGN_MECHANISMS`
   lists per endpoint, least invasive first.
+- Desktop (`ctx.get('profileContext')?.name === 'desktop'`) starts its own reserved profile, so the
+  harness entry is refused there (`DESKTOP_ENTRY_UNSUPPORTED`) and the page shows it web-only; every
+  other server entry is managed exactly as on web.
 - Boot entries point at a generated stable launcher, never at a pnpm path; the marker proves ownership
   and uninstall/disable refuses an artifact this plugin did not write.
 - The `dsh` row stays a bare `dsh` when the project declares dsh: home-hosted resolves a bare command

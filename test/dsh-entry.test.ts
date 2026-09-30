@@ -358,6 +358,22 @@ describe('repairing an entry that boots a clone directly', () => {
     )).toBeNull()
   })
 
+  it('re-points the interpreter too, so a moved node cannot strand the entry', () => {
+    // The row is written as `command: process.execPath` + the stable launcher. A
+    // node upgrade moves that path (fnm/nvm/volta/homebrew all version it), and a
+    // comparison that only looked at the script left the row running a path that
+    // no longer exists — with nothing to heal it, since no other code path
+    // rewrites an existing row's command.
+    expect(launcherRepair(
+      { command: '/old/node-versions/v24.0.0/bin/node', args: ['/state/bin/dsh.mjs', 'web'] },
+      launch('/state/bin/dsh.mjs', '/opt/dsh-clone/lib/bin.js'),
+      { ownedCommand: true },
+    )).toEqual({
+      command: process.execPath,
+      args: ['/state/bin/dsh.mjs', 'web'],
+    })
+  })
+
   it('never touches an entry that runs a different dsh', () => {
     expect(launcherRepair(
       { command: process.execPath, args: ['/other/dsh/lib/bin.js', 'web'] },

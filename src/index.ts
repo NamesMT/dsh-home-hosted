@@ -18,6 +18,7 @@ import { SettingsStore } from './settings.js'
 import { registerAgentTools } from './tools.js'
 import { ensureDir } from './util/fsx.js'
 import { pluginStateDir, resolveHomeHostedHome } from './util/paths.js'
+import { readSurface } from './util/surface.js'
 
 export const name = 'dsh-home-hosted'
 
@@ -48,6 +49,7 @@ export function apply(ctx: Context, config?: ConfigShape): void {
     homeHostedCommand: resolved.homeHostedCommand,
     defaultEntryId: resolved.defaultEntryId,
     instanceRoots: resolved.instanceRoots,
+    surface: readSurface(ctx),
     settings,
   })
 

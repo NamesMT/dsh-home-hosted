@@ -95,10 +95,15 @@ export interface HomeHostedFacts {
 
 /** A deterministic environment for a boot-time entry, with absolute values. */
 export function homeHostedEnv(facts: HomeHostedFacts, launch: CliLaunch, extra: Record<string, string> = {}): Record<string, string> {
+  // The entry's own environment is built from the environment its account was
+  // resolved from, never from this process's: under `sudo` those are two
+  // different people, and reading `process.env` here is how the `User=` line and
+  // the `HOME=` line came to disagree.
+  const source = facts.env ?? process.env
   const dirs = [
     launch.shimPath === null ? null : path.dirname(launch.shimPath),
     path.dirname(process.execPath),
-    ...(process.env.PATH ?? '').split(path.delimiter),
+    ...(source.PATH ?? '').split(path.delimiter),
     '/usr/local/bin',
     '/usr/bin',
     '/bin',
@@ -113,7 +118,7 @@ export function homeHostedEnv(facts: HomeHostedFacts, launch: CliLaunch, extra: 
 
   const env: Record<string, string> = {
     PATH: pathValue,
-    HOME: process.env.HOME ?? process.env.USERPROFILE ?? '',
+    HOME: source.HOME ?? source.USERPROFILE ?? '',
     HHOSTED_HOME: facts.home,
     ...extra,
   }

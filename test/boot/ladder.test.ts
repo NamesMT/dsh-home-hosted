@@ -305,6 +305,42 @@ describe('ladder activation and switching', () => {
     expect((await ladder.status(spec(), 'xdg-autostart')).state).toBe('enabled-running')
   })
 
+  it('stops the mechanism being left, never the one being installed', async () => {
+    // The dangerous pair: the panel runs under the *user* unit today, and the
+    // entry is becoming a *system* unit (sudo or linger appeared). `install()`
+    // already ran, so the target reads as installed too — which is why the
+    // previous mechanism has to be named rather than inferred. Stopping the target
+    // is a no-op, and the user unit's `Restart=always` revives the panel the
+    // moment the CLI's `down` returns, racing the entry about to start one.
+    const runner = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-system-running'))
+        return { code: 0, stdout: 'running\n' }
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 0 }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=yes\n' }
+      return { code: 0 }
+    })
+    const ladder = createBootLadder({
+      platform: 'linux',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+    await ladder.install(spec(), 'systemd-user')
+    await ladder.install(spec(), 'systemd-system')
+
+    const plan = await ladder.activate(spec(), 'systemd-system', 'systemd-user')
+    expect(plan).not.toBeNull()
+    expect(plan?.commands).toEqual([['sudo', '-n', 'systemctl', 'restart', 'home-hosted.service']])
+    // The mechanism being left stops the panel, not the one being installed.
+    expect(plan?.stop).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+  })
+
   it('carries the other mechanisms into the activation plan for retirement', async () => {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-system-running'))
@@ -331,10 +367,15 @@ describe('ladder activation and switching', () => {
     await ladder.install(spec(), 'xdg-autostart')
     await ladder.install(spec(), 'systemd-user')
 
-    const plan = await ladder.activate(spec(), 'systemd-user')
+    // The panel is running under xdg-autostart (installed first); systemd-user is
+    // the entry being installed. xdg-autostart has no way to stop a running panel,
+    // so the detach is empty — the point is that it is the *previous* mechanism
+    // that was asked, not systemd-user, which would have reported a stop that
+    // never happened.
+    const plan = await ladder.activate(spec(), 'systemd-user', 'xdg-autostart')
     expect(plan).not.toBeNull()
     expect(plan?.commands).toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
-    expect(plan?.stop).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+    expect(plan?.stop).toEqual([])
     // Retirement rides in the same plan: only the detached helper may remove an
     // entry, and only after the panel is down and the new one has started.
     expect(plan?.retired).toEqual(['xdg-autostart'])

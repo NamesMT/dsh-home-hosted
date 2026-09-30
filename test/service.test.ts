@@ -90,6 +90,8 @@ async function harness(options: {
   spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
   /** The project the managed row belongs to; defaults to this process's cwd. */
   projectDir?: string
+  /** The dsh surface this process runs in; defaults to `web`. */
+  surface?: 'web' | 'desktop'
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -123,6 +125,7 @@ async function harness(options: {
     homeHostedCommand: fakeCli,
     defaultEntryId: 'dsh',
     instanceRoots: otherPanels,
+    surface: options.surface,
     // Pinned: the machine's own `$HHOSTED_HOME` and home directory must not
     // leak into a test.
     envHome: null,
@@ -561,6 +564,86 @@ describe('home-hosted service', () => {
     expect(panel.requests.some(request => request.method === 'DELETE')).toBe(false)
     expect(panel.servers[0]?.config.autostart).toBe(false)
     expect(panel.servers[0]?.config.onPortConflict).toBe('block')
+  })
+})
+
+describe('the dsh Desktop client', () => {
+  it('reports the surface, and still manages ordinary servers', async () => {
+    const panel = await withPanel()
+    const { service, home } = await harness({ panel, surface: 'desktop' })
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      meta: { writtenBy: '0.6.6' },
+      servers: [{ id: 'gitea', command: 'gitea', autostart: true }],
+    })
+
+    const status = await service.status()
+    expect(status.surface).toBe('desktop')
+    // The harness entry is reported, but never as something this surface manages.
+    expect(status.entries.map(entry => entry.intent.id)).toEqual(['dsh'])
+    expect(status.entries[0]?.managed).toBe(false)
+
+    // Server management is the point of the plugin and is untouched by Desktop.
+    const created = await service.call('servers.create', {
+      workspace: DEFAULT_WORKSPACE,
+      entry: { id: 'jellyfin', command: 'jellyfin', autostart: true },
+    }) as { id: string }
+    expect(created.id).toBe('jellyfin')
+  })
+
+  it('refuses to manage the harness entry, and says the entry is web only', async () => {
+    const { service, settings } = await harness({ surface: 'desktop' })
+
+    await expect(service.call('entries.apply', { intents: [{ id: 'dsh', autostart: true }] }))
+      .rejects.toMatchObject({ code: 'DESKTOP_ENTRY_UNSUPPORTED' })
+    await expect(service.call('entries.remove', { id: 'dsh' }))
+      .rejects.toMatchObject({ code: 'DESKTOP_ENTRY_UNSUPPORTED' })
+
+    // Nothing was recorded, so the page cannot show a toggle that lied.
+    expect(settings.get().manageDsh).toBe(false)
+  })
+
+  it('refuses a paused harness intent too, so Desktop never writes the entry at all', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, surface: 'desktop' })
+    settings.update({ manageDsh: true, entries: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true, persistent: true }] })
+
+    // Turning the toggle off is still a write of the harness entry: paused is not
+    // the same as absent, and a row written here could only crash-loop.
+    await expect(service.call('entries.apply', { intents: [{ id: 'dsh', autostart: false }] }))
+      .rejects.toMatchObject({ code: 'DESKTOP_ENTRY_UNSUPPORTED' })
+    await expect(service.call('entries.remove', { id: 'dsh' }))
+      .rejects.toMatchObject({ code: 'DESKTOP_ENTRY_UNSUPPORTED' })
+
+    expect(panel.servers.some(server => server.id === 'dsh')).toBe(false)
+    expect(panel.requests.some(request => request.method === 'POST' || request.method === 'PATCH')).toBe(false)
+    expect(settings.get().manageDsh).toBe(true)
+  })
+
+  it('leaves an ordinary entry alone, so only the harness entry is surface-bound', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, surface: 'desktop' })
+    await service.call('servers.create', {
+      workspace: DEFAULT_WORKSPACE,
+      entry: { id: 'gitea', command: 'gitea', autostart: false, onPortConflict: 'block' },
+    })
+
+    await service.call('entries.apply', { intents: [{ id: 'gitea', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true }] })
+
+    expect(settings.intentFor('gitea').autostart).toBe(true)
+    expect(panel.servers.find(server => server.id === 'gitea')?.config.onPortConflict).toBe('kill')
+  })
+
+  it('never puts a deleted harness entry back, because Desktop starts its own profile', async () => {
+    const panel = await withPanel()
+    const { service, settings } = await harness({ panel, surface: 'desktop' })
+    settings.update({ manageDsh: true, entries: [{ id: 'dsh', autostart: true, onPortConflict: 'kill', stopKillPortHolders: true, persistent: true }] })
+
+    await service.reconcile()
+    await service.status()
+
+    // The intent survives, but no create call was ever made: `dsh --profile
+    // desktop` is refused by the CLI, so a row here could only crash-loop.
+    expect(panel.requests.some(request => request.method === 'POST')).toBe(false)
   })
 })
 

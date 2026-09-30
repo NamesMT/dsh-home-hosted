@@ -311,8 +311,15 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
      * panel, and the plugin with it, before the new entry was ever told to
      * start. So both halves are handed to one caller that runs them in order,
      * detached. Nothing is stopped here.
+     *
+     * `from` is the mechanism being left, which the caller knows and this cannot
+     * infer: `install()` has already run, so the *target* reads as installed too
+     * and the mechanism that is actually holding the panel is no longer the first
+     * installed one. Without it there is nothing to detach — stopping the target
+     * would be a no-op while the previous entry's restart policy revived the
+     * panel the moment the CLI's `down` returned.
      */
-    async activate(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActivation | null> {
+    async activate(spec: BootSpec, mechanism?: BootMechanism, from?: BootMechanism | null): Promise<BootActivation | null> {
       const status = await buildStatus(spec, mechanism)
       const target = pick(status, mechanism)
       if (!target)
@@ -329,9 +336,9 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
       // The mechanism we are leaving has to stop the panel itself: its own
       // restart policy would bring the panel back the moment the CLI's `down`
       // returns, racing the entry that is about to start one.
-      const supervised = status.mechanism !== null
-        ? providers.find(provider => provider.mechanism === status.mechanism)
-        : others.find(provider => provider.mechanism !== target.mechanism)
+      const supervised = from === undefined || from === null
+        ? undefined
+        : providers.find(provider => provider.mechanism === from)
       const stop = supervised === undefined ? [] : await safeStop(supervised, spec)
 
       return {

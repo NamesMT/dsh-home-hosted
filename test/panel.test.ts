@@ -87,6 +87,25 @@ describe('panel client', () => {
     await expect(client.listServers()).rejects.toMatchObject({ code: 'PANEL_BAD_RESPONSE', status: 200 })
   })
 
+  it('keeps the panel\'s own reason when an action fails', async () => {
+    // home-hosted answers a failed start/stop/restart with `{ ok: false, error }`
+    // on a 409 (src/helpers/action-result.ts). Without the fallback the page shows
+    // `the panel answered 409` and the reason a person needs is gone.
+    const server = http.createServer((_request, response) => {
+      response.writeHead(409, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ ok: false, error: 'server "gitea" is disabled' }))
+    })
+    extra.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address() as AddressInfo
+    const client = new PanelClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: 'secret', timeoutMs: 2000 })
+
+    await expect(client.startServer('gitea')).rejects.toMatchObject({
+      message: 'server "gitea" is disabled',
+      status: 409,
+    })
+  })
+
   /**
    * The panel names a server's workspace `workspaceId`; the plugin's view calls it
    * `workspace`. A live panel is the only place that spelling shows up, so it is

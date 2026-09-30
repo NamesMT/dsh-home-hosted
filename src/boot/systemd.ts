@@ -387,14 +387,18 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
     /**
      * `restart` stops the panel and starts it again under the unit, so nothing
      * else may stop it first: stopping it from outside would race this call.
-     * `is-active` is the proof the unit is really there, before anything is
-     * killed.
+     *
+     * The proof is that the entry is *installed and enabled*, never that it is
+     * already active: `enable --now` just started it while the panel still holds
+     * `run.json`, and home-hosted refuses a second panel (`already running (pid
+     * …)`), so the unit is `activating`/`failed` at exactly the moment this plan
+     * runs. Requiring `is-active` therefore refuses every handover.
      */
     async activate(spec: BootSpec): Promise<BootStart> {
       const unit = unitOf(spec)
       return {
         commands: [['systemctl', '--user', 'restart', unit]],
-        requires: { commands: [['systemctl', '--user', 'is-active', unit]], files: [] },
+        requires: { commands: [['systemctl', '--user', 'is-enabled', unit]], files: [pathOf(spec)] },
         display: [shellCommand('systemctl', ['--user', 'restart', unit])],
       }
     },
@@ -647,13 +651,16 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
      * `restart` stops the panel and starts it again under the unit, so nothing
      * else may stop it first. A system unit needs root; `sudo -n` never prompts,
      * which is the only elevation a detached helper can get.
+     *
+     * Installed-and-enabled is the proof, not active — see the user unit's
+     * `activate` for why a freshly enabled unit can never be active here.
      */
     async activate(spec: BootSpec): Promise<BootStart> {
       const unit = unitOf(spec)
       const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
       return {
         commands: [elevate(['systemctl', 'restart', unit])],
-        requires: { commands: [elevate(['systemctl', 'is-active', unit])], files: [] },
+        requires: { commands: [elevate(['systemctl', 'is-enabled', unit])], files: [pathOf(spec)] },
         display: [shellCommand('sudo', ['systemctl', 'restart', unit])],
       }
     },

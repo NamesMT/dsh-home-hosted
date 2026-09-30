@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildDshLauncherSource,
@@ -457,5 +458,97 @@ describe('dsh launcher', () => {
     expect(result.stderr.trim().split('\n')).toHaveLength(1)
     expect(result.stderr).toContain('no dsh entry found')
     expect(result.stderr).toContain('Reinstall dsh')
+  })
+})
+
+
+/**
+ * The boot entry's unit carries `KillMode=process`, so a stop signals the unit's
+ * main process — the generated launcher — and nothing else. A `spawnSync` launcher
+ * is blocked in that syscall when the signal lands: it cannot run a handler, the
+ * signal kills it, and the panel (with every server it supervises) is orphaned while
+ * the unit exits and `Restart=` loops on "already running".
+ *
+ * So this runs the *generated* launcher — the artifact a boot entry really executes —
+ * as the panel's parent, then signals it the way systemd does.
+ */
+describe('generated launcher signal handling', () => {
+  const alive = (pid: number): boolean => {
+    try { process.kill(pid, 0); return true }
+    catch { return false }
+  }
+
+  /** A fake pinned CLI that doubles as the panel the launcher starts. */
+  function pinnedPanel(profileDir: string): string {
+    const pkg = path.join(profileDir, 'node_modules', '.pnpm', 'home-hosted@0.6.1_zod@4.6.5', 'node_modules', 'home-hosted')
+    writeJsonFile(path.join(pkg, 'package.json'), { name: 'home-hosted', version: '0.6.1', bin: { 'home-hosted': 'bin/home-hosted.mjs' } })
+    fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true })
+    const file = path.join(pkg, 'bin', 'home-hosted.mjs')
+    fs.writeFileSync(file, [
+      "import fs from 'node:fs'",
+      "if (process.argv.includes('--version')) { console.log('0.6.1'); process.exit(0) }",
+      "fs.writeFileSync('panel.pid', String(process.pid))",
+      "fs.writeFileSync('panel.up', '1')",
+      "process.on('SIGTERM', () => { fs.writeFileSync('panel.signal', 'SIGTERM'); process.exit(0) })",
+      'setInterval(() => {}, 1000)',
+      '',
+    ].join('\n'), 'utf8')
+    return file
+  }
+
+  interface Stopped {
+    forwarded: boolean
+    panelAlive: boolean
+    launcherExited: boolean
+  }
+
+  /** Run the generated launcher, then signal only its pid — systemd's `KillMode=process`. */
+  async function stopSignalsLauncherOnly(h: Harness): Promise<Stopped> {
+    const launcher = launcherPath(h.state)
+    const child = spawn(launcher, [], { cwd: h.profile, stdio: 'ignore' })
+    let exited = false
+    child.on('exit', () => { exited = true })
+
+    for (let i = 0; i < 100 && !fs.existsSync(path.join(h.profile, 'panel.up')); i += 1)
+      await new Promise(resolve => setTimeout(resolve, 50))
+    await new Promise(resolve => setTimeout(resolve, 300))
+
+    const pidFile = path.join(h.profile, 'panel.pid')
+    const panelPid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0
+    process.kill(child.pid!, 'SIGTERM')
+    await new Promise(resolve => setTimeout(resolve, 1500))
+
+    const result = {
+      forwarded: fs.existsSync(path.join(h.profile, 'panel.signal')),
+      panelAlive: panelPid !== 0 && alive(panelPid),
+      launcherExited: exited,
+    }
+    try { if (panelPid !== 0) process.kill(panelPid, 'SIGKILL') } catch {}
+    try { child.kill('SIGKILL') } catch {}
+    return result
+  }
+
+  it('hands a stop signal to the panel and leaves nothing orphaned', async () => {
+    const h = harness()
+    pinnedPanel(h.profile)
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, resolvedVersion: '0.6.1', minVersion: '0.4.1' })
+
+    const result = await stopSignalsLauncherOnly(h)
+    // The panel saw the stop, and the launcher that systemd signalled is gone.
+    expect(result.forwarded).toBe(true)
+    expect(result.panelAlive).toBe(false)
+    expect(result.launcherExited).toBe(true)
+  }, 30_000)
+
+  it('spawns rather than blocking, in every launcher it writes', () => {
+    const h = harness()
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, resolvedVersion: '0.6.1', minVersion: '0.4.1' })
+    expect(fs.readFileSync(launcherPath(h.state), 'utf8')).not.toContain('spawnSync')
+    // The dsh launcher ships as both .mjs and .cjs; both must forward.
+    for (const entryExtension of ['.mjs', '.cjs']) {
+      const source = buildDshLauncherSource({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, entryExtension })
+      expect(source).not.toContain('spawnSync')
+      expect(source).toContain('SIGTERM')
+    }
   })
 })

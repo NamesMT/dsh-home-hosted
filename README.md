@@ -2,18 +2,21 @@
 
 # 📌 dsh-home-hosted
 
-**Your whole home stack, up after every reboot — your `dsh` web server included.**
+**Prompt your servers into existence — keep them running and manage them via dsh / `home-hosted` panel UI.**
+
+<sub>Your whole home stack, up after every reboot — your `dsh` web included.</sub>
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/dsh) plugin for
 [home-hosted](https://github.com/NamesMT/home-hosted), the panel that supervises your services.
-Declare the servers once; this page manages the panel, the boot entry and the entries.
+Ask for a Gitea, a Jellyfin, an FTP server; `dsh-home-hosted` sets up the entries and manages them
+— panel, ports, restarts and boot autostart included.
 <sub>Nothing is installed or started until you say so.</sub>
 
 [![npm](https://img.shields.io/npm/v/dsh-home-hosted?label=npm&color=blue)](https://www.npmjs.com/package/dsh-home-hosted)
 [![CI](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml/badge.svg)](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-home-hosted?color=green)](./LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![dsh](https://img.shields.io/badge/dsh-%3E%3D0.1.7--rc.2-5b21b6)](https://github.com/deepseek-ai/dsh)
+[![dsh](https://img.shields.io/badge/dsh-%3E%3D0.2.0--rc.1-5b21b6)](https://github.com/deepseek-ai/dsh)
 
 [🚀 Quick start](#-quick-start) · [🎛️ What the plugin does](#-what-the-plugin-does) · [🤖 Agent tools](#-agent-tools) · [🧩 Depth](#-depth)
 
@@ -35,52 +38,59 @@ Declare the servers once; this page manages the panel, the boot entry and the en
 dsh plugin --profile web add dsh-home-hosted
 ```
 
-Open **Settings → Home Hosted**, turn on **Manage dsh**, and enable autostart.
-<sub>Reboot once; `dsh` comes back without you touching anything.</sub>
+Open **Settings → Home Hosted** and add your servers — or just ask the agent:
+
+> add a Gitea on 3000, and a Jellyfin on 8096
+
+Then, optionally, turn on **Manage dsh** and **Autostart**, so the panel — and everything in it —
+comes back after a reboot.
 
 ## 🤔 Why
 
-A panel restart shouldn't kill a prompt mid-flight, and a reboot shouldn't cost you an SSH session.
+Ever tried setting up a media server, a Gitea and a few more yourself — then keeping them all
+managed?
+
+`dsh-home-hosted` uses [home-hosted](https://github.com/NamesMT/home-hosted) to do it: prompt for
+the servers you want, let it write and configure the entries, and manage them all from dsh or the
+panel — ports, health, restarts and autostart included.
 
 ```text
-                 reboot
-                   │
-                   ▼
-  OS boot entry ──▶ home-hosted panel ──▶ ┌─────────────┐
-  systemd ·                    │          │ dsh web ✓   │
-   launchd ·                   │          └─────────────┘
-    XDG · Run key              │
-                               ├────────▶ ┌─────────────┐
-                               │          │ docker      │
-                               │          │ compose     │
-                               │          └─────────────┘
-                               │
-                               └────────▶ ┌─────────────┐
-                                          │ postgres    │
-                                          │ :5432       │
-                                          └─────────────┘
+   you ──▶ "add a Gitea, a Jellyfin, a cache…"
+             │
+             ▼
+   dsh-home-hosted ──▶ home-hosted panel ──▶ ┌──────────────┐
+     page · agent              │             │ gitea  :3000 │
+                               │             └──────────────┘
+                               ├──────────▶ ┌──────────────┐
+                               │             │ jellyfin     │
+                               │             │ :8096        │
+                               │             └──────────────┘
+                               └──────────▶ ┌──────────────┐
+                                             │ postgres     │
+                                             │ :5432        │
+                                             └──────────────┘
+
+   ★ OS boot entry ──▶ the panel comes back, and so does everything in it
+     systemd · launchd · XDG · Run key
 ```
 
 **`dsh` is one entry in the panel, not the whole product.** The panel is the supervisor: it starts
-each entry, watches it, restarts what dies and reclaims its port. Add your compose stack, your
-database, your bot — manage them from the page, or hand the entry ids to an agent.
+each entry, watches it, restarts what dies and reclaims its port. Add your Gitea, your Jellyfin,
+your compose stack, your database — manage them from the page, or hand the entry ids to an agent.
 
-A plugin cannot run at boot, so this one writes the OS entry while dsh runs and the OS takes over.
-One managed entry (`dsh`) is kept alive under home-hosted's nanny, so a panel restart leaves it
-running.
+Managing `dsh` itself is the bonus: the entry that keeps your harness up is a highlight on top of
+the server management, not the thing this plugin is.
 
 ## 🎛️ What the plugin does
 
 | | |
 |---|---|
-| 🚀 **Boot autostart** | Installs, verifies and removes the OS entry. Opt in per machine. |
-| 🛡️ **Survives a panel restart** | The managed entry runs under home-hosted's nanny, so restarting the panel leaves it running. |
-| 📦 **Ships its own panel** | The pinned `home-hosted` is a dependency, so boot runs the version this plugin is tested against. |
-| 🖥️ **Server control** | Add, edit, start, stop and restart entries — written through the panel's API, so nothing restarts behind your back. |
-| 🗂 **Workspaces** | The panel manages one workspace for the `dsh` entry; the page and the agent tools reach **every** workspace it serves, counts included. |
+| 🖥️ **Servers, set up by prompt** | Add, edit, start, stop and restart entries — Gitea, Jellyfin, FTP, a compose stack. Written through the panel's API, so nothing restarts behind your back. |
+| 🏠 **The whole home-hosted panel** | Not just servers: [BYOU](https://github.com/NamesMT/home-hosted#-bring-your-own-ui-byou) custom UIs, [workspaces](https://github.com/NamesMT/home-hosted#-workspaces), a [reverse proxy](https://github.com/NamesMT/home-hosted/blob/main/docs/REVERSE_PROXY.md) with automatic HTTPS, [backups](https://github.com/NamesMT/home-hosted#-backups) (zip or AES-256), [notifications](https://github.com/NamesMT/home-hosted/blob/main/docs/NOTIFICATIONS.md), [dynamic DNS](https://github.com/NamesMT/home-hosted/blob/main/docs/DDNS.md), health probes, live logs and host vitals. |
+| 🤖 **Agent tools** | On by default, session permissions still gate every write. |
+| 🚀 **Boot autostart** | *Highlight:* installs, verifies and removes the OS entry, so the panel starts at boot. Opt in per machine. |
 | 🧭 **Token warnings that mean something** | A missing or refused API token is called out on the page, with one click to mint a working one. |
 | 🪟 **Knows the other panels** | Several panels on one machine? The agent is told which one this plugin manages, and asks before touching another. |
-| 🤖 **Agent tools** | On by default, session permissions still gate every write. |
 
 ## 🤖 Agent tools
 
@@ -142,12 +152,25 @@ re-finds your build at boot, so a rebuild, a moved checkout or a fresh profile d
 </details>
 
 <details>
+<summary><b>dsh Desktop</b></summary>
+
+The Desktop client is supported, with one exception. Everything server-side works as it does in the
+browser: the page, the agent tools, workspaces, the panel, and boot autostart.
+
+**Manage dsh** is web-only and shown disabled there, because Desktop starts its own reserved profile
+in Electron — it is never one of the panel's server entries. (`dsh --profile desktop` is refused by
+the CLI, so a row for it could only crash-loop.) Server entries of every other kind are unaffected.
+
+</details>
+
+<details>
 <summary><b>Managed entry and port policy</b></summary>
 
 One entry (`dsh`), one toggle: the panel keeps it alive, restarts it and reclaims its port. A
 detached restart is recognised on macOS and Linux (`follow`); Windows cannot prove identity through
 a `.cmd` shim, so it uses `onPortConflict: kill`. The plugin pins home-hosted 0.7+, so every key it
 writes is one that panel parses.
+<sub>Web only — see **dsh Desktop** above.</sub>
 
 </details>
 

@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { BootMechanism, BootStatus, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
+import type { BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
 import { FOREIGN_MECHANISMS, isOnPortConflict, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
@@ -78,7 +78,7 @@ export interface BootLadderLike {
   status: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootStatus>
   install: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
   uninstall: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
-  activate: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootActivation | null>
+  activate: (spec: BootSpec, mechanism?: BootMechanism, from?: BootMechanism | null) => Promise<BootActivation | null>
 }
 
 export class HomeHostedError extends Error {
@@ -104,6 +104,11 @@ export interface HomeHostedServiceOptions {
   stateDir: string
   homeHostedCommand?: string
   defaultEntryId: string
+  /**
+   * The dsh surface this host runs in. Desktop boots its reserved profile
+   * itself, so the harness is never one of the panel's entries there.
+   */
+  surface?: DshSurface
   /** Other home-hosted state roots to report as panels; discovery finds the rest. */
   instanceRoots?: readonly string[]
   /** Test seam: this process's `$HHOSTED_HOME`; defaults to the environment. */
@@ -860,10 +865,38 @@ export class HomeHostedService extends Service {
     return runtime !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url))
   }
 
+  /**
+   * The refusal a harness-entry mutation gets in Desktop, or null when the
+   * surface can manage one. Desktop boots its own reserved profile, so there is
+   * nothing for a server entry to start: `dsh --profile desktop` is refused by
+   * the CLI, and dsh has no separate Desktop binary — Desktop *is* the web
+   * surface, carried in Electron. A row this plugin wrote there could only ever
+   * crash-loop. Server management is untouched.
+   */
+  private desktopEntryRefusal(): HomeHostedError | null {
+    if (this.options.surface !== 'desktop')
+      return null
+    return new HomeHostedError(
+      `the "${this.options.defaultEntryId}" entry is available for dsh web only, and this is the dsh Desktop client. `
+      + 'Desktop starts its own profile, so it is never one of the panel\'s server entries; server management is unaffected.',
+      'DESKTOP_ENTRY_UNSUPPORTED',
+    )
+  }
+
   private async applyIntents(intents: EntryIntent[]): Promise<ManagedEntryStatus[]> {
     for (const raw of intents) {
       if (!ENTRY_ID_PATTERN.test(raw.id))
         throw new HomeHostedError(`"${raw.id}" is not a valid server id`, 'INVALID_ID')
+      // Only the harness entry is surface-bound; every other id is an ordinary
+      // server, which Desktop manages like any other surface. A *paused* intent
+      // is still a write of that entry, so it is refused here too: leaving it
+      // through would put the crash-looping row the surface exists to prevent
+      // into the panel.
+      if (raw.id === this.options.defaultEntryId) {
+        const refusal = this.desktopEntryRefusal()
+        if (refusal !== null)
+          throw refusal
+      }
       const requested: unknown = raw.onPortConflict
       if (requested !== undefined && requested !== null && !isOnPortConflict(requested))
         throw new HomeHostedError(
@@ -899,6 +932,11 @@ export class HomeHostedService extends Service {
    * supervises stops that process — which may be this session.
    */
   private async removeManagedEntry(id: string): Promise<ManagedEntryStatus[]> {
+    if (id === this.options.defaultEntryId) {
+      const refusal = this.desktopEntryRefusal()
+      if (refusal !== null)
+        throw refusal
+    }
     const snapshots = this.snapshots()
     const snapshot = snapshots[id]
     const adopted = snapshot !== undefined && Object.keys(snapshot).some(key => key !== 'id')
@@ -1023,6 +1061,11 @@ export class HomeHostedService extends Service {
   }
 
   private async restoreEntry(id: string): Promise<ManagedEntryStatus[]> {
+    if (id === this.options.defaultEntryId) {
+      const refusal = this.desktopEntryRefusal()
+      if (refusal !== null)
+        throw refusal
+    }
     const live = (await this.liveEntries()).get(id) ?? null
     if (live === null)
       throw new HomeHostedError(`no server "${id}" exists`, 'ENTRY_MISSING')
@@ -1258,7 +1301,7 @@ export class HomeHostedService extends Service {
     panel: PanelStatus,
     previousMechanism: BootMechanism | null,
   ): Promise<{ detail: string | null, commands: string[], stateDir: string | null, plan: ActivationPlan | null, display: string[] }> {
-    const activation = await this.ladder().activate(spec, mechanism)
+    const activation = await this.ladder().activate(spec, mechanism, previousMechanism)
     if (activation === null) {
       return {
         detail: panel.reachable
@@ -1464,6 +1507,13 @@ export class HomeHostedService extends Service {
    * an explicit click or an approved tool call, not as a side effect of startup.
    */
   async reconcile(): Promise<void> {
+    // Desktop boots its own profile, so there is no harness entry to put back or
+    // re-point. The panel's own autostart is a separate thing and still applies.
+    if (this.options.surface === 'desktop') {
+      await this.repairBootEntry()
+      await this.migrateBootEntryName()
+      return
+    }
     // A managed entry that someone deleted (by mistake, from the panel or by hand)
     // stays "managed" in settings with nothing to manage, which is the state the
     // page reports as a missing entry. Recreate it — the toggle is the intent.
@@ -1508,6 +1558,8 @@ export class HomeHostedService extends Service {
   private async ensureManagedEntry(): Promise<void> {
     const { settings } = this.options
     const id = this.options.defaultEntryId
+    if (this.options.surface === 'desktop')
+      return
     if (!settings.get().manageDsh || !settings.intentFor(id).autostart)
       return
     // Claim the attempt before the first await, so two status calls racing each
@@ -1537,6 +1589,8 @@ export class HomeHostedService extends Service {
    */
   private async repairManagedCommand(): Promise<void> {
     const id = this.options.defaultEntryId
+    if (this.options.surface === 'desktop')
+      return
     if (!this.options.settings.get().manageDsh || !this.options.settings.intentFor(id).autostart)
       return
     const now = Date.now()
@@ -1595,8 +1649,17 @@ export class HomeHostedService extends Service {
 
   async status(refresh = false): Promise<HomeHostedStatus> {
     // Resolve the client first: enrolling a token changes which write path is
-    // available, and the page should see the state after that, not before.
-    const client = await this.tryClient()
+    // available, and the page should see the state after that, not before. A
+    // failure here is not a failed read — the page polls this, and a mistyped
+    // `homeHostedCommand` must degrade to the config file rather than blank it.
+    let client: PanelClient | null = null
+    let clientError: string | null = null
+    try {
+      client = await this.tryClient()
+    }
+    catch (error) {
+      clientError = error instanceof Error ? error.message : String(error)
+    }
     const panel = await this.panelStatus()
     const { resolution, launcher, launcherVersion } = await this.cli()
     const cliDetail = resolution.status.detail
@@ -1623,7 +1686,7 @@ export class HomeHostedService extends Service {
     }
     else {
       if (panel.reachable)
-        lastError = panel.detail
+        lastError = clientError ?? panel.detail
       // No client: the workspace's own file is still the best available truth,
       // and it is what the `source: 'file'` counts are read from.
       const read = this.fileServers(this.options.home, this.managedWorkspace())
@@ -1634,6 +1697,7 @@ export class HomeHostedService extends Service {
 
     return {
       defaultEntryId: this.options.defaultEntryId,
+      surface: this.options.surface ?? 'web',
       workspace: this.managedWorkspace(),
       workspaces: await this.workspaceSummaries(this.options.home, false).catch(() => []),
       legacyRoot: isLegacyRoot(this.options.home),

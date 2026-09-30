@@ -98,8 +98,13 @@ export class PanelClient {
     }
 
     if (!response.ok) {
-      const record = parsed as { message?: unknown, code?: unknown, detail?: unknown } | null
-      const message = typeof record?.message === 'string' ? record.message : `the panel answered ${response.status}`
+      const record = parsed as { message?: unknown, error?: unknown, code?: unknown, detail?: unknown } | null
+      // The panel's error envelope is `{ message, code }` for a refusal and
+      // `{ ok: false, error }` for a failed server action — losing the second
+      // spelling would replace the reason a person needs with the status code.
+      const message = typeof record?.message === 'string'
+        ? record.message
+        : typeof record?.error === 'string' ? record.error : `the panel answered ${response.status}`
       const code = typeof record?.code === 'string' ? record.code : 'PANEL_ERROR'
       throw new PanelError(message, code, response.status, record?.detail)
     }

@@ -52,6 +52,28 @@ export function stopNoteFor(envelope: Envelope<unknown>, t: TranslateFn): string
   return (envelope.value as { detail?: string } | null)?.detail || t('panelStopped')
 }
 
+/**
+ * The note a start/replace attempt leaves behind.
+ *
+ * The host answers a *successful* envelope whose payload is
+ * `PanelControlResult { ok: false, detail }` — a CLI that exited non-zero, or a
+ * helper that never spawned. Reading only `envelope.ok` would let the button
+ * return in silence, which is exactly the failure this exists to surface.
+ */
+export function controlNoteFor(
+  envelope: Envelope<unknown>,
+  t: TranslateFn,
+  action: 'start' | 'replace',
+): string | null {
+  const failed = action === 'start' ? 'panelStartFailed' : 'panelReplaceFailed'
+  if (!envelope.ok)
+    return t(failed, { message: envelope.error.message })
+  const value = envelope.value as { ok?: boolean, detail?: string } | null | undefined
+  if (value?.ok === false)
+    return t(failed, { message: value.detail ?? '' })
+  return value?.detail && value.detail.length > 0 ? value.detail : null
+}
+
 /** Draft-then-commit numeric field: empty means `null`, invalid reverts. */
 function PortField({ value, label, hint, invalidLabel, placeholder, disabled, onChange }: {
   value: number | null
@@ -109,6 +131,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
   const [tokenNote, setTokenNote] = useState<string | null>(null)
   const [confirmingStop, setConfirmingStop] = useState(false)
   const [stopNote, setStopNote] = useState<string | null>(null)
+  const [controlNote, setControlNote] = useState<string | null>(null)
 
   const tokenWarning = tokenWarningKey(panel)
 
@@ -129,13 +152,30 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
 
   const installGlobal = async (): Promise<void> => {
     const envelope = await run('cli.installGlobal', () => rpc('cli.installGlobal', {}))
-    if (!envelope.ok) return
-    const value = envelope.value as { output?: string } | null
-    setInstallOutput(typeof value?.output === 'string' ? value.output : null)
+    if (!envelope.ok) {
+      setInstallOutput(t('panelInstallFailed', { message: envelope.error.message }))
+      return
+    }
+    const value = envelope.value as { ok?: boolean, detail?: string, output?: string } | null
+    // The installer's own output is the useful text; when it never ran there is
+    // none, so the host's detail is what says why.
+    if (value?.ok === false)
+      setInstallOutput(value.output && value.output.length > 0 ? value.output : t('panelInstallFailed', { message: value.detail ?? '' }))
+    else
+      setInstallOutput(typeof value?.output === 'string' ? value.output : null)
   }
 
   const regenerate = async (): Promise<void> => {
     setTokenNote(reclaimNote(await run('panel.reclaimToken', () => rpc('panel.reclaimToken', {})), t))
+  }
+
+  const startPanel = async (): Promise<void> => {
+    setControlNote(controlNoteFor(await run('panel.start', () => rpc('panel.start', {})), t, 'start'))
+  }
+
+  const replacePanel = async (): Promise<void> => {
+    setConfirming(false)
+    setControlNote(controlNoteFor(await run('panel.takeover', () => rpc('panel.takeover', {})), t, 'replace'))
   }
 
   const stopPanel = async (): Promise<void> => {
@@ -242,7 +282,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
               <Button
                 variant="primary"
                 busy={busy === 'panel.start'}
-                onClick={() => { void run('panel.start', () => rpc('panel.start', {})) }}
+                onClick={() => { void startPanel() }}
               >
                 {t('panelStart')}
               </Button>
@@ -268,6 +308,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
       </div>
 
       {stopNote === null ? null : <Hint>{stopNote}</Hint>}
+      {controlNote === null ? null : <Hint>{controlNote}</Hint>}
 
       {confirmingStop
         ? (
@@ -301,10 +342,7 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
                   <Button
                     variant="danger"
                     busy={busy === 'panel.takeover'}
-                    onClick={() => {
-                      setConfirming(false)
-                      void run('panel.takeover', () => rpc('panel.takeover', {}))
-                    }}
+                    onClick={() => { void replacePanel() }}
                   >
                     {t('confirmReplace')}
                   </Button>

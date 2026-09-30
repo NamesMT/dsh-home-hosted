@@ -1,7 +1,7 @@
 {
   "name": "dsh-home-hosted",
   "version": "0.6.3",
-  "description": "DeepSeek Harness (dsh) plugin: start your dsh web server automatically at boot, and manage home-hosted's panel and servers from inside dsh.",
+  "description": "DeepSeek Harness (dsh) plugin: prompt your home servers into existence through home-hosted — Gitea, Jellyfin, anything — and manage the panel, the entries and boot autostart from dsh.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -38,7 +38,8 @@
     "typescript"
   ],
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "dsh": ">=0.2.0-rc.1"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -56,7 +57,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "docs/DESIGN.md",
+    "docs",
     "LICENSE"
   ],
   "scripts": {
@@ -83,10 +84,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-client-connection": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependenciesMeta": {
@@ -102,11 +103,11 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-client-connection": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.2",
-    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",

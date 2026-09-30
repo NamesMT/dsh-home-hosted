@@ -18,6 +18,7 @@ export function EntriesSection({ t, status, run, busy }: SectionProps) {
   const entries = status.entries ?? []
   const manageDsh = status.settings.manageDsh === true
   const windows = status.boot.platform === 'win32'
+  const desktop = status.surface === 'desktop'
   const id = managedId(status)
 
   const setManage = (enabled: boolean): void => {
@@ -35,11 +36,13 @@ export function EntriesSection({ t, status, run, busy }: SectionProps) {
     <Section icon={<IconTerminal />} title={t('entriesTitle')}>
       <Switch
         label={t('entriesManage', { id })}
-        checked={manageDsh}
-        disabled={busy !== null}
+        checked={desktop ? false : manageDsh}
+        disabled={busy !== null || desktop}
         onChange={setManage}
       />
-      <Hint>{t('entriesManageNote', { id })}</Hint>
+      {desktop
+        ? <Note tone="warn">{t('entriesManageDesktop', { id })}</Note>
+        : <Hint>{t('entriesManageNote', { id })}</Hint>}
 
       {windows ? <Note tone="warn">{t('entriesManageWinWarning', { id })}</Note> : null}
 

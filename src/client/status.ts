@@ -85,17 +85,20 @@ function entrySignal(status: HomeHostedStatus, t: TranslateFn): Signal {
   // The host always reports the harness entry, managed or not, so the intent is
   // what says whether this plugin manages it.
   const managed = status.settings.manageDsh === true
+  const desktop = status.surface === 'desktop'
   const missing = entries.filter(entry => !entry.exists).length
   const drifted = entries.filter(entry => entry.drift.length > 0).length
   const live = entries.find(entry => entry.live !== null)?.live ?? null
-  const tone: Tone = !managed
+  const tone: Tone = desktop
     ? 'idle'
-    : missing > 0 ? 'bad' : drifted > 0 ? 'warn' : live !== null ? 'ok' : 'warn'
+    : !managed
+        ? 'idle'
+        : missing > 0 ? 'bad' : drifted > 0 ? 'warn' : live !== null ? 'ok' : 'warn'
   return {
     key: 'entry',
     tone,
     name,
-    state: managed ? t('stateManaged') : t('stateNotManaged'),
+    state: desktop ? t('stateWebOnly') : managed ? t('stateManaged') : t('stateNotManaged'),
     meta: live === null ? t('entriesNotRunning') : join(dash(live.status), live.pid === null ? null : `pid ${live.pid}`),
     href: null,
   }

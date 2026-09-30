@@ -4,6 +4,7 @@
  * the retirement a switch needs. Every call is faked; no OS entry is touched.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import path from 'node:path'
 import { createLaunchdAgentProvider, createLaunchdDaemonProvider } from '../../src/boot/launchd.js'
 import { createSystemdSystemProvider, createSystemdUserProvider } from '../../src/boot/systemd.js'
 import { createWindowsRunProvider, createWindowsTaskProvider } from '../../src/boot/windows.js'
@@ -15,14 +16,20 @@ describe('systemd activation', () => {
   beforeEach(() => { home = tempHome() })
   afterEach(() => cleanup(home))
 
-  it('restarts the user unit once is-active confirms it', async () => {
+  it('proves the user unit is installed and enabled, never that it is already active', async () => {
     const runner = fakeRun(() => ({ code: 0, stdout: 'active\n' }))
     const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
     const plan = await provider.activate?.(spec())
     expect(plan).not.toBeNull()
     expect(plan?.commands).toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
     // The proof runs before anything is stopped, never after.
-    expect(plan?.requires.commands).toEqual([['systemctl', '--user', 'is-active', 'home-hosted.service']])
+    expect(plan?.requires.commands).toEqual([['systemctl', '--user', 'is-enabled', 'home-hosted.service']])
+    // `enable --now` started the unit while the panel still holds `run.json`, and
+    // home-hosted refuses a second panel, so the unit is activating/failed at the
+    // one moment this plan runs. `is-active` would refuse every handover.
+    expect(plan?.requires.commands.flat().join(' ')).not.toContain('is-active')
+    // The entry's own file is the other proof that it is really installed.
+    expect(plan?.requires.files).toEqual([path.join(home, '.config', 'systemd', 'user', 'home-hosted.service')])
     expect(plan?.display.join('\n')).toContain('systemctl --user restart home-hosted.service')
   })
 
@@ -36,7 +43,8 @@ describe('systemd activation', () => {
     }))
     const plan = await provider.activate?.(spec())
     expect(plan?.commands).toEqual([['sudo', '-n', 'systemctl', 'restart', 'home-hosted.service']])
-    expect(plan?.requires.commands).toEqual([['sudo', '-n', 'systemctl', 'is-active', 'home-hosted.service']])
+    expect(plan?.requires.commands).toEqual([['sudo', '-n', 'systemctl', 'is-enabled', 'home-hosted.service']])
+    expect(plan?.requires.files).toEqual(['/etc/systemd/system/home-hosted.service'])
   })
 
   it('runs systemctl directly when it is already root, never through sudo', async () => {

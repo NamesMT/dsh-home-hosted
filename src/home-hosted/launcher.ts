@@ -54,6 +54,26 @@ export function launcherPath(stateDir: string): string {
   return path.join(launcherDir(stateDir), 'home-hosted.mjs')
 }
 
+/**
+ * What a generated launcher does with the CLI it found.
+ *
+ * `spawnSync` alone is not enough: the boot entry's `KillMode=process` signals the
+ * unit's main process — this launcher — and nothing else, so a signal must be handed
+ * on or the panel is orphaned while the unit exits (and `Restart=always` then loops
+ * on "already running"). Forwarding the signal and waiting for the child is what
+ * makes the stop reach the panel; the exit code carries the child's outcome.
+ */
+const LAUNCH_CHILD = `function launchChild(program, argv, useShell) {
+  const child = spawn(program, argv, { stdio: 'inherit', shell: useShell })
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGQUIT', 'SIGHUP'])
+    process.on(signal, () => { try { child.kill(signal) } catch {} })
+  child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)))
+  child.on('error', (error) => {
+    console.error('[dsh-home-hosted] could not start ' + program + ': ' + error.message)
+    process.exit(1)
+  })
+}`
+
 export function launcherRecordPath(stateDir: string): string {
   return path.join(launcherDir(stateDir), 'resolved.json')
 }
@@ -71,12 +91,14 @@ export function buildLauncherSource(options: LauncherOptions): string {
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 
 const DSH_HOME = ${JSON.stringify(options.dshHome)}
 const RECORD = ${JSON.stringify(record)}
 const MIN_VERSION = ${JSON.stringify(options.minVersion)}
 const PLUGIN_ROOT = ${JSON.stringify(options.pluginRoot ?? null)}
+
+${LAUNCH_CHILD}
 
 /** A package-manager shim's real target, as the shim itself records it. */
 const SHIM_TARGET = /^#\\s*cmd-shim-target=(.+)$/m
@@ -205,10 +227,10 @@ if (entry === null) {
 
 const args = process.argv.slice(2)
 const isScript = /\\.(mjs|cjs|js)$/.test(entry)
-const result = isScript
-  ? spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit' })
-  : spawnSync(entry, args, { stdio: 'inherit', shell: process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry) })
-process.exit(typeof result.status === 'number' ? result.status : 1)
+if (isScript)
+  launchChild(process.execPath, [entry, ...args], false)
+else
+  launchChild(entry, args, process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry))
 `
 }
 
@@ -384,11 +406,11 @@ export function buildDshLauncherSource(options: DshLauncherOptions): string {
     ? `import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { spawnSync } from 'node:child_process'`
+import { spawn } from 'node:child_process'`
     : `const fs = require('node:fs')
 const path = require('node:path')
 const process = require('node:process')
-const { spawnSync } = require('node:child_process')`
+const { spawn } = require('node:child_process')`
   // A clone or a project install is re-found from the install roots that were
   // recorded with it, so a moved build needs no new boot entry.
   const searchRoots = [
@@ -406,6 +428,8 @@ const RECORD = ${JSON.stringify(dshLauncherRecordPath(options.stateDir))}
 const SEARCH_ROOTS = ${JSON.stringify([...new Set(searchRoots)])}
 // The image this plugin was installed on, when the record had one to carry.
 const PINNED = ${JSON.stringify(options.pinnedEntry ?? null)}
+
+${LAUNCH_CHILD}
 
 function readRecord() {
   try { return JSON.parse(fs.readFileSync(RECORD, 'utf8')) } catch { return null }
@@ -566,10 +590,10 @@ if (entry === null) {
 }
 
 const args = process.argv.slice(2)
-const result = /\\.(mjs|cjs|js)$/.test(entry)
-  ? spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit' })
-  : spawnSync(entry, args, { stdio: 'inherit', shell: process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry) })
-process.exit(typeof result.status === 'number' ? result.status : 1)
+if (/\\.(mjs|cjs|js)$/.test(entry))
+  launchChild(process.execPath, [entry, ...args], false)
+else
+  launchChild(entry, args, process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry))
 `
 }
 

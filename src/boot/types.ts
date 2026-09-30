@@ -196,8 +196,14 @@ export interface BootLadder {
   status(spec: BootSpec, mechanism?: BootMechanism): Promise<BootStatus>
   install(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActionResult & { mechanism: BootMechanism | null, status: BootStatus }>
   uninstall(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActionResult & { status: BootStatus }>
-  /** The start command for an installed entry, after it was confirmed installed. */
-  activate(spec: BootSpec, mechanism?: BootMechanism): Promise<BootActivation | null>
+  /**
+   * The start command for an installed entry, after it was confirmed installed.
+   *
+   * `from` names the mechanism being left on a switch, so its entry can stop the
+   * panel it supervises before the CLI's `down`: the target is already installed
+   * by then, so the mechanism holding the panel cannot be inferred.
+   */
+  activate(spec: BootSpec, mechanism?: BootMechanism, from?: BootMechanism | null): Promise<BootActivation | null>
 }
 
 export type BootProviderStatus = Awaited<ReturnType<BootProvider['status']>>

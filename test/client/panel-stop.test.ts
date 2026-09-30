@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { PanelSection, stopNoteFor } from '../../src/client/section-panel.js'
+import { controlNoteFor, PanelSection, stopNoteFor } from '../../src/client/section-panel.js'
 import { en, englishTranslator } from '../../src/client/locales.js'
 import type { SectionProps } from '../../src/client/props.js'
 import type { Envelope, HomeHostedStatus } from '../../src/shared/contracts.js'
@@ -77,6 +77,37 @@ describe('the stop-panel note', () => {
     const note = stopNoteFor(failed('error', 'the panel did not stop: exit 1'), englishTranslator)
     expect(note).toContain('did not stop')
     expect(note).toContain('exit 1')
+  })
+})
+
+describe('the start-panel and replace-panel notes', () => {
+  const ok = (value: unknown): Envelope<unknown> => ({ ok: true, value })
+  const failed = (code: string, message: string): Envelope<unknown> => ({ ok: false, error: { code, message } })
+
+  it('surfaces a refusal that rode a successful envelope', () => {
+    // The host answers `{ ok: false, detail }` inside a successful envelope: a CLI
+    // that exited non-zero, or a helper that never spawned. Reading only
+    // `envelope.ok` made the button return in silence.
+    const note = controlNoteFor(ok({ ok: false, detail: 'the CLI exited 1' }), englishTranslator, 'start')
+    expect(note).toContain('did not start')
+    expect(note).toContain('the CLI exited 1')
+  })
+
+  it('names the replace action when a takeover was refused', () => {
+    const note = controlNoteFor(ok({ ok: false, detail: 'could not start the helper' }), englishTranslator, 'replace')
+    expect(note).toContain('was not replaced')
+    expect(note).toContain('could not start the helper')
+  })
+
+  it('surfaces a transport-level failure too', () => {
+    expect(controlNoteFor(failed('error', 'the CLI could not be run'), englishTranslator, 'start'))
+      .toContain('the CLI could not be run')
+  })
+
+  it('says nothing when the start succeeded', () => {
+    expect(controlNoteFor(ok({ ok: true, detail: 'a panel is already answering' }), englishTranslator, 'start'))
+      .toBe('a panel is already answering')
+    expect(controlNoteFor(ok({ ok: true }), englishTranslator, 'start')).toBeNull()
   })
 })
 

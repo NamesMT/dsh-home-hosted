@@ -411,6 +411,18 @@ export interface LauncherRepairOptions {
   ownedCommand?: boolean
 }
 
+/**
+ * The row's args with the old inlined script removed. A bare stored command
+ * carries no script argument, so nothing is dropped: an absolute app argument
+ * (`--home /Users/x/.dsh`) has to survive. Any other shape loses its inlined
+ * script, wherever in the argv it sits.
+ */
+function argsWithoutScript(config: { args?: string[] }, storedBare: boolean, pinned: string): string[] {
+  const args = config.args ?? []
+  const script = storedBare ? -1 : args.findIndex(arg => path.isAbsolute(arg) || arg === pinned)
+  return script === -1 ? args : args.filter((_, index) => index !== script)
+}
+
 export function launcherRepair(
   config: { command?: string, args?: string[] },
   launch: DshLaunch | null,
@@ -424,7 +436,17 @@ export function launcherRepair(
   const targetBare = pinned === 'dsh'
   const storedBare = isBareCommand(entryScript(config) ?? '')
   const stored = entryScript(config)
-  if (stored === null || stored === pinned)
+  if (stored === null)
+    return null
+  // The row is `command: process.execPath` + the stable launcher, so a moved node
+  // is drift too: comparing only the script left the entry running a path that no
+  // longer exists, and nothing else ever rewrites an existing row's command. The
+  // interpreter belongs to the plugin only on a row the plugin created.
+  const program = config.command ?? ''
+  const programDrift = options.ownedCommand === true
+    && !targetBare
+    && (!path.isAbsolute(program) || path.resolve(program) !== path.resolve(process.execPath))
+  if (stored === pinned && !programDrift)
     return null
   if (!storedBare && options.ownedCommand !== true) {
     // An entry this plugin did not create may be somebody's deliberate choice of
@@ -436,9 +458,7 @@ export function launcherRepair(
   // A bare stored command carries no script argument, so nothing is dropped: an
   // absolute app argument (`--home /Users/x/.dsh`) has to survive. Any other
   // shape loses its inlined script, wherever in the argv it sits.
-  const args = config.args ?? []
-  const script = storedBare ? -1 : args.findIndex(arg => path.isAbsolute(arg) || arg === pinned)
-  const rest = script === -1 ? args : args.filter((_, index) => index !== script)
+  const rest = argsWithoutScript(config, storedBare, pinned)
   // A bare command is only local-first with the right cwd, so the row carries
   // the project it was resolved from.
   return targetBare

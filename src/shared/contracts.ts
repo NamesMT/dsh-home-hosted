@@ -528,9 +528,20 @@ export interface WorkspaceSummary {
   source: 'api' | 'file'
 }
 
+/**
+ * Which dsh surface the host runs in. `desktop` is Electron's own carrier: it
+ * boots its reserved profile itself, so the harness is never one of the panel's
+ * server entries there. A `dsh --profile desktop` row cannot start at all — the
+ * CLI refuses that profile — so this plugin refuses to manage one and says the
+ * entry is web-only.
+ */
+export type DshSurface = 'web' | 'desktop'
+
 export interface HomeHostedStatus {
   /** The entry id this plugin manages; the page must not assume "dsh". */
   defaultEntryId: string
+  /** The surface this host runs in; absent from a host older than this field. */
+  surface?: DshSurface
   /** The workspace this plugin manages. */
   workspace: string
   /** Every workspace the managed panel serves. */
