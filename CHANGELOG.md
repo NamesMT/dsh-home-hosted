@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.6.3
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.2...v0.6.3)
+
+### 📖 Documentation
+
+- **design:** Trim the notes and fold the version pinning rule ([6f97f80](https://github.com/NamesMT/dsh-home-hosted/commit/6f97f80))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.6.2
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.1...v0.6.2)
