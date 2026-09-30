@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.7.1
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.0...v0.7.1)
+
+### 🩹 Fixes
+
+- **boot:** Re-prove ownership before retiring, and read EPERM as alive ([b780f40](https://github.com/NamesMT/dsh-home-hosted/commit/b780f40))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.7.0
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.6.3...v0.7.0)
