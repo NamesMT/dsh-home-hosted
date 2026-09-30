@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import type { EntryIntent, ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
+import type { EntryIntent, FreePortResult, ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
 import { rpc } from './api.js'
 import type { EntryDraft } from './entry-editor.js'
 import { createBodyFromDraft, draftFromEntry, EntryEditor, patchFromDraft } from './entry-editor.js'
@@ -9,13 +9,6 @@ import type { Runner, ServersSectionProps } from './props.js'
 import { healthLine, restartLine } from './server-facts.js'
 import { serversRunning } from './status.js'
 import { Button, Chip, Code, Details, FailureNote, Hint, Link, Note, Section, Spec } from './ui.js'
-
-/** What the panel's `free-port` reports back; read defensively. */
-interface FreePortResult {
-  port?: number | null
-  free?: boolean
-  skipped?: number[]
-}
 
 /**
  * Every `servers.*` call is workspace-scoped at the payload level: a server id

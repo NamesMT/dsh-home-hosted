@@ -46,13 +46,19 @@ export function readRuntime(home: string): PanelRuntime | null {
   }
 }
 
+/**
+ * Whether a pid still exists. Signal 0 is only a probe, so `EPERM` means the
+ * process is there and we simply may not signal it — reading that as "dead"
+ * would make a panel owned by another account look stopped, and offer to start
+ * a second one over it. home-hosted's own runtime probe agrees.
+ */
 export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
   }
-  catch {
-    return false
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 

@@ -317,11 +317,15 @@ function warnAccount(ctx: AccountInput, message: string): void {
 
 /** The numeric uid this process runs as, as text, for a launchd domain. */
 export function uidOf(ctx: BootProviderContext): string | null {
-  const configured = numberFrom(ctx.env.UID)
-  if (configured !== null)
-    return String(configured)
+  // The process is the fact and `$UID` is a claim, exactly as `accountOf` treats
+  // it: a shell variable is only ever inherited, so a stale exported one picks the
+  // wrong `gui/<uid>` domain and quietly degrades the install to "loads at the next
+  // login" — or, worse, addresses another user's domain.
   const uid = ctx.uid === undefined ? (process.getuid?.() ?? null) : ctx.uid
-  return uid === null ? null : String(uid)
+  if (uid !== null)
+    return String(uid)
+  const configured = numberFrom(ctx.env.UID)
+  return configured === null ? null : String(configured)
 }
 
 // ---------------------------------------------------------------------------

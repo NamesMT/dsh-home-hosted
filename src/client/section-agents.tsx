@@ -29,6 +29,7 @@ export function AgentsSection({ t, status, updateSettings, busy, uiStyle }: Sect
       <Switch
         label={t('agentMaster')}
         checked={agentTools.enabled}
+        disabled={busy === 'settings'}
         onChange={enabled => updateSettings(current => ({
           ...current,
           agentTools: { ...current.agentTools, enabled },

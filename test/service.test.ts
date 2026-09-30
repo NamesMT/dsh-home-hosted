@@ -852,6 +852,40 @@ describe('retiring the pre-per-instance boot artifact', () => {
     expect(retired).toEqual([])
     dir.cleanup()
   })
+
+  it('retires the old artifact when the mechanism reports no file path', async () => {
+    // The Windows providers report a registry key (not a path) or null. Requiring
+    // `existsSync` on that always bailed, so the pre-per-instance entry could never
+    // retire there and the machine started the panel twice at logon.
+    const dir = tempDir()
+    const { ladder: custom, retired } = recordingLadder(dir.path)
+    const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+    custom.status = async spec => spec.unitName === 'home-hosted'
+      ? { ...bootStatus, platform: 'win32', mechanism: 'windows-run', state: 'enabled-running', unitPath: key }
+      : { ...bootStatus, platform: 'win32', mechanism: 'windows-run', state: 'not-installed', unitPath: null }
+    const { service } = await harness({ ladder: custom })
+
+    await service.installBoot('windows-run')
+
+    expect(retired).toEqual(['home-hosted'])
+    dir.cleanup()
+  })
+
+  it('still refuses to retire when a real file path is gone', async () => {
+    // The file check is the belt on top of the provider's own ownership proof: an
+    // absolute path that is not there means there is nothing of ours to remove.
+    const dir = tempDir()
+    const { ladder: custom, retired } = recordingLadder(dir.path)
+    custom.status = async spec => spec.unitName === 'home-hosted'
+      ? { ...bootStatus, state: 'enabled-running', unitPath: path.join(dir.path, 'gone.service') }
+      : { ...bootStatus, state: 'not-installed', unitPath: null }
+    const { service } = await harness({ ladder: custom })
+
+    await service.installBoot('systemd-user')
+
+    expect(retired).toEqual([])
+    dir.cleanup()
+  })
 })
 
 describe('handing the panel to the entry that was just installed', () => {

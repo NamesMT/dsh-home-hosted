@@ -128,10 +128,20 @@ carries the other mechanisms' removal steps in the activation plan, and each pro
 `retireCommands()` is the no-`--now` form for the same reason. launchd has no unload-without-stopping,
 so its retirement is only safe once the panel is down and the new entry is up.
 
+Retirement re-proves ownership before it removes anything. `status()` reports a systemd unit as
+installed from its *name* alone, and `home-hosted` is the generic name the machine-default install
+uses, so a unit somebody else wrote anywhere on the search path would otherwise be `disable`d and
+deleted by a switch. The marker check is what makes "only an artifact carrying this plugin's marker is
+ever removed" true here too.
+
 A mechanism that cannot start anything now answers `activate() → null`: a `Run` value and a `.desktop`
 file are read by the shell or the session at login. Nothing is stopped then — leaving a working panel
 up beats killing it for an entry that would not bring it back. A handover that could not be spawned is
 reported with the exact commands, and the panel is still up.
+
+Those displayed commands are the ones the helper would actually run, never a daemon-shaped rewrite: an
+agent's `bootout` is unprivileged and names its own `gui/<uid>` domain, so a person copying the
+fallback gets a command that works.
 
 Enabling and switching differ only in the retirement: a switch already has an entry keeping the panel
 alive, so its plan carries the old mechanism's removal.

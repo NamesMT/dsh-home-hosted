@@ -109,3 +109,19 @@ describe('the agent notice toggle', () => {
     expect(markup).toContain('Adds the panel inventory to the agent')
   })
 })
+
+describe('the agent switches while a settings write is in flight', () => {
+  const markup = (busy: SectionProps['busy']): string =>
+    renderToStaticMarkup(createElement(AgentsSection, { ...props(status([managed])), busy }))
+
+  it('disables every switch, so a second write cannot race the first', () => {
+    // The two sub-switches already carried this guard; the master switch did not,
+    // so it stayed clickable and could overwrite the write in flight.
+    const during = markup('settings')
+    expect(during.match(/disabled=""/g)?.length).toBe(3)
+  })
+
+  it('leaves them enabled when nothing is being written', () => {
+    expect(markup(null)).not.toContain('disabled=""')
+  })
+})

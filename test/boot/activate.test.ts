@@ -4,6 +4,7 @@
  * the retirement a switch needs. Every call is faked; no OS entry is touched.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import fs from 'node:fs'
 import path from 'node:path'
 import { createLaunchdAgentProvider, createLaunchdDaemonProvider } from '../../src/boot/launchd.js'
 import { createSystemdSystemProvider, createSystemdUserProvider } from '../../src/boot/systemd.js'
@@ -70,11 +71,37 @@ describe('systemd activation', () => {
   it('retires a user unit without --now, so it cannot race the start', async () => {
     const runner = fakeRun(() => ({ code: 0 }))
     const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    // Retirement only touches an artifact this plugin wrote, so the unit file has
+    // to be there carrying the marker.
+    const file = path.join(home, '.config', 'systemd', 'user', 'home-hosted.service')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `# ${spec().marker}\n[Unit]\nDescription=x\n`, 'utf8')
     const retirement = await provider.retireCommands?.(spec())
     const flat = retirement?.commands.map(step => step.join(' ')) ?? []
     expect(flat.join('\n')).not.toContain('--now')
     expect(flat[0]).toBe('systemctl --user disable home-hosted.service')
     expect(flat.join('\n')).toContain('daemon-reload')
+  })
+
+  it('refuses to retire a unit of the same name that this plugin did not write', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    const file = path.join(home, '.config', 'systemd', 'user', 'home-hosted.service')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    // `status()` reports a unit as installed from its name alone, so without the
+    // marker check a switch would `disable` and delete somebody else's unit.
+    fs.writeFileSync(file, '[Unit]\nDescription=somebody else\n', 'utf8')
+    const retirement = await provider.retireCommands?.(spec())
+    expect(retirement?.commands).toEqual([])
+  })
+
+  it('has nothing to retire when no unit file of ours exists at all', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    // The unit name can come from anywhere on systemd's search path; a name alone
+    // is never proof that we may disable it.
+    const retirement = await provider.retireCommands?.(spec())
+    expect(retirement?.commands).toEqual([])
   })
 })
 
@@ -153,6 +180,22 @@ describe('launchd activation', () => {
     }))
     const retirement = await provider.retireCommands?.(spec())
     expect(retirement?.commands.flat().join(' ')).toContain('sudo -n launchctl bootout system/dev.home-hosted.home-hosted')
+  })
+
+  it('prints the agent\'s own unprivileged bootout, not the daemon form', async () => {
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[0] === 'print')
+        return args[1] === 'gui/1000' ? { code: 0 } : { code: 113 }
+      return { code: 0 }
+    })
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    const retirement = await provider.retireCommands?.(spec())
+    // The display is what a person copies when the helper could not run, so it has
+    // to be the command that actually runs: an agent's bootout needs no sudo and
+    // names `gui/1000`, never `system/`.
+    expect(retirement?.display.join('\n')).toContain('launchctl bootout gui/1000/dev.home-hosted.home-hosted')
+    expect(retirement?.display.join('\n')).not.toContain('system/')
+    expect(retirement?.display.join('\n')).not.toContain('sudo')
   })
 })
 

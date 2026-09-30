@@ -232,6 +232,10 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
           return { state: 'enabled-running', unitPath: file, detail: `${file} is present; launchd has no reachable domain for uid ${uidOf(ctx) ?? '?'}, so it loads at the next login`, commands: [] }
         const probe = await ctx.run('launchctl', ['print', `${domain}/${label}`])
         const loaded = codeOf(probe) === 0
+        // `enabled-running` even when launchd has not loaded it yet: `RunAtLoad`
+        // loads it at the next login, so it is not disabled either, and the detail
+        // line carries the distinction. The state only labels the page —
+        // `isInstalledState` accepts it either way, so a handover is unaffected.
         const state: BootState = bootState(true, true, false)
         return {
           state,
@@ -496,9 +500,12 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
       const remove = mode === 'daemon' ? ['sudo', '-n', 'rm', '-f', file] : ['rm', '-f', file]
       return {
         commands: [...(bootout === null ? [] : [bootout]), remove],
+        // The display mirrors the command that actually runs: an agent's bootout is
+        // unprivileged and names the agent's own domain, so printing the `system/`
+        // form with `sudo` showed a person a command this plugin never runs.
         display: [
-          ...(bootout === null ? [] : [shellCommand('sudo', ['launchctl', 'bootout', `system/${label}`])]),
-          shellCommand('sudo', ['rm', '-f', file]),
+          ...(bootout === null ? [] : [shellCommand(bootout[0]!, bootout.slice(1))]),
+          shellCommand(remove[0]!, remove.slice(1)),
         ],
       }
     },

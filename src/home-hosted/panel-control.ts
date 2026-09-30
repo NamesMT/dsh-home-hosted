@@ -166,7 +166,9 @@ function fail(line) {
 
 function alive(pid) {
   if (typeof pid !== 'number') return false
-  try { process.kill(pid, 0); return true } catch { return false }
+  // EPERM means the pid exists and is not ours to signal; treating it as gone
+  // would skip the escalation and start a second panel over a live one.
+  try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -257,7 +259,9 @@ function log(line) {
 
 function alive(pid) {
   if (typeof pid !== 'number') return false
-  try { process.kill(pid, 0); return true } catch { return false }
+  // EPERM means the pid exists and is not ours to signal; treating it as gone
+  // would skip the escalation and start a second panel over a live one.
+  try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))

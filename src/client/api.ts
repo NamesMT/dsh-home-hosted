@@ -6,8 +6,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  BootControlResult,
   EndpointPayloads,
   Envelope,
+  FreePortResult,
   HomeHostedStatus,
   ManagedEntryStatus,
   PanelControlResult,
@@ -26,15 +28,6 @@ export const API_BASE = '/api'
 
 /** `cli.installGlobal` adds the command output to the panel-control result. */
 export type CliInstallResult = PanelControlResult & { output?: string }
-
-/**
- * `boot.install` / `boot.uninstall` answer a *successful* envelope even when
- * the install itself was refused; the refusal rides `result.ok === false`.
- */
-export interface BootControlResult {
-  result?: { ok?: boolean, detail?: string, commands?: string[] }
-  status?: HomeHostedStatus
-}
 
 /** Result payload of each endpoint this page calls. */
 export interface EndpointResults {
@@ -55,17 +48,6 @@ export interface EndpointResults {
   'boot.install': BootControlResult
   'boot.uninstall': BootControlResult
   'ui.manage': UiResult
-}
-
-/**
- * What a `free-port` attempt reports. The panel's own schema also carries the
- * pids it signalled; the page only needs to say which port ended up free.
- */
-export interface FreePortResult {
-  ok?: boolean
-  port?: number | null
-  free?: boolean
-  skipped?: number[]
 }
 
 export type RpcValue<E extends RpcEndpoint> = E extends keyof EndpointResults

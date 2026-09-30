@@ -253,6 +253,28 @@ export interface ManagedEntryStatus {
   snapshot: ServerEntry | null
 }
 
+/** What a boot install/uninstall attempt answers with, refusal included. */
+export interface BootInstallResult {
+  ok: boolean
+  changed: boolean
+  detail: string
+  commands: string[]
+  needsPrivilege: boolean
+  /** Present on install; an uninstall names no mechanism. */
+  mechanism?: BootMechanism | null
+  status: BootStatus
+}
+
+/**
+ * What `boot.install` / `boot.uninstall` answer. A *successful* envelope can
+ * still carry a refused attempt (`result.ok === false`), so the page reads this
+ * payload rather than `envelope.ok`.
+ */
+export interface BootControlResult {
+  result: BootInstallResult
+  status: BootStatus
+}
+
 // ---------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------
@@ -306,6 +328,19 @@ export interface PanelControlResult {
   detail: string
   url?: string | null
   version?: string | null
+}
+
+/**
+ * What the panel's own `free-port` reports. The pids are the panel's business;
+ * the page only needs which port ended up free and which listeners it refused to
+ * touch. `stopped` is what the panel actually answers today, so both are read.
+ */
+export interface FreePortResult {
+  ok?: boolean
+  port?: number | null
+  free?: boolean
+  skipped?: number[]
+  stopped?: number[]
 }
 
 export interface CliStatus {

@@ -408,10 +408,20 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
       return [['systemctl', '--user', 'stop', unitOf(spec)]]
     },
 
-    /** No `--now`: the panel is already down when a switch runs this. */
+    /**
+     * No `--now`: the panel is already down when a switch runs this.
+     *
+     * Only our own artifact is retired. `status()` reports a unit as installed from
+     * its name alone (`installed = own.owned || probe.installed`), so a
+     * `home-hosted.service` somebody else wrote anywhere on the search path would
+     * otherwise reach `disable` here — and `home-hosted` is the generic name the
+     * machine-default install uses. The marker is what proves it is ours.
+     */
     async retireCommands(spec: BootSpec): Promise<BootRetirement> {
       const unit = unitOf(spec)
       const file = pathOf(spec)
+      if (!inspectOwned(file, spec.marker).owned)
+        return { commands: [], display: [] }
       return {
         commands: [
           ['systemctl', '--user', 'disable', unit],
@@ -683,6 +693,9 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
     async retireCommands(spec: BootSpec): Promise<BootRetirement> {
       const unit = unitOf(spec)
       const file = pathOf(spec)
+      // Same rule as the user scope: the unit name is not proof of ownership.
+      if (!inspectOwned(file, spec.marker).owned)
+        return { commands: [], display: [] }
       const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
       return {
         commands: [

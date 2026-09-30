@@ -6,7 +6,7 @@
  * the config store records the bytes it wrote, so the panel's own file watcher
  * never treats the change as an external edit.
  */
-import type { ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
+import type { FreePortResult, ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
 
 /** What the panel's `/api/servers*` actually answers with: it names the workspace `workspaceId`. */
 interface ApiServerView extends Omit<ServerEntryView, 'workspace'> {
@@ -159,9 +159,14 @@ export class PanelClient {
     return await this.request<{ control?: Record<string, unknown> }>('GET', '/api/settings')
   }
 
-  /** Re-list the port's listeners and stop what is not the panel's own tree. */
-  async freePort(id: string, workspace?: string): Promise<{ stopped?: number[] }> {
-    return await this.request<{ stopped?: number[] }>('POST', this.ws(`/api/servers/${encodeURIComponent(id)}/free-port`, workspace))
+  /**
+   * Re-list the port's listeners and stop what is not the panel's own tree.
+   *
+   * The page reads `free`, `port` and `skipped`; `stopped` is what the panel
+   * answers today. Declared as the shared contract so both halves agree on it.
+   */
+  async freePort(id: string, workspace?: string): Promise<FreePortResult> {
+    return await this.request<FreePortResult>('POST', this.ws(`/api/servers/${encodeURIComponent(id)}/free-port`, workspace))
   }
 }
 

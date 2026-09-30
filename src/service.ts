@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
+import type { BootInstallResult, BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
 import { FOREIGN_MECHANISMS, isOnPortConflict, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
@@ -61,17 +61,8 @@ function pluginRoot(): string | null {
   }
 }
 
-/** What a boot install/uninstall answers with; mirrors the boot module's shape. */
-export interface BootInstallResult {
-  ok: boolean
-  changed: boolean
-  detail: string
-  commands: string[]
-  needsPrivilege: boolean
-  /** Present on install; an uninstall names no mechanism. */
-  mechanism?: BootMechanism | null
-  status: BootStatus
-}
+/** What a boot install/uninstall answers with; the one shared shape, re-exported. */
+export type { BootInstallResult } from './shared/contracts.js'
 
 /** The subset of the boot ladder this service uses. */
 export interface BootLadderLike {
@@ -1403,7 +1394,11 @@ export class HomeHostedService extends Service {
       const status = await this.ladder().status(legacy, mechanism)
       if (status.unitPath === null || status.state === 'not-installed' || status.state === 'unsupported')
         return
-      if (!fs.existsSync(status.unitPath))
+      // Only a real file path is checkable: a Windows provider reports a registry
+      // key (`HKCU\…`, not absolute) or `null`, so requiring `existsSync` would
+      // always bail there and the legacy entry would never retire. A provider that
+      // reports a path already proved ownership in `status()`.
+      if (path.isAbsolute(status.unitPath) && !fs.existsSync(status.unitPath))
         return
       await this.ladder().uninstall(legacy, status.mechanism ?? mechanism)
     }

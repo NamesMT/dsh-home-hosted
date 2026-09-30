@@ -15,7 +15,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { accountOf, bootUserName, currentUser, parsePasswd } from '../../src/boot/common.js'
+import { accountOf, bootUserName, currentUser, parsePasswd, uidOf } from '../../src/boot/common.js'
 import { launchdPlist } from '../../src/boot/launchd.js'
 import { systemdSystemUnit } from '../../src/boot/systemd.js'
 import { cleanup, spec, tempHome } from './harness.js'
@@ -260,5 +260,25 @@ describe('an entry never runs the panel as root', () => {
     // "no name" — which the caller refuses — never as a directive with no value.
     const daemon = launchdPlist(spec({ logDir: path.join(home, 'logs') }), { userName: '  ' })
     expect(daemon).not.toContain('<key>UserName</key>')
+  })
+})
+
+/**
+ * The uid a launchd domain is addressed by. `accountOf` already treats `$UID` as a
+ * claim and the process as the fact; `uidOf` must agree, or a stale exported `$UID`
+ * picks the wrong `gui/<uid>` domain — silently degrading an install to "loads at
+ * the next login", or addressing another user's domain.
+ */
+describe('the uid a launchd domain uses', () => {
+  it('prefers the process uid over an inherited $UID', () => {
+    expect(uidOf({ uid: 1000, env: { UID: '0' } } as never)).toBe('1000')
+  })
+
+  it('falls back to $UID only when the platform gives no uid', () => {
+    expect(uidOf({ uid: null, env: { UID: '1000' } } as never)).toBe('1000')
+  })
+
+  it('answers nothing when neither is available', () => {
+    expect(uidOf({ uid: null, env: {} } as never)).toBeNull()
   })
 })
