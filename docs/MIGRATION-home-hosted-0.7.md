@@ -11,7 +11,7 @@ Status: **in progress**. Target plugin release: **0.5.0** (0.x minor = the break
 | 4 API client | done (`?workspace=` on every servers call, `listWorkspaces`, `settings`) |
 | 5 service | done (managed workspace, snapshots v2, foreign helpers, `--workspace`, log URL, `panel.migrate`) |
 | 6 surface | done (page picker + migrate action, `workspace` tool param, `workspaces_list`, locales); the managed-workspace setting was removed after review |
-| 7 dependency/docs/release | dependency pinned `^0.7.1`, floor `0.7.0`, docs in progress; release pending |
+| 7 dependency/docs/release | dependency pinned `^0.7.2`, floor `0.7.0`, docs in progress; release pending |
 
 Decisions taken:
 - **D1 — the managed workspace is the panel's `default`, fixed.** Every API call sends `?workspace=<id>`
@@ -63,7 +63,7 @@ Verified against the 0.7.1 source: `.hh` paths and helpers in `src/helpers/paths
 | D2 | Pre-0.7 roots | not supported for reads or writes; 0.7+ required |
 | D3 | The managed entry id | `defaultEntryId` (`dsh`) keyed by `(workspace, id)` — a `dsh` in another workspace is a different entry |
 | D4 | The page's server list | every workspace, selectable; the managed one is named as such |
-| D5 | Version floor | `EXPECTED_RANGE = '^0.7.1'`, `MIN_SUPPORTED_VERSION = '0.7.0'` |
+| D5 | Version floor | `EXPECTED_RANGE = '^0.7.2'`, `MIN_SUPPORTED_VERSION = '0.7.0'` |
 
 ## 4. Plan
 
@@ -111,7 +111,7 @@ Verify: dsh entry add/repair/pause/restore on 0.7.1; a foreign panel edit; the l
 `en` + `zh` for every new string; copy that says `servers.config.json` names the workspace file instead.
 Verify: locale parity test, tool approval rules unchanged, `status` payload lists workspaces.
 
-**Stage 7 — dependency, docs, release.** `home-hosted` → `^0.7.1`; `EXPECTED_RANGE`/`MIN_SUPPORTED_VERSION`;
+**Stage 7 — dependency, docs, release.** `home-hosted` → `^0.7.2`; `EXPECTED_RANGE`/`MIN_SUPPORTED_VERSION`;
 README, this doc, `docs/DESIGN.md` ("Config compatibility was dropped", "One panel root", "Several panels on one
 machine" all need the workspace dimension); rebuild `lib/**` (committed artifacts); release **0.5.0** with a
 `BREAKING CHANGE:` footer naming the upgrade: install `dsh-home-hosted@0.5.0` **and** let the panel start once on

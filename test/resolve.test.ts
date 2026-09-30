@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 /** A fake installed package with a bin entry. */
-function fakePackage(root: string, version = '0.7.1', bin: unknown = { 'home-hosted': 'bin/home-hosted.mjs' }): string {
+function fakePackage(root: string, version = '0.7.2', bin: unknown = { 'home-hosted': 'bin/home-hosted.mjs' }): string {
   const dir = path.join(root, 'node_modules', 'home-hosted')
   const manifest = path.join(dir, 'package.json')
   writeJsonFile(manifest, { name: 'home-hosted', version, bin })
@@ -171,7 +171,7 @@ describe('CLI preference', () => {
     const resolution = await both('pinned')
     expect(resolution.status.source).toBe('dependency')
     expect(resolution.status.prefer).toBe('pinned')
-    expect(resolution.status.dependency).toMatchObject({ source: 'dependency', version: '0.7.1' })
+    expect(resolution.status.dependency).toMatchObject({ source: 'dependency', version: '0.7.2' })
     expect(resolution.status.global).toMatchObject({ source: 'path', version: '0.7.0' })
   })
 

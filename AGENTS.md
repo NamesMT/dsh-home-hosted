@@ -99,7 +99,7 @@ service manager, or restart the harness you are running in to "check" something.
   `xdg-autostart`) reports `activate() → null`, and nothing is stopped.
 - An entry this process runs as is never deleted (the panel is told to stop it); "stop managing" pauses
   or restores it instead.
-- Only the `home-hosted` this plugin pins is supported (`^0.7.1`): the state layout is `.hh`, and
+- Only the `home-hosted` this plugin pins is supported (`^0.7.2`): the state layout is `.hh`, and
   the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
   can refuse to boot — see DESIGN.
 
