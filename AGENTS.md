@@ -19,10 +19,14 @@ pnpm exec vitest run test/client -t <name>  # focused run
 gh workflow run release.yml -f version=0.4.0 # release; see Releasing
 ```
 
-The shipped artifacts are committed (`lib/**`), so a change to either half must be followed by its
-build — CI builds too, but a stale `lib/` in a commit is what users install. Test the page against a
-throwaway profile (`dsh plugin --profile scratch add .`): never install a real boot entry, run a real
-service manager, or restart the harness you are running in to "check" something.
+The two bundles are committed (`lib/index.js`, `lib/client.js`), so a change to either half must be
+followed by its build — CI builds too, but a stale `lib/` in a commit is what users install. That is
+what makes a non-registry install work at all: pnpm resolves a local path to `link:` and runs no
+`prepare`, and a git-hosted `prepare` is refused until the user allowlists it in the profile's
+`pnpm-workspace.yaml`, so never move the build behind a `prepare` script. Sourcemaps and `lib/types/`
+are gitignored; `prepack` rebuilds both into the published tarball. Test the page against a throwaway
+profile (`dsh plugin --profile scratch add .`): never install a real boot entry, run a real service
+manager, or restart the harness you are running in to "check" something.
 
 ## Layout
 
