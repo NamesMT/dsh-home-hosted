@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.7.2
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.1...v0.7.2)
+
+### 🏡 Chore
+
+- **build:** Stop committing the host sourcemap ([2d7cf91](https://github.com/NamesMT/dsh-home-hosted/commit/2d7cf91))
+
+### ❤️ Contributors
+
+- NamesMT
+
 ## v0.7.1
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.0...v0.7.1)
