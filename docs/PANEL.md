@@ -16,7 +16,8 @@ The range is stated twice and both must agree: `dependencies['home-hosted']` in 
 is older). Bumping one alone makes the page recommend a range the plugin is not built against. A bump
 is therefore those two plus the version-coupled tests — *unless* the release moved something this
 plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/settings`, or a CLI
-subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them.
+subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them, and neither
+did 0.7.3 (DNS-01 through the panel's own DNS accounts, and a Namecheap API provider).
 
 That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
 and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it

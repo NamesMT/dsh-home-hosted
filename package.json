@@ -118,6 +118,6 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
-    "home-hosted": "^0.7.2"
+    "home-hosted": "^0.7.3"
   }
 }
