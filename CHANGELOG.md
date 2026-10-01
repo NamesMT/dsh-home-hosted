@@ -5,6 +5,10 @@
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.1...v0.7.2)
 
+### 🩹 Fixes
+
+- **deps:** Pin home-hosted ^0.7.3 ([e67169f](https://github.com/NamesMT/dsh-home-hosted/commit/e67169f))
+
 ### 🏡 Chore
 
 - **build:** Stop committing the host sourcemap ([2d7cf91](https://github.com/NamesMT/dsh-home-hosted/commit/2d7cf91))
