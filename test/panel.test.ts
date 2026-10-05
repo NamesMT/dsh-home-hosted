@@ -156,6 +156,50 @@ describe('panel client', () => {
     const fallback = new PanelClient({ baseUrl: url, token: 'secret', workspace: 'alpha' })
     expect((await fallback.listServers())[0]?.workspace).toBe('alpha')
   })
+
+  /**
+   * A write answers the stored entry flat, and a read answers a view. The client
+   * decides which it was given rather than assuming, so both raw bodies are pinned
+   * here — one panel generation sends each, and a future one may send either.
+   *
+   * `serverSchema` rejects undeclared keys and declares no `config`, so a stored
+   * entry can never be mistaken for a view: the presence of `config` is the whole
+   * discriminator.
+   */
+  it('reads a flat stored entry and a nested view from the same write call', async () => {
+    let flat = true
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({
+        server: flat
+          // What `addServer`/`updateServer` return: the committed entry, flat.
+          ? { id: 'worker', command: 'node', args: ['x.js'], port: 4000, autostart: true }
+          // A view, for a panel that answers one: the same entry under `config`.
+          : { id: 'worker', workspaceId: 'alpha', status: 'running', pid: 7, url: null, config: { id: 'worker', command: 'node' } },
+      }))
+    })
+    extra.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const client = new PanelClient({ baseUrl: url, token: 'secret', workspace: 'default' })
+
+    const stored = await client.updateServer('worker', { autostart: true })
+    expect(stored.id).toBe('worker')
+    expect(stored.config).toEqual({ command: 'node', args: ['x.js'], port: 4000, autostart: true })
+    // The flat entry's own id is the view's id, not a field inside the config.
+    expect((stored.config as Record<string, unknown>).id).toBeUndefined()
+    // No live state was sent, so none is invented.
+    expect(stored.status).toBe('unknown')
+    expect(stored.pid).toBeNull()
+    expect(stored.workspace).toBe('default')
+
+    flat = false
+    const view = await client.updateServer('worker', { autostart: true })
+    expect(view.config).toEqual({ id: 'worker', command: 'node' })
+    expect(view.status).toBe('running')
+    expect(view.workspace).toBe('alpha')
+  })
 })
 
 describe('token probes', () => {
