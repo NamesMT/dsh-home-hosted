@@ -49,6 +49,11 @@ export class ConfigLayoutError extends Error {
   override name = 'ConfigLayoutError'
 }
 
+/** A patch the panel's own schema would reject, refused rather than written. */
+export class ConfigPatchError extends Error {
+  override name = 'ConfigPatchError'
+}
+
 /** One workspace's entries. A not-yet-migrated root is reported, never parsed. */
 export function readConfig(home: string, workspace: string = DEFAULT_WORKSPACE): ConfigReadResult {
   const refusal = migrationRefusal(home)
@@ -206,8 +211,19 @@ function mergeGroup(target: Record<string, unknown>, patch: Record<string, unkno
  *
  * Only the keys `patch` names are touched; everything else in the entry — and
  * every other entry in the file — is preserved.
+ *
+ * An explicit `null` for one of the three groups is **refused**, not written.
+ * The panel's patch schema declares them `.optional()` but not nullable, so the
+ * API answers 400; writing it here instead produced a config the panel then
+ * refused to boot from (`servers[0] ("a"): restart must be an object (was null)`)
+ * — a file this plugin wrote, that this plugin's own panel cannot start on. A
+ * `null` nested *inside* a group is fine: that is how an optional key is cleared.
  */
 export function patchEntry(raw: RawConfig, id: string, patch: ServerEntryPatch): RawConfig {
+  for (const key of SERVER_MERGE_KEYS) {
+    if ((patch as Record<string, unknown>)[key] === null)
+      throw new ConfigPatchError(`${key} must be an object (was null): the panel refuses to boot a config that carries it`)
+  }
   const servers = (raw.servers ?? []).map((entry) => {
     if (entry.id !== id)
       return entry

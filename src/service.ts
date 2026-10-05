@@ -1798,6 +1798,14 @@ export class HomeHostedService extends Service {
         const target = await this.targetHome(input.home)
         const id = String(input.id)
         const patch = (input.patch ?? {}) as ServerEntryPatch
+        // Refused before either path runs, so an API that answers and a file that
+        // does not give the same answer: the panel's patch schema declares
+        // `restart`/`health`/`stop` optional but not nullable, so a `null` group is
+        // a 400 there and an unbootable config here.
+        for (const key of ['restart', 'health', 'stop']) {
+          if ((patch as Record<string, unknown>)[key] === null)
+            throw new HomeHostedError(`${key} must be an object (was null)`, 'INVALID_PATCH')
+        }
         const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (!target.foreign)
           return await (await this.requireClient()).updateServer(id, patch, workspace)

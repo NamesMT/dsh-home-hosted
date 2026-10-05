@@ -493,6 +493,24 @@ describe('home-hosted service', () => {
     expect(readConfig(home).raw).toBeNull()
   })
 
+  /**
+   * The same patch must fail the same way whichever path would carry it. The
+   * panel's schema declares these three groups optional but not nullable, so its
+   * API answers 400; the file path used to write the `null` straight through and
+   * produce a config the panel then refuses to boot from.
+   */
+  it('refuses a null patch group before choosing a write path', async () => {
+    const { service, home } = await harness()
+    for (const key of ['restart', 'health', 'stop']) {
+      await expect(service.call('servers.update', {
+        id: 'web',
+        patch: { [key]: null },
+      })).rejects.toMatchObject({ code: 'INVALID_PATCH' })
+    }
+    // Refused before anything was written.
+    expect(readConfig(home).raw).toBeNull()
+  })
+
   it('records that the harness is managed, and clears it only for the harness entry', async () => {
     const panel = await withPanel()
     const { service, settings } = await harness({ panel })

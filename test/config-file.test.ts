@@ -176,6 +176,31 @@ describe('config file fallback', () => {
     expect(worker.stop).toEqual({ signal: 'SIGINT', graceMs: 9000, killGroup: false, killPortHolders: true })
   })
 
+  /**
+   * The panel's patch schema declares `restart`/`health`/`stop` `.optional()` but
+   * not nullable, so the API answers 400 for `{ restart: null }`. Writing it here
+   * instead produced a config the panel then *refused to boot from*:
+   * `servers[0] ("a"): restart must be an object (was null)` — a file this plugin
+   * wrote, that this plugin's own panel cannot start on. A `null` nested inside a
+   * group stays allowed: that is how an optional key is cleared.
+   */
+  it('refuses a null group, which the panel answers 400 for and cannot boot on', () => {
+    const dir = home()
+    writeJsonFile(serversFile(dir, 'default'), {
+      servers: [{ id: 'a', command: 'x', restart: { maxRetries: 9 }, health: { timeoutMs: 4000 }, stop: { graceMs: 9000 } }],
+    })
+    const raw = readConfig(dir).raw!
+
+    for (const key of ['restart', 'health', 'stop'] as const) {
+      expect(() => patchEntry(raw, 'a', { [key]: null })).toThrow(/must be an object \(was null\)/)
+    }
+
+    // A null *inside* a group is the documented way to clear one optional key.
+    const nested = patchEntry(raw, 'a', { restart: { maxRetries: null } })
+    expect(findEntry(nested, 'a')?.restart).toEqual({})
+    expect(findEntry(nested, 'a')?.health).toEqual({ timeoutMs: 4000 })
+  })
+
   it('merges a control patch and removes a key an explicit null clears', () => {
     const dir = home()
     const raw = { control: { port: 4000, auth: { enabled: true, sessionTtlMs: 90000 }, tls: { enabled: false } } }
