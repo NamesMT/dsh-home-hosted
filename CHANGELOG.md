@@ -1,6 +1,25 @@
 # Changelog
 
 
+## v0.7.3
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.2...v0.7.3)
+
+### 🩹 Fixes
+
+- **boot:** Escape a .desktop line for GKeyFile, not only for Exec ([6ad4c46](https://github.com/NamesMT/dsh-home-hosted/commit/6ad4c46))
+- **boot:** Stop doubling backslashes in a systemd path or free-text setting ([9c4174a](https://github.com/NamesMT/dsh-home-hosted/commit/9c4174a))
+- **panel:** Read a create/patch answer as the flat entry the panel sends ([70e703a](https://github.com/NamesMT/dsh-home-hosted/commit/70e703a))
+
+### 📖 Documentation
+
+- **changelog:** Record the 0.7.2 pin bump ([73dba12](https://github.com/NamesMT/dsh-home-hosted/commit/73dba12))
+- **boot:** The .desktop entry has two parsers, and the key file runs first ([9c6e6bf](https://github.com/NamesMT/dsh-home-hosted/commit/9c6e6bf))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.7.2
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.1...v0.7.2)
