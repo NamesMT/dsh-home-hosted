@@ -61,8 +61,22 @@ export function readConfig(home: string, workspace: string = DEFAULT_WORKSPACE):
     const exists = fs.existsSync(file)
     return { raw: null, exists, error: exists ? 'the workspace config file could not be parsed' : null }
   }
+  // A JSON *array* parses fine and then reads as "no servers", which is the one
+  // way a malformed file gets past this guard and is still written back: spreading
+  // it into the object form it should have been turns `[{…}]` into `{"0":{…}}`.
+  // The panel refuses a non-object servers file outright, so this does too.
+  if (!isRecordValue(raw))
+    return { raw: null, exists: true, error: 'the workspace config file does not contain a JSON object' }
   if (!Array.isArray(raw.servers) && raw.servers !== undefined)
     return { raw: null, exists: true, error: 'the workspace config file has a servers field that is not an array' }
+  // Every entry has to be an object: `findEntry` and `patchEntry` read `.id` off
+  // them, so a `null` or a string in the list made those throw a raw TypeError —
+  // a crash where the panel reports `servers[i]: …` and keeps the rest running.
+  if (Array.isArray(raw.servers)) {
+    const index = raw.servers.findIndex(entry => !isRecordValue(entry))
+    if (index >= 0)
+      return { raw: null, exists: true, error: `the workspace config file has an entry at servers[${index}] that is not an object` }
+  }
   return { raw, exists: true, error: null }
 }
 
@@ -94,7 +108,11 @@ export function readGlobalSettings(home: string): SettingsReadResult {
     const exists = fs.existsSync(file)
     return { raw: null, exists, error: exists ? 'the panel settings file could not be parsed' : null }
   }
-  if (raw.control !== undefined && (typeof raw.control !== 'object' || raw.control === null || Array.isArray(raw.control)))
+  // Same rule as the servers file: a JSON array parses and would be spread into
+  // the object form on the next write, so it is refused rather than reshaped.
+  if (!isRecordValue(raw))
+    return { raw: null, exists: true, error: 'the panel settings file does not contain a JSON object' }
+  if (raw.control !== undefined && !isRecordValue(raw.control))
     return { raw: null, exists: true, error: 'the panel settings file has a control field that is not an object' }
   return { raw, exists: true, error: null }
 }

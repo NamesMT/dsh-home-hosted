@@ -35,6 +35,57 @@ describe('config file fallback', () => {
     expect(result.error).not.toBeNull()
   })
 
+  /**
+   * A file that parses but is not a config object reads as "no servers", and that
+   * is the dangerous direction: the next write spreads it into the object form it
+   * should have had, turning `[{…}]` into `{"0":{…}}` and losing the shape on
+   * disk. The panel refuses a non-object servers file outright
+   * (`parseServersFile`: "the servers config must contain a JSON object"), so this
+   * refuses it too rather than reshaping it.
+   */
+  it('refuses a servers file that is not a JSON object, rather than reshaping it', () => {
+    const dir = home()
+    const file = serversFile(dir, 'default')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+
+    fs.writeFileSync(file, '[{"id":"keepme","command":"x"}]')
+    const array = readConfig(dir)
+    expect(array.exists).toBe(true)
+    expect(array.raw).toBeNull()
+    expect(array.error).toMatch(/does not contain a JSON object/)
+    // And the file it refused is untouched.
+    expect(fs.readFileSync(file, 'utf8')).toBe('[{"id":"keepme","command":"x"}]')
+
+    // A plain object with no `servers` key is a legitimate empty config.
+    fs.writeFileSync(file, '{"meta":{"writtenBy":"x"}}')
+    expect(readConfig(dir).error).toBeNull()
+  })
+
+  /**
+   * `findEntry` and `patchEntry` read `.id` off every entry, so a `null` or a
+   * string in the list threw a raw `TypeError` — a crash where the panel reports
+   * `servers[i]: …` and keeps the rest of the file running.
+   */
+  it('refuses an entry that is not an object instead of crashing on it', () => {
+    const dir = home()
+    const file = serversFile(dir, 'default')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+
+    for (const bad of ['{"servers":[null]}', '{"servers":["oops"]}', '{"servers":[42]}']) {
+      fs.writeFileSync(file, bad)
+      const result = readConfig(dir)
+      expect(result.raw).toBeNull()
+      expect(result.error).toMatch(/servers\[0\] that is not an object/)
+    }
+
+    // A well-formed list is still read, and the helpers work on it.
+    fs.writeFileSync(file, '{"servers":[{"id":"ok","command":"x"}]}')
+    const good = readConfig(dir)
+    expect(good.error).toBeNull()
+    expect(findEntry(good.raw!, 'ok')?.command).toBe('x')
+    expect(patchEntry(good.raw!, 'ok', { autostart: true }).servers).toEqual([{ id: 'ok', command: 'x', autostart: true }])
+  })
+
   it('upserts and patches while preserving unknown keys and other entries', () => {
     const dir = home()
     writeJsonFile(serversFile(dir, 'default'), {
