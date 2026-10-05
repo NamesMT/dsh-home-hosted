@@ -10,6 +10,9 @@ import {
   batchCommandLine,
   cmdQuote,
   desktopExec,
+  desktopValue,
+  desktopValueEscape,
+  desktopWord,
   powershellLiteral,
   shellCommand,
   shellQuote,
@@ -19,6 +22,113 @@ import {
   windowsCommandLine,
   xmlEscape,
 } from '../../src/boot/escape.js'
+
+/**
+ * The two parsers a `.desktop` value really passes through, reproduced so this
+ * suite can prove the round trip without a desktop session.
+ *
+ * 1. `GKeyFile` — the line reader. It consumes `\n`, `\t`, `\r`, `\s` and `\\`,
+ *    and *refuses the whole key* on a backslash that is none of those.
+ * 2. `g_shell_parse_argv` + `g_shell_unquote` — split on unquoted whitespace,
+ *    honouring `"` and `'`, then unquote each word.
+ *
+ * Verified against GLib 2.80 and `desktop-file-validate` on a real session.
+ */
+function keyFileRead(line: string): string {
+  let out = ''
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!
+    if (char !== '\\') {
+      out += char
+      continue
+    }
+    const next = line[index + 1]
+    const known = next === 'n' ? '\n' : next === 't' ? '\t' : next === 'r' ? '\r' : next === 's' ? ' ' : next === '\\' ? '\\' : null
+    if (known === null)
+      throw new Error(`Key file contains a value that cannot be interpreted: ${JSON.stringify(line)}`)
+    out += known
+    index += 1
+  }
+  return out
+}
+
+function shellWords(value: string): string[] {
+  const words: string[] = []
+  let current = ''
+  let quote: '"' | '\'' | null = null
+  let started = false
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!
+    if (quote === '\'') {
+      if (char === '\'') quote = null
+      else current += char
+      continue
+    }
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null
+      }
+      else if (char === '\\' && ['"', '\\', '$', '`'].includes(value[index + 1] ?? '')) {
+        current += value[index + 1]
+        index += 1
+      }
+      else {
+        current += char
+      }
+      continue
+    }
+    if (char === '"' || char === '\'') {
+      quote = char
+      started = true
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (started || current.length > 0) words.push(current)
+      current = ''
+      started = false
+      continue
+    }
+    current += char
+    started = true
+  }
+  words.push(current)
+  return words
+}
+
+/** One `.desktop` value, read exactly as the desktop session reads it. */
+function roundTrip(encoded: string): string[] {
+  return shellWords(keyFileRead(encoded))
+}
+
+/**
+ * `Exec=` field codes, expanded the way GLib expands them at launch: `%%` is a
+ * literal percent and every other `%<char>` is a field code that disappears when
+ * no files were passed. `desktopWord` doubles `%` for this reason, so the value
+ * an argv carries is the one that was written.
+ */
+function expandFieldCodes(words: string[]): string[] {
+  return words.map((word) => {
+    let out = ''
+    for (let index = 0; index < word.length; index += 1) {
+      if (word[index] !== '%') {
+        out += word[index]
+        continue
+      }
+      const next = word[index + 1]
+      if (next === '%') {
+        out += '%'
+        index += 1
+      }
+      else if (next === undefined) {
+        out += '%'
+      }
+      else {
+        index += 1
+      }
+    }
+    return out
+  })
+}
 
 describe('validation', () => {
   it('accepts ordinary unit names and rejects anything else', () => {
@@ -100,7 +210,49 @@ describe('desktop escaping', () => {
   it('quotes reserved characters and escapes $ and %', () => {
     expect(desktopExec('/usr/bin/node', ['up'])).toBe('/usr/bin/node up')
     expect(desktopExec('/usr/bin/node', ['--home', '/home/my user'])).toBe('/usr/bin/node --home "/home/my user"')
-    expect(desktopExec('/usr/bin/node', ['$HOME'])).toBe('/usr/bin/node "\\$HOME"')
+    expect(desktopExec('/usr/bin/node', ['$HOME'])).toBe('/usr/bin/node "\\\\$HOME"')
+  })
+
+  it('escapes for the key file as well as for Exec, so GLib can read the line', () => {
+    // The bug: a `.desktop` value goes through *two* parsers. GKeyFile reads the
+    // line first and consumes `\\`; a lone `\` is not one of its escapes, so
+    // `g_key_file_get_string` fails, the whole entry is unloadable, and
+    // `desktop-file-validate` still reports the file as clean.
+    expect(() => keyFileRead(desktopWord('/home/a\\b'))).not.toThrow()
+    expect(desktopValueEscape('/home/a\\b')).toBe('/home/a\\\\b')
+    expect(desktopValue('Path', 'C:\\Users\\tester')).toBe('Path=C:\\\\Users\\\\tester')
+  })
+
+  it('round-trips every word through both parsers, byte for byte', () => {
+    const values = [
+      'plain',
+      '/opt/a b/cli.js',
+      '/home/my user/.home-hosted',
+      '100%',
+      '$HOME',
+      'a"b',
+      'a\'b',
+      'a;b',
+      'a\\b',
+      'a\\\\b',
+      'a`b',
+      'a&b',
+      'a|b',
+      'a<b>c',
+      'a#b',
+      'trail\\',
+      'C:\\Users\\a\\b',
+      '\\\\server\\share\\x',
+      '日本語',
+    ]
+    for (const value of values)
+      expect(expandFieldCodes(roundTrip(desktopWord(value)))).toEqual([value])
+  })
+
+  it('round-trips a whole Exec line, program included', () => {
+    const values = ['/opt/a b/cli.js', 'up', '--home', '/home/my$proj', '100%', 'C:\\Users\\a']
+    const words = expandFieldCodes(roundTrip(desktopExec('/usr/bin/node', values)))
+    expect(words).toEqual(['/usr/bin/node', ...values])
   })
 })
 

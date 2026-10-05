@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
 import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec } from './types.js'
-import { assertAbsolute, assertArg, assertEnvKey, assertLabel, assertMarker, assertUnitName, desktopExec, shellCommand } from './escape.js'
+import { assertAbsolute, assertArg, assertEnvKey, assertLabel, assertMarker, assertUnitName, desktopExec, desktopValue, desktopValueEscape, shellCommand } from './escape.js'
 import { bootState, configHome, errorMessage, failed, inspectOwned, posixJoin, removeOwned, writeOwned } from './common.js'
 
 function validate(spec: BootSpec): void {
@@ -23,18 +23,30 @@ function validate(spec: BootSpec): void {
     assertEnvKey(key)
 }
 
+/**
+ * The marker as it appears in the *file*, which is key-file escaped.
+ *
+ * `inspectOwned` compares against the bytes on disk, so the reader and the
+ * writer have to agree on this one form: a marker carrying a backslash would
+ * otherwise be written escaped and searched for raw, and the plugin would treat
+ * its own entry as foreign.
+ */
+function fileMarker(spec: BootSpec): string {
+  return desktopValueEscape(assertMarker(spec.marker))
+}
+
 export function xdgDesktopEntry(spec: BootSpec): string {
   validate(spec)
   return `${[
     '[Desktop Entry]',
     'Type=Application',
-    `Name=${spec.label}`,
-    `Comment=home-hosted daemon, managed by ${spec.marker}`,
+    desktopValue('Name', spec.label),
+    desktopValue('Comment', `home-hosted daemon, managed by ${spec.marker}`),
     `Exec=${desktopExec(spec.command, spec.args)}`,
-    `Path=${spec.cwd}`,
+    desktopValue('Path', spec.cwd),
     'Terminal=false',
     'X-GNOME-Autostart-enabled=true',
-    `X-HomeHosted-Marker=${spec.marker}`,
+    desktopValue('X-HomeHosted-Marker', spec.marker),
     '',
   ].join('\n')}`
 }
@@ -71,7 +83,7 @@ export function createXdgAutostartProvider(ctx: BootProviderContext): BootProvid
     async status(spec: BootSpec): Promise<BootProviderStatus> {
       try {
         const file = pathOf(spec)
-        const own = inspectOwned(file, assertMarker(spec.marker))
+        const own = inspectOwned(file, fileMarker(spec))
         if (own.exists && !own.owned)
           return { state: 'not-installed', unitPath: file, detail: own.reason ?? 'foreign file', commands: [] }
         if (!own.owned || own.text === null)
@@ -96,11 +108,11 @@ export function createXdgAutostartProvider(ctx: BootProviderContext): BootProvid
         validate(spec)
         const file = pathOf(spec)
         fs.mkdirSync(path.dirname(file), { recursive: true })
-        const write = writeOwned(file, spec.marker, xdgDesktopEntry(spec), 0o644)
+        const write = writeOwned(file, fileMarker(spec), xdgDesktopEntry(spec), 0o644)
         if (write.refusal)
           return failed(write.refusal)
 
-        const text = inspectOwned(file, spec.marker).text
+        const text = inspectOwned(file, fileMarker(spec)).text
         const enabled = text !== null
           && desktopFlag(text, 'X-GNOME-Autostart-enabled') !== 'false'
           && desktopFlag(text, 'Hidden') !== 'true'
@@ -125,10 +137,10 @@ export function createXdgAutostartProvider(ctx: BootProviderContext): BootProvid
     async uninstall(spec: BootSpec): Promise<BootActionResult> {
       try {
         const file = pathOf(spec)
-        const own = inspectOwned(file, spec.marker)
+        const own = inspectOwned(file, fileMarker(spec))
         if (own.exists && !own.owned)
           return failed(own.reason ?? 'foreign file')
-        const remove = removeOwned(file, spec.marker)
+        const remove = removeOwned(file, fileMarker(spec))
         if (remove.refusal)
           return failed(remove.refusal)
         return {

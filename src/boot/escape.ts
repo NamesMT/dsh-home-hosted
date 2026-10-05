@@ -162,22 +162,55 @@ export function assertXmlCommentSafe(value: string): string {
 
 const DESKTOP_RESERVED = /[\s"'\\><~|&;$*?#()`]/
 
+/**
+ * Escape one value for the **key-file** layer of a `.desktop` file.
+ *
+ * This is a separate layer from `Exec=`'s own quoting, and it runs *first*:
+ * GLib reads the line with `GKeyFile`, which consumes `\n`, `\t`, `\r`, `\s`
+ * and `\\` before anything else sees the value. A `\` that is not one of those
+ * escapes makes `g_key_file_get_string` fail outright — "Key file contains key
+ * … which has a value that cannot be interpreted" — so the whole entry becomes
+ * unloadable, and `desktop-file-validate` happily accepts the file.
+ *
+ * That is why every backslash is doubled here: after the key-file layer the
+ * value is byte-identical to what the next layer was handed. Only `\\` may
+ * appear in the file — a bare `\` is always invalid.
+ */
+export function desktopValueEscape(value: string): string {
+  assertNoControl(value, 'desktop value')
+  return value.split('\\').join('\\\\')
+}
+
+/**
+ * Quote one `Exec=` word for the desktop-entry parser.
+ *
+ * Two layers, in order: `desktopValueEscape` for the key file, then the shell
+ * quoting below for `g_shell_parse_argv`, which is what actually splits the
+ * value into words and unquotes each one.
+ */
 export function desktopWord(value: string): string {
   assertNoControl(value, 'desktop Exec word')
   const escaped = replaceAll(value, [['\\', '\\\\'], ['"', '\\"'], ['`', '\\`'], ['$', '\\$'], ['%', '%%']])
-  return DESKTOP_RESERVED.test(value) || escaped !== value ? `"${escaped}"` : value
+  const word = DESKTOP_RESERVED.test(value) || escaped !== value ? `"${escaped}"` : value
+  return desktopValueEscape(word)
 }
 
 export function desktopExec(program: string, args: string[]): string {
   return [program, ...args].map(desktopWord).join(' ')
 }
 
-/** A `Key=value` line in a `.desktop` file; the marker is written verbatim. */
+/**
+ * A `Key=value` line in a `.desktop` file.
+ *
+ * The value is key-file escaped, because a `.desktop` line has no shell to
+ * quote for: `Path=`/`Name=`/`Comment=` are read as plain strings, and a
+ * backslash in any of them is a key-file escape rather than data.
+ */
 export function desktopValue(key: string, value: string): string {
   assertNoControl(value, `desktop ${key}`)
   if (key.includes('=') || key.includes('\n'))
     throw new Error(`desktop key ${JSON.stringify(key)} is not valid`)
-  return `${key}=${value}`
+  return `${key}=${desktopValueEscape(value)}`
 }
 
 // ---------------------------------------------------------------------------
