@@ -114,6 +114,29 @@ each generator is exercised against the real parser (`systemd-analyze verify`, `
 `desktop-file-validate`, and a `gio launch` for the XDG entry) rather than only against
 its own expectations.
 
+### A `.desktop` line has two parsers, in order
+
+The XDG entry is the one format that is genuinely read twice, and the first reader is
+easy to forget. `GKeyFile` consumes the line — `\n`, `\t`, `\r`, `\s` and `\\` are its
+escapes, and **a backslash that is none of those makes it refuse the key outright** —
+and only then does the desktop session split `Exec=` with `g_shell_parse_argv` and
+unquote each word. So a value is escaped for the key file *and* for the shell, and the
+key-file layer runs first.
+
+Escaping only for the shell therefore failed in a way that is invisible to
+`desktop-file-validate`, which reports such a file as clean: a lone `\` anywhere in a
+`Path=` or `Exec=` word (`C:\Users\…`, or any POSIX directory whose name has one) made
+`g_key_file_get_string` fail with "Key file contains key … which has a value that cannot
+be interpreted", the entry never loaded, and a `\$`, `` \` `` or `\"` did the same. A
+backslash run was also lossy, because the key-file layer ate half of it: `a\b` came back
+as `ab`. And since `desktop-file-validate` is not the loader, the entry failing to start
+was the first sign.
+
+`desktopValueEscape` is that missing first layer, `desktopValue` applies it to the plain
+keys (`Path=`, `Name=`, `Comment=`), and `Exec=` applies it on top of its shell quoting.
+Every ownership check reads the escaped marker too, or a marker carrying a backslash would
+be written escaped and searched for raw — and the plugin would call its own entry foreign.
+
 ## Enabling autostart hands the panel over
 
 An install alone proves nothing. The panel the plugin started keeps running, so nothing shows whether
