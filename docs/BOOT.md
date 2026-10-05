@@ -92,6 +92,28 @@ stays `available` and its install reports "loads at the next login" instead of r
 `bootstrap`/`enable`/`print` steps need the domain, and they are skipped when it is unreachable. The
 daemon scope still needs root for `/Library/LaunchDaemons`.
 
+## Escaping is per setting, not per file
+
+A unit file is read by systemd, not by a shell, and its settings do not share one
+escaping rule. `ExecStart=` **is** unescaped (`\\`, `\"`, and `$`/`%` are special), which
+is why its words are quoted and a literal `$` or `%` is doubled. `WorkingDirectory=`
+and `Description=` are taken **verbatim**: measured with `systemctl show -p
+WorkingDirectory --value`, every backslash written came straight back, so doubling one
+turned a directory named `a\b` into `a\\b` and the unit died with
+`status=200/CHDIR`. Only `%` is special there — `%%` is a literal percent, and an
+unknown specifier such as `%i` in a system unit is fatal.
+
+The one hazard they *do* share is the line continuation: a setting whose value ends in
+a backslash continues onto the next line, so a `WorkingDirectory=` ending in `\`
+swallowed the `KillMode=process` line under it. The generator appends a trailing space
+in that case — systemd strips surrounding whitespace before expanding the value, so the
+path is unchanged and the next directive survives.
+
+The same two-layer mistake is possible in every format this plugin writes, and it is why
+each generator is exercised against the real parser (`systemd-analyze verify`, `plutil`,
+`desktop-file-validate`, and a `gio launch` for the XDG entry) rather than only against
+its own expectations.
+
 ## Enabling autostart hands the panel over
 
 An install alone proves nothing. The panel the plugin started keeps running, so nothing shows whether

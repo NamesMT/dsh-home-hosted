@@ -480,13 +480,32 @@ describe('systemd system', () => {
 })
 
 describe('systemd working directory encoding', () => {
-  it('escapes a percent and a trailing backslash (verified against systemd-analyze verify)', () => {
-    // `%x` is a fatal invalid specifier, and a trailing `\\` continues the line
-    // into the next directive; both are escaped instead of passed raw.
+  it('escapes a percent, and keeps a backslash as data', () => {
+    // `%x` is a fatal invalid specifier, so it is escaped. A backslash is not an
+    // escape in this setting — systemd takes the path verbatim — so doubling it
+    // (the old behaviour) addressed `a\\b` and failed with `status=200/CHDIR`.
     const percent = systemdUserUnit(spec({ cwd: '/home/my dir/100%' }))
     expect(percent.split('\n')).toContain('WorkingDirectory=/home/my dir/100%%')
+
+    const backslashes = systemdUserUnit(spec({ cwd: '/home/my dir/a\\b' }))
+    expect(backslashes.split('\n')).toContain('WorkingDirectory=/home/my dir/a\\b')
+
+    // A trailing backslash continues the line and would swallow `KillMode=`, so a
+    // trailing space is added; systemd strips it and the path is unchanged.
     const trailing = systemdUserUnit(spec({ cwd: '/home/my dir/trail\\' }))
-    expect(trailing.split('\n')).toContain('WorkingDirectory=/home/my dir/trail\\\\')
+    expect(trailing.split('\n')).toContain('WorkingDirectory=/home/my dir/trail\\ ')
+    expect(trailing).toContain('KillMode=process')
+    expect(percent).toContain('KillMode=process')
+  })
+
+  it('keeps a description verbatim, without letting it splice the next directive', () => {
+    const unit = systemdUserUnit(spec({ label: 'label 100%\\tail' }))
+    expect(unit.split('\n')).toContain('Description=label 100%%\\tail')
+    // The label ends in a plain character here, so nothing needs absorbing.
+    expect(unit).toContain('[Unit]')
+    const trailing = systemdUserUnit(spec({ label: 'ends with a backslash\\' }))
+    expect(trailing.split('\n')).toContain('Description=ends with a backslash\\ ')
+    expect(trailing).toContain('After=network-online.target')
   })
 })
 

@@ -18,6 +18,7 @@ import {
   shellQuote,
   systemdEnvLine,
   systemdExecWord,
+  systemdText,
   windowsArg,
   windowsCommandLine,
   xmlEscape,
@@ -280,18 +281,114 @@ describe('windows escaping', () => {
   })
 })
 
+/**
+ * systemd's real reading of a single-line setting, reproduced so the round trip
+ * is provable without a running systemd.
+ *
+ * `WorkingDirectory=`/`Description=` are taken **verbatim** — `systemctl show -p
+ * WorkingDirectory --value` returned the bytes that were written, for every
+ * backslash count, which is what makes doubling one a bug. Two rules apply:
+ *
+ * 1. `%<char>` is a specifier and expands (`%%` is a literal percent);
+ * 2. a value ending *after* an odd run of backslashes continues onto the next
+ *    line, which is spliced in in place of the newline.
+ */
+function systemdReadSetting(value: string, nextLine = 'NEXT'): string {
+  // Continuation is decided on the raw line: a final backslash escapes the newline.
+  let text = value
+  if (/(?:^|[^\\])(?:\\\\)*\\$/.test(text))
+    text = `${text.slice(0, -1)}${nextLine}`
+  // systemd strips surrounding whitespace from a setting before expanding it,
+  // which is what lets a trailing space absorb a trailing backslash harmlessly.
+  text = text.trim()
+
+  let out = ''
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '%') {
+      out += text[index]
+      continue
+    }
+    const next = text[index + 1]
+    if (next === undefined) {
+      out += '%'
+      continue
+    }
+    if (next === '%') {
+      out += '%'
+      index += 1
+      continue
+    }
+    // A field code expands to nothing here (no specifier arguments supplied).
+    index += 1
+  }
+  return out
+}
+
 describe('systemd path settings', () => {
-  it('escapes specifiers and a trailing backslash', () => {
+  it('leaves a backslash alone, because systemd does not unescape these settings', () => {
+    // The bug: `WorkingDirectory=` was written with every `\` doubled. systemd
+    // takes the value verbatim, so a directory named `a\b` was addressed as
+    // `a\\b` and the unit died with `status=200/CHDIR`.
+    expect(systemdPath('/tmp/a\\b')).toBe('/tmp/a\\b')
+    expect(systemdPath('/tmp/C:\\Users\\a')).toBe('/tmp/C:\\Users\\a')
+    expect(systemdPath('/tmp/a\\tb')).toBe('/tmp/a\\tb')
+  })
+
+  it('escapes specifiers, and nothing else', () => {
     expect(systemdPath('/tmp/plain')).toBe('/tmp/plain')
     expect(systemdPath('/tmp/100%')).toBe('/tmp/100%%')
-    expect(systemdPath('/tmp/trail\\')).toBe('/tmp/trail\\\\')
+    expect(systemdPath('/tmp/%i')).toBe('/tmp/%%i')
     expect(systemdPath('/tmp/my dir')).toBe('/tmp/my dir')
+  })
+
+  it('keeps a trailing backslash from splicing the next directive away', () => {
+    // A trailing `\` continues the line, so `KillMode=` was swallowed into the
+    // path. A trailing space absorbs it and the path is unchanged.
+    expect(systemdPath('/tmp/trail\\')).toBe('/tmp/trail\\ ')
+    expect(systemdPath('/tmp/trail\\')).not.toMatch(/\\$/)
+    for (const value of ['/tmp/trail\\', '/tmp/trail\\\\', '/tmp/x\\y\\'])
+      expect(systemdReadSetting(systemdPath(value), 'KillMode=process')).toBe(value)
+  })
+
+  it('round-trips every path through systemd\'s own reading', () => {
+    const paths = [
+      '/tmp/plain',
+      '/tmp/my dir',
+      '/tmp/100%',
+      '/tmp/%i',
+      '/tmp/a\\b',
+      '/tmp/a\\tb',
+      '/tmp/a\\sb',
+      '/tmp/a\\nb',
+      '/tmp/trail\\',
+      '/tmp/trail\\\\',
+      '/tmp/x\\y\\',
+      '/tmp/C:\\Users\\a',
+    ]
+    for (const path of paths)
+      expect(systemdReadSetting(systemdPath(path), 'KillMode=process')).toBe(path)
   })
 
   it('refuses what cannot be encoded', () => {
     expect(() => systemdPath('relative/path')).toThrow(/absolute/)
     expect(() => systemdPath('/tmp/a"b')).toThrow(/double quote/)
     expect(() => systemdPath('/tmp/a\nb')).toThrow(/control/)
+  })
+})
+
+describe('systemd free-text settings', () => {
+  it('keeps a backslash and escapes only the specifier', () => {
+    // `Description=` is read verbatim too, so doubling a backslash put one into
+    // the label; a trailing backslash spliced the next directive onto it.
+    expect(systemdText('home-hosted panel')).toBe('home-hosted panel')
+    expect(systemdText('100%')).toBe('100%%')
+    expect(systemdText('a\\b')).toBe('a\\b')
+    expect(systemdText('trail\\')).toBe('trail\\ ')
+  })
+
+  it('never lets a directive be swallowed', () => {
+    for (const label of ['home-hosted panel', '100%', 'a\\b', 'trail\\', 'x\\y\\'])
+      expect(systemdReadSetting(systemdText(label), 'KillMode=process')).toBe(label)
   })
 })
 

@@ -106,26 +106,44 @@ export function systemdExecWord(value: string): string {
 }
 
 /**
- * A single-line free-text setting such as `Description=` (specifiers only).
+ * A single-line free-text setting such as `Description=`.
+ *
+ * systemd reads these **verbatim** — unlike `ExecStart=`, it does not unescape
+ * `\\` or `$` there — so doubling a backslash puts a backslash *into* the value.
+ * Only two things need care: `%` starts a specifier, and a value that *ends* in a
+ * backslash splices the following line onto this directive, because the
+ * continuation rule applies to the raw line whatever the setting. A trailing
+ * space is the one encoding that leaves both the value and the next directive
+ * intact.
  */
 export function systemdText(value: string): string {
   assertNoControl(value, 'unit setting')
-  // A trailing backslash would continue the directive onto the next line.
-  return replaceAll(value, [['\\', '\\\\'], ['%', '%%']])
+  const escaped = value.split('%').join('%%')
+  return escaped.endsWith('\\') ? `${escaped} ` : escaped
 }
 
 /**
- * A path setting (`WorkingDirectory=`). systemd does not unquote these, but it
- * does expand `%` specifiers (an unknown one is fatal, verified with
- * `systemd-analyze verify`), and a trailing `\` continues the line into the next
- * directive. So both are escaped rather than passed raw.
+ * A path setting (`WorkingDirectory=`).
+ *
+ * Measured against real systemd (`systemctl show -p WorkingDirectory --value`):
+ * the value is taken **verbatim**, so a backslash is a backslash and must not be
+ * doubled — doubling turned a directory named `a\b` into a path that does not
+ * exist, and the unit failed with `status=200/CHDIR`. `%` still expands as a
+ * specifier, and an unknown one (`%i` in a system unit) is fatal, so it is
+ * escaped. The remaining hazard is a *trailing* backslash, which continues the
+ * directive onto the next line and swallows it; a trailing space absorbs that
+ * without changing the path.
+ *
+ * A double quote is refused rather than quoted: systemd does not unquote these
+ * settings, so a quoted form is simply a path with a quote in it.
  */
 export function systemdPath(value: string, what = 'path'): string {
   assertAbsolute(value, what)
   assertNoControl(value, what)
   if (value.includes('"'))
     throw new Error(`${what} must not contain a double quote: ${JSON.stringify(value)}`)
-  return replaceAll(value, [['\\', '\\\\'], ['%', '%%']])
+  const escaped = value.split('%').join('%%')
+  return escaped.endsWith('\\') ? `${escaped} ` : escaped
 }
 
 /** `Environment=KEY=value`, quoted as one assignment when the value needs it. */
