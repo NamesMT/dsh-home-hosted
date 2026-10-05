@@ -65,6 +65,22 @@ response says the page will disconnect; the helper logs to `bin/panel-takeover.l
 can still carry `ok: false` — the page reads the payload's `detail`/`output` rather than trusting
 `envelope.ok`, so a refused control action says why instead of looking like a no-op.
 
+## The console is readable when nothing else is
+
+A panel that is up but misbehaving is exactly when its API is hardest to reach: the token may be
+stale, `writeVia` may be `file`, and the thing that explains the symptom is what the panel printed
+while starting. So `panel.console` reads `<root>/.hh/.logs/home-hosted.log` off disk — no session, no
+API token, no CLI, and no dependence on the panel answering — and the `panel_logs` agent tool exposes
+it. It reads one rotation too (`<log>.1`), because the end of the file that just rotated away is
+usually where a crash is, and it matches `home-hosted logs` line for line (verified against a real
+panel at every count).
+
+A missing log is an empty one, not an error: a panel that has just started has nothing to say, and
+reporting that as a failure would make the one diagnostic that always works look broken. The new tool
+is **not** added to an existing settings file's allow-list — a tool that did not exist when that file
+was written could not have been deselected, but granting it silently would expand a deliberate
+selection, so the page's checkbox is how it is chosen.
+
 ## Credentials
 
 home-hosted keeps only an API token's hash, so a token this plugin did not create can never be

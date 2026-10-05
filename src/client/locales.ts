@@ -185,6 +185,7 @@ export const en = {
   agentToolServersEdit: 'Create, update, delete',
   agentToolAutostartManage: 'Manage boot autostart',
   agentToolUiManage: 'Manage Panel UI',
+  agentToolPanelLogs: 'Panel Logs',
   agentToolDescStatus: 'Read the panel, the CLI copy in use and the managed entry. Nothing changes.',
   agentToolDescWorkspacesList: 'List every workspace the panel serves, with its entry and running counts. A server id is only unique inside a workspace.',
   agentToolDescServersList: 'List the servers of one workspace, with status, port and URL.',
@@ -192,6 +193,7 @@ export const en = {
   agentToolDescServersEdit: 'Create, update and delete server entries.',
   agentToolDescAutostartManage: 'Install or remove the boot entry that starts the panel.',
   agentToolDescUiManage: 'Inspect, update, revert or install an official UI build.',
+  agentToolDescPanelLogs: 'Read the panel\'s own console output. Needs no API token, so it works when the panel is up but not answering.',
 
   serversTitle: 'Servers',
   serversCount: '{running} of {total} running',
@@ -432,6 +434,7 @@ export const zh: Record<keyof typeof en, string> = {
   agentToolServersEdit: '创建、更新、删除',
   agentToolAutostartManage: '管理开机自启',
   agentToolUiManage: '管理面板 UI',
+  agentToolPanelLogs: '面板日志',
   agentToolDescStatus: '读取面板、正在使用的 CLI 副本和受管条目。不改变任何状态。',
   agentToolDescWorkspacesList: '列出面板提供的所有工作区及其条目数和运行数。服务器 id 只在工作区内唯一。',
   agentToolDescServersList: '列出某个工作区中被监管的服务器及其状态、端口和 URL。',
@@ -439,6 +442,7 @@ export const zh: Record<keyof typeof en, string> = {
   agentToolDescServersEdit: '创建、更新和删除服务器条目。',
   agentToolDescAutostartManage: '安装或移除启动面板的开机项。',
   agentToolDescUiManage: '查看、更新、回退或安装官方 UI 构建。',
+  agentToolDescPanelLogs: '读取面板自身的控制台输出。无需 API 令牌，因此面板在运行但无响应时也能使用。',
 
   serversTitle: '服务器',
   serversCount: '{total} 个中 {running} 个运行中',

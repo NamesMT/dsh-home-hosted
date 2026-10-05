@@ -43,6 +43,7 @@ export type RpcEndpoint =
   | 'panel.stop'
   | 'panel.takeover'
   | 'panel.reclaimToken'
+  | 'panel.console'
   | 'cli.installGlobal'
   | 'ui.manage'
   | 'settings.update'
@@ -158,6 +159,12 @@ export interface EndpointPayloads {
    * Clearing first is what makes it work when home-hosted already holds a hash.
    */
   'panel.reclaimToken': Record<string, never>
+  /**
+   * The panel's own console output, read from its log file. Needs no session and
+   * no API token, which is the point: a panel that is up but misbehaving is
+   * exactly when neither is available.
+   */
+  'panel.console': { lines?: number }
   /** Install the pinned range as a global CLI, so the `global` preference can use it. */
   'cli.installGlobal': Record<string, never>
   /**
@@ -301,6 +308,20 @@ export interface PanelStatus {
   /** True when the panel was asked and accepted the token, so `token` is measured, not assumed. */
   tokenVerified?: boolean
   detail: string
+}
+
+/**
+ * The panel's own console, as `panel.console` answers it.
+ *
+ * `error` is a real read failure — a missing log is an empty one, not an error, so
+ * a panel that has just started is not reported as broken.
+ */
+export interface PanelConsoleResult {
+  /** The live log's path, so a person can read the rest of it themselves. */
+  path: string
+  /** Oldest first. */
+  lines: string[]
+  error: string | null
 }
 
 /** Which home-hosted CLI the plugin drives, and where it came from. */
@@ -458,6 +479,7 @@ export type AgentToolName =
   | 'servers_edit'
   | 'autostart_manage'
   | 'ui_manage'
+  | 'panel_logs'
 
 export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   'status',
@@ -467,6 +489,7 @@ export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   'servers_edit',
   'autostart_manage',
   'ui_manage',
+  'panel_logs',
 ]
 
 /**

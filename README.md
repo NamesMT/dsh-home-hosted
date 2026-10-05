@@ -103,6 +103,7 @@ the server management, not the thing this plugin is.
 | `home_hosted_servers_edit` | `create` · `update` · `delete` |
 | `home_hosted_autostart_manage` | `install` · `uninstall` |
 | `home_hosted_ui_manage` | `status` · `update` · `revert` · `switch` (official asset or local zip) |
+| `home_hosted_panel_logs` | The panel's own console output. Needs no API token, so it works when the panel is up but not answering. |
 
 Every server tool names its `workspace`, because an id is only unique inside one.
 

@@ -42,6 +42,7 @@ export const AGENT_TOOL_KEYS: Record<AgentToolName, string> = {
   servers_edit: 'agentToolServersEdit',
   autostart_manage: 'agentToolAutostartManage',
   ui_manage: 'agentToolUiManage',
+  panel_logs: 'agentToolPanelLogs',
 }
 
 /** Locale key for each agent tool's one-line description (the detailed cards). */
@@ -53,6 +54,7 @@ export const AGENT_TOOL_DESC_KEYS: Record<AgentToolName, string> = {
   servers_edit: 'agentToolDescServersEdit',
   autostart_manage: 'agentToolDescAutostartManage',
   ui_manage: 'agentToolDescUiManage',
+  panel_logs: 'agentToolDescPanelLogs',
 }
 
 /** Locale key for a write path. */

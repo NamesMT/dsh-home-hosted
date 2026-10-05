@@ -6,9 +6,10 @@ Related: [server entries](ENTRIES.md)
 
 ## Agent tools are merged and on by default
 
-Seven tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit` carries
+Eight tools, not ten: `servers_lifecycle` carries start/stop/restart, `servers_edit` carries
 create/update/delete, `autostart_manage` carries install/uninstall, `ui_manage` drives the panel's own
-UI, and `workspaces_list` is the read-only way to see every workspace. They register on by default;
+UI, `panel_logs` reads the panel's console, and `workspaces_list` is the read-only way to see every
+workspace. They register on by default;
 what gates a mutating call is the session's own permission mode, not a plugin-level default.
 
 A description is read at the approval prompt, so each is one line a person can glance at: what the tool

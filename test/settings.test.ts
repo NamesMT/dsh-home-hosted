@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SettingsStore } from '../src/settings.js'
+import { AGENT_TOOL_NAMES, SETTINGS_VERSION } from '../src/shared/contracts.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
 
@@ -30,7 +31,7 @@ describe('settings store', () => {
       reclaimToken: true,
       instancesNotice: true,
       uiStyle: 'detailed',
-      agentTools: { enabled: true, allow: ['status', 'workspaces_list', 'servers_list', 'servers_lifecycle', 'servers_edit', 'autostart_manage', 'ui_manage'] },
+      agentTools: { enabled: true, allow: [...AGENT_TOOL_NAMES] },
       cli: { prefer: 'pinned' },
     })
   })
@@ -169,9 +170,10 @@ describe('upgrading an older settings file', () => {
       agentTools: { enabled: false, allow: ['status', 'servers_list'] },
     })
     const store = new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh')
-    // The old default wrote this pair itself, so it must not look like a choice.
+    // The old default wrote this pair itself, so it must not look like a choice:
+    // it becomes the current default, which is every tool this release names.
     expect(store.get().agentTools.enabled).toBe(true)
-    expect(store.get().agentTools.allow).toHaveLength(7)
+    expect(store.get().agentTools.allow).toEqual([...AGENT_TOOL_NAMES])
   })
 
   it('keeps a real selection as it was made', () => {
@@ -182,6 +184,26 @@ describe('upgrading an older settings file', () => {
     const store = new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh')
     expect(store.get().agentTools.enabled).toBe(false)
     expect(store.get().agentTools.allow).toEqual(['status'])
+  })
+
+  /**
+   * A tool added after a file was written is never *added* to that file's
+   * allow-list. It could not have been deselected — it did not exist — but
+   * silently granting it would expand a deliberate selection, and that is the
+   * user's decision, not the plugin's. `panel_logs` reached `AGENT_TOOL_NAMES`
+   * after `SETTINGS_VERSION` 3 was already shipped, so this pins the conservative
+   * reading: an existing file keeps exactly what it held, and the page's checkbox
+   * is how the new tool is chosen.
+   */
+  it('does not grant a tool that did not exist when the file was written', () => {
+    scratch = tempDir()
+    writeJsonFile(path.join(scratch.path, 'settings.json'), {
+      version: SETTINGS_VERSION,
+      agentTools: { enabled: true, allow: ['status', 'ui_manage'] },
+    })
+    const store = new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh')
+    expect(store.get().agentTools.allow).toEqual(['status', 'ui_manage'])
+    expect(store.get().agentTools.allow).not.toContain('panel_logs')
   })
 })
 

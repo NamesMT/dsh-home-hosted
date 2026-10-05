@@ -289,6 +289,30 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
       }
     },
   },
+  /**
+   * The one diagnostic that works when the panel's API does not: it reads the
+   * console log off disk, so it needs no session and no API token. Read-only, and
+   * deliberately not gated behind approval — a token is hardest to come by in
+   * exactly the case this exists for.
+   */
+  panel_logs: {
+    description: 'Read the panel\'s own console output — what home-hosted printed while starting and supervising. Needs no API token, so it still works when the panel is up but not answering.',
+    parameters: {
+      instance: INSTANCE_PARAM,
+      lines: { type: 'string', description: 'How many trailing lines to read (default 50, `all` for everything)' },
+    },
+    run: (input) => {
+      const raw = stringArg(input, 'lines')
+      if (raw === null)
+        return { endpoint: 'panel.console', payload: {} }
+      if (raw.trim().toLowerCase() === 'all')
+        return { endpoint: 'panel.console', payload: { lines: 0 } }
+      const parsed = Number.parseInt(raw, 10)
+      if (!Number.isFinite(parsed))
+        throw new Error('lines must be a number or `all`')
+      return { endpoint: 'panel.console', payload: { lines: parsed } }
+    },
+  },
 }
 
 export function toolNameFor(name: AgentToolName): string {

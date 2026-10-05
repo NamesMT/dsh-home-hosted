@@ -33,6 +33,7 @@ import type { PanelControlDeps } from './home-hosted/panel-control.js'
 import { activationLogPath, installGlobal, spawnActivation, spawnTakeover, startPanel as startPanelProcess, stopPanel as stopPanelProcess } from './home-hosted/panel-control.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
+import { readPanelConsole } from './home-hosted/panel-console.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
 import { bootUnitName, dshHome } from './util/paths.js'
@@ -44,6 +45,11 @@ const ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
 
 /** A token probe is an auxiliary fact, not a user action: never let it stall a poll. */
 const TOKEN_PROBE_TIMEOUT_MS = 3000
+
+/** How much of the panel console a call reads when it names no count. */
+const CONSOLE_DEFAULT_LINES = 50
+/** A ceiling, so `lines: 1e9` cannot ask the plugin to read a whole disk into memory. */
+const CONSOLE_MAX_LINES = 5000
 
 /** How often a deleted managed entry may be put back from the status read. */
 const ENTRY_RECOVERY_INTERVAL_MS = 30_000
@@ -1972,6 +1978,19 @@ export class HomeHostedService extends Service {
 
       case 'panel.reclaimToken':
         return await this.reclaimPanelToken()
+
+      /**
+       * The panel's console, read from disk: no session, no API token, and no
+       * dependence on the panel answering. This is the diagnostic that still works
+       * in the case it exists for — a panel that is up but misbehaving.
+       */
+      case 'panel.console': {
+        const requested = typeof input.lines === 'number' ? input.lines : Number.NaN
+        const lines = Number.isFinite(requested)
+          ? Math.min(Math.max(Math.trunc(requested), 0), CONSOLE_MAX_LINES)
+          : CONSOLE_DEFAULT_LINES
+        return readPanelConsole(this.options.home, { lines })
+      }
 
       case 'cli.installGlobal':
         return await this.installGlobalCli()

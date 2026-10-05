@@ -163,15 +163,9 @@ describe('agent tools', () => {
     const scratch = tempDir()
     const settings = new SettingsStore(`${scratch.path}/settings.json`, 'dsh')
     expect(settings.get().agentTools.enabled).toBe(true)
-    expect(settings.get().agentTools.allow).toEqual([
-      'status',
-      'workspaces_list',
-      'servers_list',
-      'servers_lifecycle',
-      'servers_edit',
-      'autostart_manage',
-      'ui_manage',
-    ])
+    // Every tool `AGENT_TOOL_NAMES` names, in its order — so adding one to that
+    // list is what grants it, and this assertion moves with it.
+    expect(settings.get().agentTools.allow).toEqual([...AGENT_TOOL_NAMES])
   })
 
   it('answers a read-only tool without asking for approval', async () => {
@@ -181,6 +175,31 @@ describe('agent tools', () => {
     expect(h.approvals).toHaveLength(0)
     expect(h.calls[0]?.endpoint).toBe('status')
     expect(answer).toContain('"endpoint": "status"')
+  })
+
+  /**
+   * The console read is the diagnostic that still works when the panel's API does
+   * not, so it must not be gated behind approval or an API token — a token is
+   * hardest to come by in exactly the case it exists for.
+   */
+  it('reads the panel console without approval, and parses its line count', async () => {
+    const h = harness({ allow: ['panel_logs'] })
+    const tool = h.tools.find(candidate => candidate.name === toolNameFor('panel_logs'))!
+    expect(tool).toBeDefined()
+
+    await tool.execute({}, { agent: 'a' })
+    expect(h.approvals).toHaveLength(0)
+    expect(h.calls[0]).toEqual({ endpoint: 'panel.console', payload: {} })
+
+    await tool.execute({ lines: '12' }, { agent: 'a' })
+    expect(h.calls[1]).toEqual({ endpoint: 'panel.console', payload: { lines: 12 } })
+
+    // `all` is the whole log, which the endpoint spells as `0`.
+    await tool.execute({ lines: 'all' }, { agent: 'a' })
+    expect(h.calls[2]).toEqual({ endpoint: 'panel.console', payload: { lines: 0 } })
+
+    // A count that is not a number is refused rather than silently defaulted.
+    expect(await tool.execute({ lines: 'lots' }, { agent: 'a' })).toContain('lines must be a number or `all`')
   })
 
   it('maps a lifecycle action onto its endpoint', async () => {

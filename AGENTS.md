@@ -114,6 +114,10 @@ manager, or restart the harness you are running in to "check" something.
 - Only the `home-hosted` this plugin pins is supported (`^0.7.3`): the state layout is `.hh`, and
   the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
   can refuse to boot — see DESIGN.
+- **The panel console is a first-class diagnostic** (`panel.console` / `home-hosted/panel-console.ts`):
+  read from disk so it needs no session, no token and no answering panel, and matching
+  `home-hosted logs` line for line. A missing log reads as empty, never as an error. A new agent tool
+  is **not** retro-added to an existing allow-list — see the settings note above.
 - **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.3` already
   admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable
   without moving the pin — and a *local* panel older than it is a real scenario, not a mistake. So
