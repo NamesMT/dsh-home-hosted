@@ -7,6 +7,7 @@ import type { BootStatus, HomeHostedStatus, ServerEntryView, WorkspaceSummary } 
 import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
+import { panelConsolePath } from '../src/home-hosted/panel-console.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
@@ -341,6 +342,41 @@ describe('home-hosted service', () => {
       .rejects.toMatchObject({ code: 'INSTANCE_UNKNOWN' })
     await expect(service.call('boot.verify', { home: path.join(path.dirname(home), 'other-panel') } as never))
       .rejects.toMatchObject({ code: 'INSTANCE_UNSUPPORTED' })
+    // The console read is about the panel this plugin manages, like the boot entry:
+    // it reads *this* root's log, so aiming it elsewhere must refuse rather than
+    // silently answer about the managed panel.
+    await expect(service.call('panel.console', { home: path.join(path.dirname(home), 'other-panel') } as never))
+      .rejects.toMatchObject({ code: 'INSTANCE_UNSUPPORTED' })
+  })
+
+  it('reads the managed panel\'s console, and reports a missing one as empty', async () => {
+    const { service, home } = await harness()
+    // Nothing has started here, so there is no console yet — an empty read, not a
+    // failure: reporting that as an error would make the one diagnostic that always
+    // works look broken.
+    const absent = await service.call('panel.console', {}) as { path: string, lines: string[], error: string | null }
+    expect(absent.error).toBeNull()
+    expect(absent.lines).toEqual([])
+    expect(absent.path).toBe(panelConsolePath(home))
+
+    // A console that exists is read back, oldest first.
+    fs.mkdirSync(path.dirname(absent.path), { recursive: true })
+    fs.writeFileSync(absent.path, 'first\nsecond\nthird\n')
+    const read = await service.call('panel.console', { lines: 2 }) as { lines: string[] }
+    expect(read.lines).toEqual(['second', 'third'])
+  })
+
+  it('caps an absurd line count instead of reading a whole disk', async () => {
+    const { service, home } = await harness()
+    const file = panelConsolePath(home)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `${Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n')}\n`)
+    // The cap bounds the request; the answer is still the whole (short) log.
+    const all = await service.call('panel.console', { lines: 1e9 }) as { lines: string[] }
+    expect(all.lines).toHaveLength(20)
+    // A negative count means "the whole log", the same as `lines: 0`.
+    const negative = await service.call('panel.console', { lines: -5 }) as { lines: string[] }
+    expect(negative.lines).toHaveLength(20)
   })
 
   it('keeps a foreign entry found by its id, and refuses an impossible write', async () => {
