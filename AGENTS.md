@@ -92,6 +92,24 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **`Number.parseInt` takes a *prefix*, so a partly numeric argument becomes a number
+  nobody asked for.** `1e3` → 1, `12abc` → 12, and `0x10` → **0**, which is the "whole
+  log" sentinel in the console reader — a bounded request silently became an unbounded
+  read. `Number.isFinite` catches none of them. Require the **whole trimmed string** to
+  be a decimal integer (`/^[+-]?\d+$/`) plus `Number.isSafeInteger` before parsing, and
+  prefer refusing over defaulting where the caller can be told. Sites fixed here:
+  the `panel_logs` tool's `lines`, and `parsePasswd`'s uid field — where a corrupt row
+  like `1000abc` used to yield a plausible account that then becomes `User=` in a
+  generated boot unit (`numberFrom` already applied this rule; the two now agree).
+  Fix it only where the wrong number can *hurt*: a clamp makes a partial parse harmless,
+  which is why upstream's `?tail=` was left alone.
+- **Two copies of one algorithm inside separate generated scripts are real duplication;
+  two copies in normal modules are not always.** `launcher.ts` builds two self-contained
+  scripts (a test asserts no relative imports), and of the eight helpers they share only
+  the version comparator's body was byte-identical — so it is now one interpolated
+  fragment, with output verified byte-identical. The other seven genuinely differ and
+  must not be merged. Extract a shared helper only where the copies can diverge.
+
 - **A test that cannot run must report `skipped`, never `passed`.** vitest treats an
   early `return` inside a test body as a pass, so a guard like
   `if (!fs.existsSync(dependency)) return` makes the suite claim a verification it never

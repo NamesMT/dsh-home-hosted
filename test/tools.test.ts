@@ -220,7 +220,40 @@ describe('agent tools', () => {
     expect(h.calls[2]).toEqual({ endpoint: 'panel.console', payload: { lines: 0 } })
 
     // A count that is not a number is refused rather than silently defaulted.
-    expect(await tool.execute({ lines: 'lots' }, { agent: 'a' })).toContain('lines must be a number or `all`')
+    expect(await tool.execute({ lines: 'lots' }, { agent: 'a' })).toContain('lines must be a decimal integer')
+  })
+
+  /**
+   * `Number.parseInt` stops at the first character it cannot use, so a *partly*
+   * numeric argument became a number nobody asked for — and `0` is the "whole log"
+   * sentinel, so `0x10` turned a bounded request into an unbounded read. Verified
+   * against the real tool before the fix: `1e3` → `{lines:1}`, `0x10` → `{lines:0}`,
+   * `12abc` → `{lines:12}`. The whole trimmed argument must be a decimal integer.
+   */
+  it('refuses a partly numeric line count instead of parsing its prefix', async () => {
+    const h = harness({ allow: ['panel_logs'] })
+    const tool = h.tools.find(candidate => candidate.name === toolNameFor('panel_logs'))!
+    for (const raw of ['1e3', '0x10', '0b11', '0o17', '12abc', '10.5', '1_000', '  1 2  ', '+', '-', '--3', '1e', 'NaN', 'Infinity']) {
+      const answer = await tool.execute({ lines: raw }, { agent: 'a' })
+      expect(answer, `${JSON.stringify(raw)} should be refused`).toContain('lines must be a decimal integer')
+    }
+    // Nothing was sent: a refused count must never reach the endpoint.
+    expect(h.calls).toHaveLength(0)
+
+    // The forms that are genuinely decimal integers still work, including signs.
+    for (const [raw, expected] of [['12', 12], [' 007 ', 7], ['+5', 5], ['-5', 0], ['0', 0]] as const) {
+      await tool.execute({ lines: raw }, { agent: 'a' })
+      expect(h.calls[h.calls.length - 1]).toEqual({ endpoint: 'panel.console', payload: { lines: expected } })
+    }
+
+    // And `all` keeps meaning the whole log, in either case.
+    for (const raw of ['all', 'ALL', ' All ']) {
+      await tool.execute({ lines: raw }, { agent: 'a' })
+      expect(h.calls[h.calls.length - 1]).toEqual({ endpoint: 'panel.console', payload: { lines: 0 } })
+    }
+
+    // A count past the safe-integer range is refused too: it cannot be honoured.
+    expect(await tool.execute({ lines: '99999999999999999999' }, { agent: 'a' })).toContain('out of range')
   })
 
   it('maps a lifecycle action onto its endpoint', async () => {

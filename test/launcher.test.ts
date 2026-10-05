@@ -174,6 +174,30 @@ describe('boot launcher', () => {
     expect(versionOfEntry(picked!)).toBe('0.7.0')
   })
 
+  /**
+   * The two generated scripts share eight helpers, and only the comparator's body was
+   * byte-identical — so it is now one interpolated fragment rather than two copies that
+   * could drift. The drift would be invisible: each script is rewritten on every plugin
+   * start, and nothing compared them. This asserts both interpolate the same text.
+   */
+  it('gives both generated scripts the same version comparator', () => {
+    const grab = (source: string): string => {
+      const start = source.indexOf('function compare(a, b) {')
+      expect(start, 'both generated scripts should carry the comparator').toBeGreaterThan(-1)
+      const end = source.indexOf('\nfunction ', start + 10)
+      return source.slice(start, end === -1 ? undefined : end)
+    }
+    const options = { stateDir: '/tmp/s', dshHome: '/tmp/d', resolvedEntry: '/tmp/e', minVersion: '0.4.1' }
+    const launcher = grab(buildLauncherSource(options as never))
+    const dshLauncher = grab(buildDshLauncherSource({ ...options, entryExtension: '.cjs' } as never))
+    expect(launcher).toBe(dshLauncher)
+    // The real algorithm, not an empty fragment: a prerelease sorts below its release.
+    expect(launcher).toContain('left.pre === null')
+    expect(launcher).toContain("String(value).split('-', 2)")
+    // Interpolating a fragment must not introduce an import into a self-contained script.
+    expect(buildLauncherSource(options as never)).not.toMatch(/from '\.\.?\//)
+  })
+
   it('names the launcher path and record it will own', () => {
     const h = harness()
     expect(launcherPath(h.state)).toBe(path.join(h.state, 'bin', 'home-hosted.mjs'))

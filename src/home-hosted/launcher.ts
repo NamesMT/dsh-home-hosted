@@ -82,6 +82,32 @@ export function readLauncherRecord(stateDir: string): LauncherRecord | null {
   return readJson<LauncherRecord>(launcherRecordPath(stateDir))
 }
 
+/**
+ * The version comparator the **generated** launchers run.
+ *
+ * A fragment, not an import: each launcher is written to disk as a self-contained
+ * script — `test/launcher` asserts it carries no relative imports — so it cannot
+ * reach this module at runtime. Both templates interpolate the same text, which is
+ * the only way two copies of one algorithm can be kept from drifting. Eight helpers
+ * are shared between the two scripts and this is the only one whose body is
+ * byte-identical, so it is the only duplication that was real.
+ */
+const COMPARE_VERSIONS_SOURCE = String.raw`function compare(a, b) {
+  const split = value => {
+    const [core, pre = null] = String(value).split('-', 2)
+    return { parts: core.split('.').map(part => Number.parseInt(part, 10) || 0), pre }
+  }
+  const left = split(a); const right = split(b)
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (left.parts[i] ?? 0) - (right.parts[i] ?? 0)
+    if (diff !== 0) return diff < 0 ? -1 : 1
+  }
+  if (left.pre === right.pre) return 0
+  if (left.pre === null) return 1
+  if (right.pre === null) return -1
+  return left.pre < right.pre ? -1 : 1
+}`
+
 /** The generated script's source; exported so a test can inspect it. */
 export function buildLauncherSource(options: LauncherOptions): string {
   const marker = options.marker ?? 'managed by dsh-home-hosted'
@@ -137,21 +163,7 @@ function versionOf(entry) {
   return null
 }
 
-function compare(a, b) {
-  const split = value => {
-    const [core, pre = null] = String(value).split('-', 2)
-    return { parts: core.split('.').map(part => Number.parseInt(part, 10) || 0), pre }
-  }
-  const left = split(a); const right = split(b)
-  for (let i = 0; i < 3; i += 1) {
-    const diff = (left.parts[i] ?? 0) - (right.parts[i] ?? 0)
-    if (diff !== 0) return diff < 0 ? -1 : 1
-  }
-  if (left.pre === right.pre) return 0
-  if (left.pre === null) return 1
-  if (right.pre === null) return -1
-  return left.pre < right.pre ? -1 : 1
-}
+${COMPARE_VERSIONS_SOURCE}
 
 function collect(out, entry, tier) {
   if (typeof entry === 'string' && entry.length > 0 && fs.existsSync(entry)) out.push({ entry, tier })
@@ -533,21 +545,7 @@ function versionOf(entry) {
   return null
 }
 
-function compare(a, b) {
-  const split = value => {
-    const [core, pre = null] = String(value).split('-', 2)
-    return { parts: core.split('.').map(part => Number.parseInt(part, 10) || 0), pre }
-  }
-  const left = split(a); const right = split(b)
-  for (let i = 0; i < 3; i += 1) {
-    const diff = (left.parts[i] ?? 0) - (right.parts[i] ?? 0)
-    if (diff !== 0) return diff < 0 ? -1 : 1
-  }
-  if (left.pre === right.pre) return 0
-  if (left.pre === null) return 1
-  if (right.pre === null) return -1
-  return left.pre < right.pre ? -1 : 1
-}
+${COMPARE_VERSIONS_SOURCE}
 
 function findPin(pin, found) {
   if (typeof pin !== 'string' || pin.length === 0) return null

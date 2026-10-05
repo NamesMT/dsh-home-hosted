@@ -56,8 +56,16 @@ export function parsePasswd(text: string): PasswdEntry[] {
     .split('\n')
     .map((line) => {
       const fields = line.split(':')
-      const uid = Number.parseInt(fields[2] ?? '', 10)
-      return fields.length < 6 || !Number.isFinite(uid) || (fields[0] ?? '').length === 0
+      const uidText = fields[2] ?? ''
+      /**
+       * The uid field must be **all** digits. `Number.parseInt` takes a prefix, so a
+       * corrupt row like `weird:x:1000abc:…` used to yield uid 1000 — a plausible
+       * account that `accountOf` could then name, and that name becomes `User=` in a
+       * generated boot unit. A dropped row is the honest outcome; a wrong account is
+       * not. This is the same rule `numberFrom` below applies to the same kind of input.
+       */
+      const uid = /^\d+$/.test(uidText.trim()) ? Number.parseInt(uidText.trim(), 10) : Number.NaN
+      return fields.length < 6 || !Number.isSafeInteger(uid) || (fields[0] ?? '').length === 0
         ? null
         : { name: fields[0] ?? '', uid, home: fields[5] ?? '' }
     })

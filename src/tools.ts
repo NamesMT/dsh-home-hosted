@@ -319,12 +319,27 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
       const raw = stringArg(input, 'lines')
       if (raw === null)
         return { endpoint: 'panel.console', payload: {} }
-      if (raw.trim().toLowerCase() === 'all')
+      const trimmed = raw.trim()
+      if (trimmed.toLowerCase() === 'all')
         return { endpoint: 'panel.console', payload: { lines: 0 } }
-      const parsed = Number.parseInt(raw, 10)
-      if (!Number.isFinite(parsed))
-        throw new Error('lines must be a number or `all`')
-      return { endpoint: 'panel.console', payload: { lines: parsed } }
+      /**
+       * The **whole** argument must be a decimal integer, not a prefix of one.
+       *
+       * `Number.parseInt` stops at the first character it cannot use, so `1e3`
+       * became 1 (the caller meant 1000), `12abc` became 12, and `0x10` became **0** —
+       * which the console reader reads as "the whole log", turning a bounded request
+       * into an unbounded one. `Number.isFinite` catches none of those. A wrong answer
+       * nobody asked for is worse than a refusal, so an unusable count is refused
+       * rather than silently defaulted (the CLI's `parseLines` defaults because it
+       * serves a flag; a tool call can say what it did not understand).
+       */
+      if (!/^[+-]?\d+$/.test(trimmed))
+        throw new Error(`lines must be a decimal integer or \`all\` (received ${JSON.stringify(raw)})`)
+      const parsed = Number.parseInt(trimmed, 10)
+      if (!Number.isSafeInteger(parsed))
+        throw new Error(`lines is out of range (received ${JSON.stringify(raw)})`)
+      // A negative count is "the whole log", the same as `0` — never passed on as-is.
+      return { endpoint: 'panel.console', payload: { lines: parsed < 0 ? 0 : parsed } }
     },
   },
 }

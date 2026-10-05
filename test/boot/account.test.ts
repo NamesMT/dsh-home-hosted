@@ -53,6 +53,26 @@ describe('passwd parsing', () => {
     ])
   })
 
+  /**
+   * A uid field that is *partly* numeric is the case `notanumber` above does not reach:
+   * `Number.parseInt` takes a prefix, so `1000abc` became uid 1000 — a plausible
+   * account `accountOf` would then name, and that name becomes `User=` in a generated
+   * boot unit. Verified before the fix: the row survived as uid 1000 and `accountOf`
+   * returned it. A dropped row is honest; a wrong account is not.
+   */
+  it('drops a uid field that is only partly numeric, rather than reading its prefix', () => {
+    const rows = parsePasswd([
+      'real:x:1000:1000:Real:/home/real:/bin/sh',
+      'prefix:x:1000abc:1000:Odd:/home/odd:/bin/sh',
+      'zerohex:x:0x10:1000:Hex:/home/hex:/bin/sh',
+      'exp:x:1e3:1000:Exp:/home/exp:/bin/sh',
+    ].join('\n'))
+    expect(rows).toEqual([{ name: 'real', uid: 1000, home: '/home/real' }])
+    // And the malformed row can no longer be resolved as anybody's account.
+    const resolved = accountOf({ passwd: rows, env: {}, uid: 1000 })
+    expect(resolved?.name).toBe('real')
+  })
+
   it('reads an empty database as no rows, never a throw', () => {
     expect(parsePasswd('')).toEqual([])
   })
