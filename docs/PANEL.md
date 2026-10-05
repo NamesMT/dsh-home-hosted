@@ -83,6 +83,13 @@ it. It reads one rotation too (`<log>.1`), because the end of the file that just
 usually where a crash is, and it matches `home-hosted logs` line for line (verified against a real
 panel at every count).
 
+The read **grows its window** rather than sizing one from the count. A line's length is unbounded —
+a stack trace, a JSON dump or a verbose error is one line and can be kilobytes — so a window sized
+per *line* silently returns fewer lines than asked for: on 500 lines of ~2 KB, `lines: 100` returned
+50. The window instead grows backwards until `limit` lines are present or the file start is reached,
+so a bounded request never reads an unbounded file and a short line still stops after one block
+(20 lines of a 37.9 MB log reads 64 KiB). Home-hosted's own `readTail` grows for the same reason.
+
 A missing log is an empty one, not an error: a panel that has just started has nothing to say, and
 reporting that as a failure would make the one diagnostic that always works look broken. The new tool
 is **not** added to an existing settings file's allow-list — a tool that did not exist when that file

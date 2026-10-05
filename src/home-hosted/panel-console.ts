@@ -40,8 +40,8 @@ export function readPanelConsole(home: string, options: { lines?: number } = {})
   const file = panelConsolePath(home)
   const limit = options.lines ?? 50
 
-  // Only the tail matters when a count was asked for, so a 5 MB log is not read
-  // into memory to show 20 lines of it.
+  // A counted request reads only as much of the tail as it needs, growing the window
+  // when lines are long — rather than loading a 5 MB console to show 20 lines of it.
   const current = limit > 0 ? readTail(file, limit) : readWhole(file)
   if (current.error !== null)
     return { path: file, lines: [], error: current.error }
@@ -77,11 +77,34 @@ function readWhole(file: string): ReadResult {
   }
 }
 
+/** One backward read's size. Grows only when a request needs more lines than it held. */
+const TAIL_BLOCK_BYTES = 64 * 1024
+
+/** Line separators in one block, counted in place rather than by splitting it. */
+function countNewlines(text: string): number {
+  let count = 0
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 10)
+      count += 1
+  }
+  return count
+}
+
 /**
- * The last `limit` lines, read from the end of the file rather than the start.
+ * The last `limit` lines, read backwards from the end of the file.
  *
- * `lines <= 0` reads everything: `readWhole` handles the whole-log case, and this
- * is only reached with a positive limit.
+ * The window **grows** rather than being sized once from `limit`: a line's length is
+ * unbounded — a stack trace, a JSON dump or a verbose error is one line and can be
+ * kilobytes — so "one block per requested line" silently returns fewer lines than
+ * asked for. Measured against the previous implementation, on 500 lines of ~2 KB,
+ * `lines: 100` returned 50.
+ *
+ * The loop stops as soon as `limit` complete lines are present or the file start is
+ * reached, so a bounded request never reads an unbounded file. Home-hosted's own
+ * `readTail` (`src/helpers/daemon-log.ts`) grows for the same reason.
+ *
+ * `lines <= 0` means the whole log: `readWhole` handles that, and this is only
+ * reached with a positive limit.
  */
 function readTail(file: string, limit: number): ReadResult {
   if (!fs.existsSync(file))
@@ -95,15 +118,31 @@ function readTail(file: string, limit: number): ReadResult {
   }
   try {
     const size = fs.fstatSync(fd).size
-    // A 64 KiB window per requested line is generous for a console and bounded, so a
-    // single very long line still fits without ever reading a whole huge file.
-    const window = Math.min(size, Math.max(64 * 1024, limit * 1024))
-    const start = size - window
-    const buffer = Buffer.alloc(window)
-    fs.readSync(fd, buffer, 0, window, start)
-    const text = buffer.toString('utf8')
-    const lines = splitLines(start > 0 ? text.slice(Math.max(0, text.indexOf('\n') + 1)) : text)
-    return { lines, error: null }
+    if (size === 0)
+      return { lines: [], error: null }
+
+    let end = size
+    let text = ''
+    // Counted as blocks arrive rather than re-splitting the whole accumulated string on
+    // every pass: that made the loop quadratic in the number of blocks, and a capped
+    // request on a 96 MB console spent most of its time in the condition.
+    let newlines = 0
+    // `limit + 1` separators, because a file's own trailing newline terminates no line.
+    while (end > 0 && newlines < limit + 1) {
+      const start = Math.max(0, end - TAIL_BLOCK_BYTES)
+      const length = end - start
+      const buffer = Buffer.alloc(length)
+      fs.readSync(fd, buffer, 0, length, start)
+      const block = buffer.toString('utf8')
+      newlines += countNewlines(block)
+      text = block + text
+      end = start
+    }
+
+    // A block boundary can land mid-line; the loop only exits once `limit + 1`
+    // separators are present, so at least `limit` complete lines follow the
+    // fragment and the trailing `slice(-limit)` can never reach it.
+    return { lines: splitLines(text).slice(-limit), error: null }
   }
   catch (error) {
     return { lines: [], error: message(error) }

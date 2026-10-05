@@ -65,6 +65,63 @@ describe('the panel console', () => {
     expect(readPanelConsole(root, { lines: 0 }).lines).toEqual(['z', 'a', 'b'])
   })
 
+  /**
+   * A line's length is unbounded — a stack trace, a JSON dump or a verbose error
+   * line is one line and can be kilobytes — so a window sized per *line* silently
+   * returns fewer lines than asked for. Verified against the previous
+   * implementation: 500 lines of ~2 KB, `lines: 100` returned 50.
+   *
+   * The window must grow until the request is satisfied or the file start is
+   * reached, which is what home-hosted's own `readTail` does for the same reason.
+   */
+  it('returns the requested count even when every line is long', () => {
+    const root = home()
+    const lines = Array.from({ length: 500 }, (_, i) => `line ${i} ${'x'.repeat(2000)}`)
+    writeConsole(root, `${lines.join('\n')}\n`)
+
+    for (const ask of [1, 10, 50, 100, 200, 500]) {
+      const read = readPanelConsole(root, { lines: ask })
+      expect(read.error).toBeNull()
+      // The true tail, not just the right number of lines.
+      expect(read.lines).toEqual(lines.slice(-ask))
+    }
+  })
+
+  it('still returns exactly the tail when the file is larger than one window', () => {
+    // 2 MB of long lines: far past any single 64 KiB block, so the read has to
+    // walk backwards more than once.
+    const root = home()
+    const lines = Array.from({ length: 1000 }, (_, i) => `row ${i} ${'y'.repeat(2000)}`)
+    writeConsole(root, `${lines.join('\n')}\n`)
+    const read = readPanelConsole(root, { lines: 25 })
+    expect(read.lines).toEqual(lines.slice(-25))
+    expect(read.lines[0]).toContain('row 975')
+  })
+
+  /**
+   * A short log has everything it has: not padded, and not an error. This is the
+   * case that must keep working when the window grows to the file start.
+   */
+  it('returns everything a short log holds instead of padding or failing', () => {
+    const root = home()
+    writeConsole(root, 'only\nthree\nlines\n')
+    // A count larger than the log returns the whole log…
+    for (const ask of [3, 4, 50, 5000])
+      expect(readPanelConsole(root, { lines: ask })).toMatchObject({ lines: ['only', 'three', 'lines'], error: null })
+    // …and a smaller one returns exactly that many, from the tail.
+    expect(readPanelConsole(root, { lines: 2 }).lines).toEqual(['three', 'lines'])
+    expect(readPanelConsole(root, { lines: 1 }).lines).toEqual(['lines'])
+  })
+
+  it('keeps a single line longer than a whole block intact', () => {
+    // One line, 200 KB: larger than the 64 KiB block, so no single read holds it.
+    const root = home()
+    const huge = `start ${'z'.repeat(200_000)} end`
+    writeConsole(root, `before\n${huge}\n`)
+    expect(readPanelConsole(root, { lines: 2 }).lines).toEqual(['before', huge])
+    expect(readPanelConsole(root, { lines: 1 }).lines).toEqual([huge])
+  })
+
   it('survives a log that is not valid UTF-8 without throwing', () => {
     // A child that writes raw bytes into the console redirection must not turn the
     // diagnostics read into a crash.

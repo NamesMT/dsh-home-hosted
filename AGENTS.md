@@ -118,6 +118,13 @@ manager, or restart the harness you are running in to "check" something.
   read from disk so it needs no session, no token and no answering panel, and matching
   `home-hosted logs` line for line. A missing log reads as empty, never as an error. A new agent tool
   is **not** retro-added to an existing allow-list — see the settings note above.
+- **A "read a fixed window, take the last N" reader is wrong when the unit is bytes and the request
+  is lines**, because a line's length is unbounded: a stack trace or a JSON dump is one line and can
+  be kilobytes, so a window sized per *line* silently returns fewer lines than asked. The console
+  reader grows its window until `limit` lines are present or the file start is reached, and stops at
+  one block when a short line answers immediately (measured: 20 lines of a 37.9 MB log reads 64 KiB).
+  Home-hosted's `readTail` grows for the same reason. This is the same class as the upstream
+  `asked 5000 → got 1464` bug — check any `Math.min(size, …)` followed by a `slice(-n)`.
 - **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.3` already
   admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable
   without moving the pin — and a *local* panel older than it is a real scenario, not a mistake. So
