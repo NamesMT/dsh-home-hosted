@@ -235,12 +235,8 @@ export function desktopValue(key: string, value: string): string {
 // Windows
 // ---------------------------------------------------------------------------
 
-/** Quote one argv word the way `CreateProcess`/`cmd` parse a command line. */
-export function windowsArg(value: string): string {
-  assertNoControl(value, 'windows argument')
-  if (value !== '' && !/[\s"]/.test(value))
-    return value
-
+/** Wrap one value in the CRT's quoting rules, unconditionally. */
+function crtQuote(value: string): string {
   let out = '"'
   let backslashes = 0
   for (const char of value) {
@@ -258,6 +254,22 @@ export function windowsArg(value: string): string {
   }
   out += `${'\\'.repeat(backslashes * 2)}"`
   return out
+}
+
+/**
+ * Quote one argv word the way `CreateProcess`/`cmd` parse a command line.
+ *
+ * `cmd.exe` hands the tail of its command line to the CRT, so these are the CRT
+ * rules: backslashes are literal except immediately before a `"`, where they pair
+ * up and an odd one escapes the quote. Nothing is a metacharacter unless it is
+ * whitespace or a quote, so an unquoted `a&b` is left alone — quoting for `cmd`'s
+ * own metacharacters is `cmdQuote`'s job, not this one's.
+ */
+export function windowsArg(value: string): string {
+  assertNoControl(value, 'windows argument')
+  if (value !== '' && !/[\s"]/.test(value))
+    return value
+  return crtQuote(value)
 }
 
 export function windowsCommandLine(program: string, args: string[]): string {
@@ -293,11 +305,30 @@ export function powershellLiteral(value: string): string {
   return `'${value.split('\'').join('\'\'')}'`
 }
 
-/** Quote one word the way `cmd.exe` takes it, for a copy-pasteable `commands[]` entry. */
+/**
+ * Quote one word for a copy-pasteable `commands[]` entry, run by `cmd.exe`.
+ *
+ * Two layers, and conflating them is the bug this used to have. `cmd.exe` reads the
+ * line **first**, for its own metacharacters, and then hands the tail to the CRT —
+ * so the quoting must protect `&`, `|`, `<`, `>`, `^` and whitespace (by wrapping
+ * the word in quotes, which makes them inert), and must *inside* those quotes use
+ * the CRT rules for `"` and backslashes.
+ *
+ * The earlier version doubled the quotes (`""`) and separately doubled a trailing
+ * backslash run. Real `cmd.exe` showed that is wrong for a backslash **before** a
+ * quote: `x\"y` arrived as `x"y`, losing the backslash. Measured on Windows, feeding
+ * the exact emitted line to `cmd.exe /c` and reading the child's own argv:
+ *
+ *   `"x\"y"`     -> `x"y`      (backslash lost)
+ *   `"x\\\"y"`   -> `x\"y`     (correct — the CRT form)
+ *   `"C:\a b\"`  -> `C:\a b"`  (last character lost)
+ *   `"C:\a b\\"` -> `C:\a b\`  (correct)
+ */
 export function cmdQuote(value: string): string {
+  assertNoControl(value, 'cmd argument')
   if (value !== '' && !/[\s"&|<>^]/.test(value))
     return value
-  return `"${value.split('"').join('""')}"`
+  return crtQuote(value)
 }
 
 export function windowsDisplayCommand(program: string, args: string[]): string {
