@@ -1,4 +1,40 @@
 /**
+ * The entry fields this editor renders, and the ones it deliberately does not.
+ *
+ * The page is a **convenience for the common fields**, not a full config editor: the
+ * servers section says so ("Entries are managed in the home-hosted panel:") and links
+ * to that panel, whose own `ServerConfigEditor.vue` carries all 23 fields. A person
+ * who needs `bootstrap`, an env file, a resource ceiling or a restart policy follows
+ * that link, and a **minimal-diff** edit here never disturbs those keys — a patch
+ * carries only what differs, so nothing unrendered is overwritten or dropped.
+ *
+ * `OUT_OF_SCOPE_FIELDS` is not a wishlist: it is the record of a decision, and
+ * `test/client/entry-editor` fails if the two lists and the panel's own `serverSchema`
+ * disagree. That is what stops a field the panel grows from becoming reachable in the
+ * panel and *silently* missing here without anybody noticing which it was.
+ */
+export const EDITOR_FIELDS = ['id', 'command', 'args', 'cwd', 'label', 'port', 'autostart', 'onPortConflict'] as const
+
+/** Panel fields no control here sets, on purpose — edit them in the panel. */
+export const OUT_OF_SCOPE_FIELDS = [
+  'enabled',
+  'bind',
+  'persistent',
+  'env',
+  'dataEnvs',
+  'envFile',
+  'bootstrap',
+  'dependsOn',
+  'resources',
+  'backupPaths',
+  'logBufferLines',
+  'backupIgnoreGenerated',
+  'health',
+  'restart',
+  'stop',
+] as const
+
+/**
  * One server entry, as a person edits it on the page.
  *
  * The plugin writes a create body as the *difference* from what the workspace

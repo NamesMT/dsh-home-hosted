@@ -17,8 +17,15 @@ describe('dash', () => {
 })
 
 describe('formatDrift', () => {
-  it('joins drifted keys', () => {
-    expect(formatDrift(['autostart', 'stop'])).toBe('autostart, stop')
+  /**
+   * The keys are the plugin's own camelCase, so they are humanised for display.
+   * `humanizeKey` existed and was tested, but nothing called it — the page showed
+   * `onPortConflict, stopKillPortHolders` at a person reading a drift chip.
+   */
+  it('joins drifted keys, humanised', () => {
+    expect(formatDrift(['autostart', 'stop'])).toBe('Autostart, Stop')
+    expect(formatDrift(['onPortConflict', 'stopKillPortHolders']))
+      .toBe('On port conflict, Stop kill port holders')
   })
 
   it('renders the placeholder when there is no drift', () => {

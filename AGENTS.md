@@ -128,6 +128,19 @@ manager, or restart the harness you are running in to "check" something.
 - **`/_hh` is deliberately four routes** (`shutdown` + the three lifecycle ones), token-plus-loopback,
   with no local path to proxy, backups, TLS or config — so no plugin capability may be invented over
   them, and none may open an unauthenticated `/api` route to get around it. Recorded in PANEL.md.
+- **Three consumers read the panel's entry surface, and each needs its own parity statement.** The
+  model (`src/tools.ts` — every field), the panel's own UI (every field, and the page links to it),
+  and the page's editor (`src/client/entry-editor.tsx` — the common eight, the other fifteen
+  **deliberately** out of scope and declared as such). A subset is fine; an *undocumented* subset is
+  the same bug as a missing tool field, so the editor exports `EDITOR_FIELDS`/`OUT_OF_SCOPE_FIELDS`
+  and `test/client/entry-editor` fails when the panel grows a field neither list mentions. It also
+  asserts the **rendered** labels, because a field can be declared and never drawn.
+- **A helper that exists, is tested, and is never called is a missing wire, not dead code — check
+  which.** `humanizeKey` was written and unit-tested for the entries drift chip, but nothing called
+  it, so the page showed raw `onPortConflict, stopKillPortHolders`. Wiring it was the fix.
+  `formatCandidate` is the opposite case: its combined `version · path` string has no consumer shape
+  (the panel renders those in separate slots), so it is genuinely dead and is left alone rather than
+  forced into a caller.
 - **A "read a fixed window, take the last N" reader is wrong when the unit is bytes and the request
   is lines**, because a line's length is unbounded: a stack trace or a JSON dump is one line and can
   be kilobytes, so a window sized per *line* silently returns fewer lines than asked. The console

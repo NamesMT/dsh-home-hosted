@@ -12,9 +12,16 @@ export function dash(value: string | number | null | undefined): string {
   return text.length > 0 ? text : EMPTY
 }
 
-/** Render an owned-key drift list. */
+/**
+ * Render an owned-key drift list.
+ *
+ * The keys are the plugin's own camelCase (`onPortConflict`,
+ * `stopKillPortHolders`), so they are humanised for display — `humanizeKey` was
+ * written and tested for exactly this and then never called, so the page showed
+ * the raw identifiers.
+ */
 export function formatDrift(drift: readonly string[]): string {
-  return drift.length > 0 ? drift.join(', ') : EMPTY
+  return drift.length > 0 ? drift.map(humanizeKey).join(', ') : EMPTY
 }
 
 /** `stopKillPortHolders` → `Stop kill port holders`. */

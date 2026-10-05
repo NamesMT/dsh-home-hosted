@@ -61,6 +61,31 @@ The generated entry always binds loopback (`bind: 'local'`, `--host 127.0.0.1`):
 `--host 0.0.0.0` as a usage error, so repeating a running harness's network bind would produce an
 entry that can never start.
 
+## The page's editor covers the common fields on purpose
+
+`src/client/entry-editor.tsx` renders eight entry fields — id, command, args, working directory,
+label, port, autostart and port-conflict policy — and the panel's `serverSchema` has 23. The other
+fifteen (`enabled`, `bind`, `persistent`, `env`, `dataEnvs`, `envFile`, `bootstrap`, `dependsOn`,
+`resources`, `backupPaths`, `logBufferLines`, `backupIgnoreGenerated`, `health`, `restart`, `stop`)
+are **deliberately out of scope**, not forgotten.
+
+The page says so where it happens: *"Entries are managed in the home-hosted panel:"* followed by a
+link to that panel, whose own editor sets every field. So the dsh page is a convenience for the
+common ones, and the panel remains the place a full config is written.
+
+Two properties make that safe, and both are deliberate:
+
+- **A minimal diff cannot destroy what it does not render.** An edit sends only the fields that
+  differ from the stored entry, so `bootstrap`, `envFile` or a `restart` policy is left exactly as it
+  was — the editor cannot silently reset a key it does not show.
+- **The scope is a recorded decision, not an accident.** `EDITOR_FIELDS` and `OUT_OF_SCOPE_FIELDS`
+  are exported, and `test/client/entry-editor` reads the panel's own schema and fails if any field is
+  neither rendered nor declared. A field the panel grows therefore cannot become reachable there and
+  silently absent here — it fails until somebody decides which it is.
+
+The same file asserts the *rendered* labels, not just the list: a field can be declared and never
+drawn, which is the exact shape this guards against.
+
 ## Persistence keeps dsh alive across a panel restart
 
 A managed entry asks for `persistent: true`: home-hosted then runs it under its nanny, which owns the
