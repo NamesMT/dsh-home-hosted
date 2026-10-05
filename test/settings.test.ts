@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SettingsStore } from '../src/settings.js'
+import type { AgentToolName } from '../src/shared/contracts.js'
 import { AGENT_TOOL_NAMES, SETTINGS_VERSION } from '../src/shared/contracts.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
@@ -190,20 +191,30 @@ describe('upgrading an older settings file', () => {
    * A tool added after a file was written is never *added* to that file's
    * allow-list. It could not have been deselected — it did not exist — but
    * silently granting it would expand a deliberate selection, and that is the
-   * user's decision, not the plugin's. `panel_logs` reached `AGENT_TOOL_NAMES`
-   * after `SETTINGS_VERSION` 3 was already shipped, so this pins the conservative
-   * reading: an existing file keeps exactly what it held, and the page's checkbox
-   * is how the new tool is chosen.
+   * user's decision, not the plugin's. The page's checkbox is how a new tool is
+   * chosen.
+   *
+   * Written against **whatever `AGENT_TOOL_NAMES` holds**, not against one tool by
+   * name: a list that named `panel_logs` explicitly would pass while a second new
+   * tool was silently granted. The selection here is the deliberately narrow one a
+   * user might make, and nothing outside it may appear.
    */
-  it('does not grant a tool that did not exist when the file was written', () => {
+  it('never grants a tool the stored selection did not name', () => {
     scratch = tempDir()
+    const kept: AgentToolName[] = ['status', 'ui_manage']
+    const withheld = AGENT_TOOL_NAMES.filter(name => !kept.includes(name))
+    // A guard on the test itself: if the two lists ever covered everything, the
+    // assertion below would be vacuous.
+    expect(withheld.length).toBeGreaterThan(0)
+
     writeJsonFile(path.join(scratch.path, 'settings.json'), {
       version: SETTINGS_VERSION,
-      agentTools: { enabled: true, allow: ['status', 'ui_manage'] },
+      agentTools: { enabled: true, allow: [...kept] },
     })
     const store = new SettingsStore(path.join(scratch.path, 'settings.json'), 'dsh')
-    expect(store.get().agentTools.allow).toEqual(['status', 'ui_manage'])
-    expect(store.get().agentTools.allow).not.toContain('panel_logs')
+    expect(store.get().agentTools.allow).toEqual([...kept])
+    for (const name of withheld)
+      expect(store.get().agentTools.allow, `${name} was granted without being chosen`).not.toContain(name)
   })
 })
 

@@ -118,6 +118,16 @@ manager, or restart the harness you are running in to "check" something.
   read from disk so it needs no session, no token and no answering panel, and matching
   `home-hosted logs` line for line. A missing log reads as empty, never as an error. A new agent tool
   is **not** retro-added to an existing allow-list — see the settings note above.
+- **A tool's declared parameters are not documentation, they are the only thing a model can see.**
+  `servers_edit` named 15 of the panel's 23 `serverSchema` fields, so eight — `persistent`,
+  `bootstrap`, `dependsOn`, `envFile`, `resources`, `backupPaths`, `logBufferLines`,
+  `backupIgnoreGenerated` — were accepted and stored but invisible: a capability with no way to reach
+  it. A wider `additionalProperties` does **not** fix that, because a key nobody names is a key nobody
+  passes. `test/tools` reads the pinned dependency's own `serverSchema` out of its sourcemap and fails
+  if the two lists differ, so the next field the panel grows cannot drift silently.
+- **`/_hh` is deliberately four routes** (`shutdown` + the three lifecycle ones), token-plus-loopback,
+  with no local path to proxy, backups, TLS or config — so no plugin capability may be invented over
+  them, and none may open an unauthenticated `/api` route to get around it. Recorded in PANEL.md.
 - **A "read a fixed window, take the last N" reader is wrong when the unit is bytes and the request
   is lines**, because a line's length is unbounded: a stack trace or a JSON dump is one line and can
   be kilobytes, so a window sized per *line* silently returns fewer lines than asked. The console

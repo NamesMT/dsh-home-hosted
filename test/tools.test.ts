@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentToolName, InstanceView, RpcEndpoint } from '../src/shared/contracts.js'
@@ -143,6 +144,32 @@ function harness(options: {
 }
 
 describe('agent tools', () => {
+  /**
+   * The tool named 15 of the panel's 23 entry fields, so `persistent`, `bootstrap`,
+   * `dependsOn`, `envFile`, `resources`, `backupPaths`, `logBufferLines` and
+   * `backupIgnoreGenerated` were accepted and stored but **invisible to a model** — a
+   * capability that existed with nothing able to reach it. This reads the panel's own
+   * `serverSchema`, from the installed dependency's sourcemap, so the two cannot drift
+   * apart silently again: a field the panel grows fails here until it is advertised.
+   */
+  it('advertises every entry field the panel accepts, read from the panel itself', () => {
+    const map = JSON.parse(fs.readFileSync('node_modules/home-hosted/dist/cli.js.map', 'utf8')) as { sourcesContent: string[] }
+    const source = map.sourcesContent.find(text => text?.includes('export const serverSchema'))
+    expect(source, 'the pinned dependency should ship the schema this test reads').toBeDefined()
+    const start = source!.indexOf('export const serverSchema = type({')
+    const block = source!.slice(start, source!.indexOf(".onUndeclaredKey('reject')", start))
+    const accepted = [...block.matchAll(/^ {2}([a-zA-Z]+):/gm)].map(match => match[1]!)
+    // A sanity floor: a regex that matched nothing would make the assertion vacuous.
+    expect(accepted.length).toBeGreaterThan(20)
+
+    const h = harness({ allow: ['servers_edit'] })
+    const tool = h.tools.find(candidate => candidate.name === toolNameFor('servers_edit'))!
+    const entry = (tool.parameters as { properties: { entry: { properties: Record<string, unknown> } } }).properties.entry
+    const advertised = Object.keys(entry.properties)
+    // `id` is the entry's key and is named at create time; the panel names it too.
+    expect(advertised.sort()).toEqual(accepted.sort())
+  })
+
   it('registers nothing while the feature is off', () => {
     const h = harness({ enabled: false })
     expect(h.tools).toHaveLength(0)

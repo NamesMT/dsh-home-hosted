@@ -116,6 +116,25 @@ is **not** added to an existing settings file's allow-list — a tool that did n
 was written could not have been deselected, but granting it silently would expand a deliberate
 selection, so the page's checkbox is how it is chosen.
 
+## What `/_hh` does not offer, deliberately
+
+`/_hh` is the one unauthenticated surface a local caller can use, and it is deliberately tiny. Read
+out of `src/api/control.ts` (mounted before the `/api/*` guard in `src/app.ts`), it registers exactly
+**four** routes: `POST /shutdown`, and `POST /servers/:id/{start,stop,restart}`. Every one needs the
+token from `run.json` plus a loopback peer, which is the whole point — a local `down` needs no session,
+password or API token.
+
+There is **no local-token path to the reverse proxy, backups, TLS, notifications or the config**. Those
+live behind `/api/*` and a real credential. So a plugin capability over any of them would have to mint
+a token and speak `/api`, and it must not add an unauthenticated `/api` route of its own to avoid that
+— that is the rule the plugin is built on (the CLI drives a running panel through `/_hh`, never
+`/api`). `_acme` is the only other route outside the guard (loopback-only, credentials the panel
+generates, a single `/:action` for DNS-01); this plugin never touches it.
+
+The practical consequence for a foreign panel is the three mechanisms `docs/WORKSPACES.md` lists: its
+config file, its own CLI, or a token the user is asked about. A panel the user has not confirmed is
+never reached by a fourth route invented here.
+
 ## Credentials
 
 home-hosted keeps only an API token's hash, so a token this plugin did not create can never be
