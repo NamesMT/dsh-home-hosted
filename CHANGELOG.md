@@ -1,6 +1,25 @@
 # Changelog
 
 
+## v0.7.4
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.3...v0.7.4)
+
+### 🩹 Fixes
+
+- **config:** Merge a nested patch group the way the panel's API does ([a7479e9](https://github.com/NamesMT/dsh-home-hosted/commit/a7479e9))
+- **config:** Refuse a servers file that is not an object, and an entry that is not one ([6818588](https://github.com/NamesMT/dsh-home-hosted/commit/6818588))
+- **config:** Refuse a null patch group the panel's own schema rejects ([33fb544](https://github.com/NamesMT/dsh-home-hosted/commit/33fb544))
+- **config:** Route setControl through the control merge too ([18f6bec](https://github.com/NamesMT/dsh-home-hosted/commit/18f6bec))
+
+### ✅ Tests
+
+- **panel:** Pin both write shapes, flat stored entry and nested view ([a2d4ef9](https://github.com/NamesMT/dsh-home-hosted/commit/a2d4ef9))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.7.3
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.2...v0.7.3)
