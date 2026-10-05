@@ -18,10 +18,23 @@ is therefore those two plus the version-coupled tests — *unless* the release m
 plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/settings`, or a CLI
 subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them; neither
 did 0.7.3 (DNS-01 through the panel's own DNS accounts, and a Namecheap API provider); and neither
-did anything from 0.7.4 through 0.7.17 — checked commit by commit, `src/shared/contracts.ts` and
-`src/config/migrations.ts` were not touched at all, and the one commit that did touch
-`src/api/settings.ts` added the proxy-exposure guard to that route's own handler, which cannot reach
-a plugin that writes `control` to disk rather than PATCHing the endpoint.
+did 0.7.4 through 0.7.17.
+
+Re-checked again after 0.7.17, when several releases' worth of work had landed on `src/api/logs.ts`,
+`src/providers/log-tail.ts`, `src/services/proxy.ts` and `src/helpers/daemon-log.ts`. **None of it
+reaches this plugin**, and the check is by *use*, not by filename: the plugin never calls the panel's
+`/api/logs`, never declares `logHistoryQuerySchema`, and never reads `providers/log-tail`. It reads
+the console **file** itself (`.hh/.logs/home-hosted.log`, plus `.1`), so the only thing that could
+move under it is that path and the 5 MB/`.1` rotation — both unchanged (`daemon-log.ts`'s edits were a
+refactor plus window widening, and `paths.ts`'s `daemonLogPath` is byte-identical).
+
+An earlier version of this paragraph said `src/shared/contracts.ts` "was not touched at all" between
+0.7.3 and 0.7.17. That is no longer true, and the wording was the weak part: `a7700ab` (unreleased
+when this was written) added a **comment** to `logHistoryQuerySchema` and widened the `stream`
+filter's read window, and `81cd870` added the proxy-exposure guard to `src/api/settings.ts`. Neither
+is a surface this plugin names — the guard lives inside that route's own handler, which cannot reach
+a plugin that writes `control` to disk rather than PATCHing the endpoint — so the pin is unaffected.
+What matters is that no change **reaches us**, which filenames alone cannot show.
 
 So the pin stays at `^0.7.3`, and a capability that needs a *newer* 0.7.x degrades rather than
 raising the floor — a local panel older than the capability is a real scenario. `logs` (0.7.12) is a
@@ -89,6 +102,13 @@ per *line* silently returns fewer lines than asked for: on 500 lines of ~2 KB, `
 50. The window instead grows backwards until `limit` lines are present or the file start is reached,
 so a bounded request never reads an unbounded file and a short line still stops after one block
 (20 lines of a 37.9 MB log reads 64 KiB). Home-hosted's own `readTail` grows for the same reason.
+
+The rotation is joined the way **concatenating the files** joins it, not by gluing two line arrays.
+A panel killed mid-write leaves `.1`'s last line unterminated, and concatenation makes that line and
+the live file's first line one line (`rot2-partial` + `live1` → `rot2-partiallive1`); array-joining
+invents a line break the log never had, and then "the last 2 lines" is one short. Sufficiency is
+therefore counted in **separators** (`limit + 1`), the same test `logs` makes — counting lines stops
+one early for exactly that reason.
 
 A missing log is an empty one, not an error: a panel that has just started has nothing to say, and
 reporting that as a failure would make the one diagnostic that always works look broken. The new tool

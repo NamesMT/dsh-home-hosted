@@ -59,6 +59,27 @@ describe('the panel console', () => {
     expect(readPanelConsole(root, { lines: 2 }).lines).toEqual(['rotated-2', 'current'])
   })
 
+  /**
+   * An unterminated `.1` is what a panel killed mid-write leaves behind, and
+   * concatenating the two files makes its last line and the live file's first line
+   * **one** line. Joining the arrays invents a line break the log never had.
+   *
+   * Measured against the real panel's own `logs`, which joins the text:
+   * `rot2-partial` + `live1` is one line, `rot2-partiallive1` — and asking for 2 lines
+   * of `['live1','live2']` alone is one line short of the answer.
+   */
+  it('joins an unterminated rotated line to the live file\'s first, as concatenation would', () => {
+    const root = home()
+    writeConsole(root, 'live1\nlive2\n', 'rot1\nrot2-partial')
+    expect(readPanelConsole(root, { lines: 2 }).lines).toEqual(['rot2-partiallive1', 'live2'])
+    expect(readPanelConsole(root, { lines: 3 }).lines).toEqual(['rot1', 'rot2-partiallive1', 'live2'])
+    expect(readPanelConsole(root, { lines: 0 }).lines).toEqual(['rot1', 'rot2-partiallive1', 'live2'])
+    // A terminated `.1` is unaffected: the two files simply follow each other.
+    const clean = home()
+    writeConsole(clean, 'live1\n', 'rot1\n')
+    expect(readPanelConsole(clean, { lines: 2 }).lines).toEqual(['rot1', 'live1'])
+  })
+
   it('reads the whole log when asked for none in particular', () => {
     const root = home()
     writeConsole(root, 'a\nb\n', 'z\n')

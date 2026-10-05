@@ -42,38 +42,62 @@ export function readPanelConsole(home: string, options: { lines?: number } = {})
 
   // A counted request reads only as much of the tail as it needs, growing the window
   // when lines are long — rather than loading a 5 MB console to show 20 lines of it.
-  const current = limit > 0 ? readTail(file, limit) : readWhole(file)
+  const current: ReadResult = limit > 0 ? readTail(file, limit) : readWhole(file)
   if (current.error !== null)
     return { path: file, lines: [], error: current.error }
 
   if (limit <= 0) {
     const rotated = readWhole(`${file}.1`)
     // A rotated file that cannot be read is not a failure: the live log answered.
-    return { path: file, lines: [...rotated.lines, ...current.lines], error: null }
+    return { path: file, lines: joinRotation(rotated, current.lines), error: null }
   }
 
-  if (current.lines.length >= limit)
+  // `limit + 1` separators, because the file's own trailing newline terminates no line —
+  // the same test the panel's `logs` makes. Counting *lines* instead would stop short
+  // when `.1` is unterminated, since its last line merges into this file's first and
+  // the answer then holds one fewer line than asked for.
+  if (current.newlines >= limit + 1)
     return { path: file, lines: current.lines.slice(-limit), error: null }
 
-  // The live log is shorter than the request, so the rotated one supplies the rest.
+  // The live log is short of the request, so the rotated one supplies the rest.
   const rotated = readWhole(`${file}.1`)
-  return { path: file, lines: [...rotated.lines, ...current.lines].slice(-limit), error: null }
+  return { path: file, lines: joinRotation(rotated, current.lines).slice(-limit), error: null }
+}
+
+/**
+ * The two files' lines as concatenating them would join them.
+ *
+ * `.1`'s last line is unterminated whenever the panel was killed mid-write, and
+ * concatenating the files makes that line and the current file's first line **one**
+ * line. Joining the arrays instead keeps them apart and invents a line break the log
+ * never had — measured against the real panel's own `logs`, which joins the text and
+ * returns `rot2-partiallive1` where the array join returned two lines.
+ */
+function joinRotation(rotated: ReadResult, current: string[]): string[] {
+  if (!rotated.unterminated || rotated.lines.length === 0 || current.length === 0)
+    return [...rotated.lines, ...current]
+  return [...rotated.lines.slice(0, -1), `${rotated.lines[rotated.lines.length - 1]}${current[0]}`, ...current.slice(1)]
 }
 
 interface ReadResult {
   lines: string[]
+  /** Separators seen, so a caller can tell whether it holds `limit` *complete* lines. */
+  newlines: number
+  /** True when the file does not end in a newline, so its last line is partial. */
+  unterminated: boolean
   error: string | null
 }
 
 /** `fs.readFileSync` decodes as UTF-8 and replaces invalid bytes, so raw output is safe. */
 function readWhole(file: string): ReadResult {
   if (!fs.existsSync(file))
-    return { lines: [], error: null }
+    return { lines: [], newlines: 0, unterminated: false, error: null }
   try {
-    return { lines: splitLines(fs.readFileSync(file, 'utf8')), error: null }
+    const text = fs.readFileSync(file, 'utf8')
+    return { lines: splitLines(text), newlines: countNewlines(text), unterminated: text.length > 0 && !text.endsWith('\n'), error: null }
   }
   catch (error) {
-    return { lines: [], error: message(error) }
+    return { lines: [], newlines: 0, unterminated: false, error: message(error) }
   }
 }
 
@@ -108,18 +132,18 @@ function countNewlines(text: string): number {
  */
 function readTail(file: string, limit: number): ReadResult {
   if (!fs.existsSync(file))
-    return { lines: [], error: null }
+    return { lines: [], newlines: 0, unterminated: false, error: null }
   let fd: number
   try {
     fd = fs.openSync(file, 'r')
   }
   catch (error) {
-    return { lines: [], error: message(error) }
+    return { lines: [], newlines: 0, unterminated: false, error: message(error) }
   }
   try {
     const size = fs.fstatSync(fd).size
     if (size === 0)
-      return { lines: [], error: null }
+      return { lines: [], newlines: 0, unterminated: false, error: null }
 
     let end = size
     let text = ''
@@ -142,10 +166,10 @@ function readTail(file: string, limit: number): ReadResult {
     // A block boundary can land mid-line; the loop only exits once `limit + 1`
     // separators are present, so at least `limit` complete lines follow the
     // fragment and the trailing `slice(-limit)` can never reach it.
-    return { lines: splitLines(text).slice(-limit), error: null }
+    return { lines: splitLines(text).slice(-limit), newlines, unterminated: false, error: null }
   }
   catch (error) {
-    return { lines: [], error: message(error) }
+    return { lines: [], newlines: 0, unterminated: false, error: message(error) }
   }
   finally {
     fs.closeSync(fd)

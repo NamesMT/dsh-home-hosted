@@ -125,6 +125,24 @@ manager, or restart the harness you are running in to "check" something.
   one block when a short line answers immediately (measured: 20 lines of a 37.9 MB log reads 64 KiB).
   Home-hosted's `readTail` grows for the same reason. This is the same class as the upstream
   `asked 5000 → got 1464` bug — check any `Math.min(size, …)` followed by a `slice(-n)`.
+- **A rotation is joined as text, and sufficiency is counted in separators.** Gluing the two line
+  arrays invents a break the log never had when `.1` is unterminated (a panel killed mid-write), so
+  `rot2-partial` + `live1` must read as one line — and "the last N lines" is then one short if the
+  test is on lines rather than on `N + 1` separators. Matches `home-hosted logs` exactly; verified
+  against the real CLI across rotation, unterminated `.1`, long lines and an empty live file.
+- **Windows quoting has two layers, and conflating them is a bug.** `commandLineToArgvW`/the CRT
+  rules (backslashes pair before a `"`, an odd one escapes it) are what `windowsArg` must produce;
+  `cmd.exe`'s own layer is separate, and for the copy-pasteable `commands[]` form (`cmdQuote`) the
+  word is wrapped in quotes so `cmd`'s metacharacters are inert while **inside** those quotes the
+  CRT rules still apply. The old `cmdQuote` doubled quotes (`""`) and could not represent a backslash
+  before a quote at all — real `cmd.exe` turned `x\"y` into `x"y` and `"C:\a b\"` into `C:\a b"`.
+  Both `windowsArg` (37 values) and `cmdQuote` (16 values) are round-tripped against **real** Windows
+  `CreateProcess`/`cmd.exe` output in `test/boot/escape`, which is the only way to check this: the
+  oracle is a parser's real behaviour, not an expected string.
+- **"Untouched since X, checked by filename" is not a claim that survives.** Verify a compatibility
+  claim by what a change *reaches*, not by whether a file appears in a log — the two disagree as soon
+  as a comment lands in a schema file. `docs/PANEL.md` says which surfaces were checked and why none
+  reaches this plugin.
 - **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.3` already
   admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable
   without moving the pin — and a *local* panel older than it is a real scenario, not a mistake. So
