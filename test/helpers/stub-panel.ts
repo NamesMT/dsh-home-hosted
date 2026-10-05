@@ -59,6 +59,16 @@ function view(record: StubServerRecord) {
   }
 }
 
+/**
+ * A `POST`/`PATCH` answer, as the real panel sends it: the stored entry itself,
+ * flat. It is deliberately not `view()` — GET nests the entry under `config`
+ * while these two do not, and only exercising both shapes catches a client that
+ * assumes one of them.
+ */
+function stored(record: StubServerRecord) {
+  return { ...record.config, id: record.id, workspaceId: workspaceOf(record) }
+}
+
 export async function startStubPanel(options: { token?: string, acceptAnyToken?: boolean, failCreate?: boolean, workspaces?: StubWorkspaceRecord[] } = {}): Promise<StubPanel> {
   // A holder, not a local: a test rotates the token on the returned object and
   // the listener starts accepting the new one without a restart.
@@ -138,7 +148,9 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
         const entry = body as Record<string, unknown>
         const record: StubServerRecord = { id: String(entry.id), workspace: workspace ?? DEFAULT_WORKSPACE, config: entry }
         servers.push(record)
-        send(201, { server: view(record) })
+        // The real panel answers the stored entry *flat* here, unlike GET's view.
+        // Returning a view is what hid a client that read `config` off it.
+        send(201, { server: stored(record) })
         return
       }
 
@@ -166,7 +178,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
           if (typeof patch.stop === 'object' && patch.stop !== null && typeof found.config.stop === 'object' && found.config.stop !== null)
             next.stop = { ...(found.config.stop as object), ...(patch.stop as object) }
           found.config = next
-          send(200, { server: view(found) })
+          send(200, { server: stored(found) })
           return
         }
 

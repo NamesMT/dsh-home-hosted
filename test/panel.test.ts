@@ -43,10 +43,22 @@ describe('panel client', () => {
 
     const created = await client.createServer({ id: 'dsh', command: 'dsh', args: ['web'] })
     expect(created.id).toBe('dsh')
+    // POST and PATCH answer the stored entry *flat* — no `config` wrapper — while
+    // GET answers a view. Reading a flat entry as a view left `config` undefined
+    // and reported a status the panel never sent.
+    expect(created.config).toBeDefined()
+    expect(created.config.command).toBe('dsh')
+    expect(created.config.args).toEqual(['web'])
+    expect(created.status).toBe('unknown')
+    expect(created.pid).toBeNull()
 
     const patched = await client.updateServer('dsh', { onPortConflict: 'kill', stop: { killPortHolders: true } })
+    expect(patched.config).toBeDefined()
     expect(patched.config.onPortConflict).toBe('kill')
     expect(patched.config.stop).toEqual({ killPortHolders: true })
+    // The id is the entry's, and the flat shape must not leak it into the config.
+    expect(patched.id).toBe('dsh')
+    expect((patched.config as Record<string, unknown>).id).toBeUndefined()
 
     await client.startServer('dsh')
     expect((await client.getServer('dsh')).status).toBe('running')

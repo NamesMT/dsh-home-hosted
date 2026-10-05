@@ -8,9 +8,27 @@
  */
 import type { FreePortResult, ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
 
-/** What the panel's `/api/servers*` actually answers with: it names the workspace `workspaceId`. */
+/**
+ * What `GET /api/servers*` answers with: a live *view*, which nests the entry
+ * under `config` and names the workspace `workspaceId`.
+ */
 interface ApiServerView extends Omit<ServerEntryView, 'workspace'> {
   workspaceId?: string
+}
+
+/**
+ * What `POST` and `PATCH /api/servers/:id` answer with: the stored entry itself,
+ * flat — no `config` wrapper, no `workspaceId`, no live status.
+ *
+ * The two shapes are not one shape with a missing field; they are different
+ * objects, and treating a flat config as a view yields `config: undefined` and a
+ * status that never existed. `create`/`update` therefore build the view
+ * themselves from the echoed entry.
+ */
+type ApiServerConfig = ServerEntry & { workspaceId?: string }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export class PanelError extends Error {
@@ -59,6 +77,34 @@ export class PanelClient {
   private view(raw: ApiServerView, workspace?: string | null): ServerEntryView {
     const { workspaceId, ...rest } = raw
     return { ...rest, workspace: workspaceId ?? workspace ?? this.workspace ?? '' }
+  }
+
+  /**
+   * A `POST`/`PATCH` answer.
+   *
+   * The real panel answers the stored entry *flat* here — no `config` wrapper, no
+   * `workspaceId`, no live status — while `GET` answers a view. Both are accepted:
+   * a body that already carries a `config` object is a view, and anything else is
+   * the entry itself. Reading a flat entry as a view is what made `created.config`
+   * `undefined`, so the shape is decided here rather than assumed.
+   *
+   * A flat entry carries no live status, so it is reported as `unknown`: the panel
+   * has not said. Callers that need one re-read the list.
+   */
+  private written(raw: ApiServerView | ApiServerConfig, workspace?: string | null): ServerEntryView {
+    const record = raw as Record<string, unknown>
+    if (isRecord(record.config))
+      return this.view(raw as ApiServerView, workspace)
+
+    const { workspaceId, id, ...config } = record as ApiServerConfig & Record<string, unknown>
+    return {
+      id: typeof id === 'string' ? id : '',
+      workspace: typeof workspaceId === 'string' ? workspaceId : workspace ?? this.workspace ?? '',
+      status: 'unknown',
+      pid: null,
+      url: null,
+      config: config as ServerEntry,
+    }
   }
 
   private ws(path: string, workspace?: string | null): string {
@@ -123,13 +169,13 @@ export class PanelClient {
   }
 
   async createServer(entry: ServerEntry, workspace?: string): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ApiServerView }>('POST', this.ws('/api/servers', workspace), entry)
-    return this.view(answer.server, workspace)
+    const answer = await this.request<{ server: ApiServerView | ApiServerConfig }>('POST', this.ws('/api/servers', workspace), entry)
+    return this.written(answer.server, workspace)
   }
 
   async updateServer(id: string, patch: ServerEntryPatch, workspace?: string): Promise<ServerEntryView> {
-    const answer = await this.request<{ server: ApiServerView }>('PATCH', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace), patch)
-    return this.view(answer.server, workspace)
+    const answer = await this.request<{ server: ApiServerView | ApiServerConfig }>('PATCH', this.ws(`/api/servers/${encodeURIComponent(id)}`, workspace), patch)
+    return this.written(answer.server, workspace)
   }
 
   async deleteServer(id: string, workspace?: string): Promise<void> {
