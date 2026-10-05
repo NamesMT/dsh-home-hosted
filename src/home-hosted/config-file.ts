@@ -137,21 +137,93 @@ export function upsertEntry(raw: RawConfig, entry: ServerEntry): RawConfig {
   return { ...raw, servers }
 }
 
+/**
+ * Nested groups a patch **merges into** rather than replaces.
+ *
+ * The same three the panel's own `SERVER_MERGE_KEYS` names
+ * (`src/config/patch.ts`), and they are not a detail: `servers.update` reaches
+ * the config file whenever the panel is not answering or the token is refused,
+ * so a file write that replaced `restart` would silently drop every sibling key
+ * a partial patch never mentioned. `{ restart: { maxRetries: 1 } }` through the
+ * API keeps `baseDelayMs`, `factor` and the rest; through the file it used to
+ * wipe them, and the entry fell back to the panel's defaults.
+ */
+const SERVER_MERGE_KEYS = new Set(['restart', 'health', 'stop'])
+
+/** The control-block groups the panel merges (`CONTROL_MERGE_KEYS`). */
+const CONTROL_MERGE_KEYS = new Set(['auth', 'tls'])
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Merge one nested group recursively — `health.http` is a group of its own.
+ * An explicit `null` removes a key, which is how a schema-optional field is
+ * cleared; an explicit `undefined` means "not mentioned" and is skipped.
+ *
+ * Mirrors `mergeGroup` in the panel's `src/config/patch.ts`, because a patch
+ * must mean the same thing whichever path carried it.
+ */
+function mergeGroup(target: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...target }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined)
+      continue
+    if (value === null) {
+      delete merged[key]
+      continue
+    }
+    if (isRecordValue(value) && isRecordValue(merged[key])) {
+      merged[key] = mergeGroup(merged[key], value)
+      continue
+    }
+    merged[key] = value
+  }
+  return merged
+}
+
+/**
+ * Apply one entry patch, merging the nested groups the panel merges.
+ *
+ * Only the keys `patch` names are touched; everything else in the entry — and
+ * every other entry in the file — is preserved.
+ */
 export function patchEntry(raw: RawConfig, id: string, patch: ServerEntryPatch): RawConfig {
   const servers = (raw.servers ?? []).map((entry) => {
     if (entry.id !== id)
       return entry
-    const merged: ServerEntry = { ...entry, ...patch }
-    if (patch.stop !== undefined && typeof entry.stop === 'object' && entry.stop !== null)
-      merged.stop = { ...entry.stop, ...patch.stop }
+    const merged: ServerEntry = { ...entry }
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined)
+        continue
+      if (SERVER_MERGE_KEYS.has(key) && isRecordValue(value) && isRecordValue(merged[key]))
+        (merged as Record<string, unknown>)[key] = mergeGroup(merged[key] as Record<string, unknown>, value)
+      else
+        (merged as Record<string, unknown>)[key] = value
+    }
     return merged
   })
   return { ...raw, servers }
 }
 
-/** Patch a settings file's `control` block, as a pure value. */
+/**
+ * Patch a settings file's `control` block, as a pure value.
+ *
+ * `auth` and `tls` merge the way the panel's `CONTROL_MERGE_KEYS` says, so a
+ * patch naming one of them does not reset its siblings.
+ */
 export function patchControl(raw: GlobalSettings, patch: Record<string, unknown>): GlobalSettings {
-  return { ...raw, control: { ...(raw.control ?? {}), ...patch } }
+  const control = { ...(raw.control ?? {}) }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined)
+      continue
+    if (CONTROL_MERGE_KEYS.has(key) && isRecordValue(value) && isRecordValue(control[key]))
+      control[key] = mergeGroup(control[key] as Record<string, unknown>, value)
+    else
+      control[key] = value
+  }
+  return { ...raw, control }
 }
 
 export function removeEntry(raw: RawConfig, id: string): RawConfig {

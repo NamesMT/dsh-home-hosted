@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConfigLayoutError, findEntry, patchEntry, readConfig, readGlobalSettings, removeEntry, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
+import { ConfigLayoutError, findEntry, patchControl, patchEntry, readConfig, readGlobalSettings, removeEntry, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
 import { globalSettingsFile, serversFile } from '../src/home-hosted/layout.js'
 import { makeHhHome, makeLegacyHome } from './helpers/hh.js'
 import { tempDir } from './helpers/temp.js'
@@ -68,6 +68,72 @@ describe('config file fallback', () => {
     expect(replaced.servers?.[0]).toEqual({ id: 'other', command: 'sleep', newKey: 1 })
 
     expect(readConfig(dir).raw?.$schema).toBe('./servers.config.schema.json')
+  })
+
+  /**
+   * A patch must mean the same thing whichever path carried it. `servers.update`
+   * reaches this file whenever the panel is not answering or its token was
+   * refused, while the same call goes through the API when it answers — and the
+   * panel merges the nested groups (`SERVER_MERGE_KEYS` in its `config/patch.ts`).
+   * Replacing them here silently dropped every sibling a partial patch never
+   * mentioned, so a one-key edit reset the rest of the block to schema defaults.
+   *
+   * The expected values are what the real panel answers for the same patch
+   * (verified against home-hosted 0.7.7 on a live loopback panel).
+   */
+  it('merges nested groups the way the panel\'s API does, instead of replacing them', () => {
+    const dir = home()
+    writeJsonFile(serversFile(dir, 'default'), {
+      servers: [{
+        id: 'worker',
+        command: 'node',
+        restart: { enabled: true, maxRetries: 9, baseDelayMs: 7500, factor: 3, maxDelayMs: 120000, resetAfterMs: 90000 },
+        health: {
+          enabled: true,
+          mode: 'http',
+          intervalMs: 12000,
+          timeoutMs: 4000,
+          unhealthyThreshold: 7,
+          http: { path: '/healthz', method: 'HEAD', expectStatusBelow: 500 },
+        },
+        stop: { signal: 'SIGINT', graceMs: 9000, killGroup: false, killPortHolders: false },
+      }],
+    })
+
+    const patched = patchEntry(readConfig(dir).raw!, 'worker', {
+      restart: { maxRetries: 1 },
+      health: { timeoutMs: 999, http: { path: '/readyz' } },
+      stop: { killPortHolders: true },
+    })
+    const worker = findEntry(patched, 'worker')!
+
+    // The named keys changed…
+    expect(worker.restart).toMatchObject({ maxRetries: 1 })
+    expect(worker.health).toMatchObject({ timeoutMs: 999 })
+    expect(worker.stop).toMatchObject({ killPortHolders: true })
+    // …and every sibling the patch never mentioned is still there. These are the
+    // values the panel's API keeps for the same patch.
+    expect(worker.restart).toEqual({ enabled: true, maxRetries: 1, baseDelayMs: 7500, factor: 3, maxDelayMs: 120000, resetAfterMs: 90000 })
+    expect(worker.health).toEqual({
+      enabled: true,
+      mode: 'http',
+      intervalMs: 12000,
+      timeoutMs: 999,
+      unhealthyThreshold: 7,
+      http: { path: '/readyz', method: 'HEAD', expectStatusBelow: 500 },
+    })
+    expect(worker.stop).toEqual({ signal: 'SIGINT', graceMs: 9000, killGroup: false, killPortHolders: true })
+  })
+
+  it('merges a control patch and removes a key an explicit null clears', () => {
+    const dir = home()
+    const raw = { control: { port: 4000, auth: { enabled: true, sessionTtlMs: 90000 }, tls: { enabled: false } } }
+    // `auth`/`tls` are the panel's CONTROL_MERGE_KEYS.
+    const merged = patchControl(raw, { auth: { enabled: false }, tls: { enabled: true } })
+    expect(merged.control).toEqual({ port: 4000, auth: { enabled: false, sessionTtlMs: 90000 }, tls: { enabled: true } })
+    // An explicit null removes the key rather than writing null into the config.
+    const cleared = patchControl(raw, { auth: { sessionTtlMs: null } })
+    expect((cleared.control?.auth as Record<string, unknown>)).toEqual({ enabled: true })
   })
 
   it('stamps meta on every write without dropping the schema the file carries', () => {
