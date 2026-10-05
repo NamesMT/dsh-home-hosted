@@ -84,6 +84,30 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * Whether a failed CLI call failed because that panel does not know the command.
+ *
+ * Three shapes, because the refusal comes from three places, and all three were
+ * taken from the real binaries rather than guessed:
+ *
+ * - a panel from before `restart <id>` answers the `/_hh` route with a bare 404
+ *   and the CLI prints "… does not know this command — restart it on this
+ *   release" (`src/cli/server.ts`);
+ * - a CLI from before the command existed rejects the subcommand with
+ *   "unknown command: restart" (the curated dispatch in `src/cli.ts`);
+ * - and the *likely* case — a 0.7.12 CLI, which has `restart` for the daemon but
+ *   no positional — rejects the id with `Unexpected argument 'web'`, verified
+ *   against the published 0.7.12 package. Missing this one would have made the
+ *   degradation never fire where it matters most.
+ *
+ * Anything else — an unknown entry, a stopped panel, an unreachable daemon — is a
+ * real failure that must not be retried as a different command.
+ */
+function unknownCommand(result: RunResult): boolean {
+  const text = `${result.stderr}\n${result.stdout}\n${result.error ?? ''}`
+  return /does not know this command|unknown command:|Unexpected argument/i.test(text)
+}
+
 function foreignView(entry: ServerEntry, workspace: string): ServerEntryView {
   return { id: entry.id, workspace, status: 'unknown', pid: null, url: null, config: entry }
 }
@@ -405,26 +429,45 @@ export class HomeHostedService extends Service {
   /**
    * Start, stop or restart one entry through that panel's own CLI: this plugin
    * holds no API token for a panel it does not manage, and a config edit cannot
-   * start anything. The CLI has no server restart, so a restart is a stop
-   * followed by a start — a stop that is not followed by one is reported.
+   * start anything.
+   *
+   * `restart <id>` is one command from home-hosted 0.7.13, and it is what the UI
+   * itself does. The stop-then-start pair it replaces was never equivalent: it is
+   * not atomic, and a stop that is not followed by a start left the entry **down**
+   * — the failure was reported only after it had already happened. A local panel
+   * older than that release is a real scenario, so an unknown-command refusal
+   * degrades to the pair, and says so in the result.
    */
-  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string, workspace: string = defaultWorkspace(home)): Promise<{ home: string, workspace: string, id: string, action: string, via: 'cli' }> {
-    const once = async (command: string): Promise<void> => {
+  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string, workspace: string = defaultWorkspace(home)): Promise<{ home: string, workspace: string, id: string, action: string, via: 'cli', downgraded?: boolean }> {
+    /** Run one step; `unknown` marks a refusal this panel cannot have meant. */
+    const once = async (command: string): Promise<{ unknown: boolean }> => {
       const result = await this.cliExec([command, id, '--workspace', workspace, '--home', home], { ...process.env, HHOSTED_HOME: home })
-      if (result.code !== 0) {
-        const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
-        throw new HomeHostedError(output.length > 0 ? output : `home-hosted ${command} ${id} exited ${String(result.code)}`, 'CLI_FAILED')
-      }
+      if (result.code === 0)
+        return { unknown: false }
+      const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
+      const failure = new HomeHostedError(output.length > 0 ? output : `home-hosted ${command} ${id} exited ${String(result.code)}`, 'CLI_FAILED')
+      if (unknownCommand(result))
+        return { unknown: true }
+      throw failure
     }
 
-    if (action === 'restart') {
-      await once('stop')
-      await once('start')
-    }
-    else {
+    if (action !== 'restart') {
       await once(action)
+      return { home, workspace, id, action, via: 'cli' }
     }
-    return { home, workspace, id, action, via: 'cli' }
+
+    // One command: the panel restarts the entry without it ever being down for a
+    // caller to observe, and a failure leaves the entry as it was rather than
+    // stopped.
+    const attempt = await once('restart')
+    if (!attempt.unknown)
+      return { home, workspace, id, action, via: 'cli' }
+
+    // A panel from before 0.7.13 refused the command before touching anything, so
+    // the pair still starts from the state the entry was already in.
+    await once('stop')
+    await once('start')
+    return { home, workspace, id, action, via: 'cli', downgraded: true }
   }
 
   // -------------------------------------------------------------------------

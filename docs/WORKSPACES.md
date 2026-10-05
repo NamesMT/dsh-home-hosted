@@ -58,8 +58,13 @@ that endpoint has, least invasive first:
   (`.hh/<workspace>/servers.config.json`, its default workspace unless the call names another) — no
   credential, but no live status either, and a running panel applies a changed definition at that
   entry's next start;
-- `cli` runs the CLI against its state root — the only runtime path the panel itself offers
-  (`start`/`stop`; a restart is a stop then a start, because the CLI has no server restart);
+- `cli` runs the CLI against its state root — the only runtime path the panel itself offers.
+  `start`/`stop` act on one entry; a restart is now the CLI's own `restart <id>` (home-hosted
+  0.7.13), which is what the panel's UI does and leaves no window in which the entry is down. A
+  local panel older than that refused the command before touching anything, so the plugin falls
+  back to the stop-then-start pair and reports `downgraded` in the result — the refusal is
+  detected from the CLI's own text, including the `Unexpected argument` a 0.7.12 CLI prints for
+  the positional id;
 - `api` mints a token for that panel, enrols it and uses its HTTP API — the only way to get live
   status, and it replaces any token that panel had, which the question says outright.
 

@@ -114,6 +114,14 @@ manager, or restart the harness you are running in to "check" something.
 - Only the `home-hosted` this plugin pins is supported (`^0.7.3`): the state layout is `.hh`, and
   the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
   can refuse to boot — see DESIGN.
+- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.3` already
+  admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable
+  without moving the pin — and a *local* panel older than it is a real scenario, not a mistake. So
+  the newer path is tried first and an unknown-command refusal falls back to what that panel can do
+  (`lifecycleForeign`). This is deliberate: bumping `MIN_SUPPORTED_VERSION` would refuse a panel that
+  works, to gain nothing. Detect the refusal from the CLI's own text, and know all of its shapes — a
+  pre-0.7.13 panel answers a 404 through the daemon, and a 0.7.12 CLI rejects the positional with
+  `Unexpected argument`, which is the one a 404-only check misses (both pinned in `test/service`).
 
 ## Where to extend
 
