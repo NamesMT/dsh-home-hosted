@@ -136,7 +136,11 @@ export function setControl(home: string, patch: Record<string, unknown>, written
   const read = readGlobalSettings(home)
   if (read.error !== null)
     throw new ConfigLayoutError(read.error)
-  writeGlobalSettings(home, { ...(read.raw ?? {}), control: { ...(read.raw?.control ?? {}), ...patch } }, writtenBy)
+  // Through the same merge the panel's own `updateControl` uses, so a caller that
+  // patches `auth` or `tls` does not reset the group's siblings. Today's only
+  // caller writes `{ port }`, which merges the same either way — but an exported
+  // helper should not be the one place a nested patch means something else.
+  writeGlobalSettings(home, patchControl(read.raw ?? {}, patch), writtenBy)
 }
 
 function refuseUnmigrated(home: string): void {

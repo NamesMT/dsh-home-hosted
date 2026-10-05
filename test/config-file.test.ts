@@ -252,7 +252,7 @@ describe('the settings split', () => {
     const dir = home()
     writeJsonFile(globalSettingsFile(dir), {
       meta: { writtenBy: 'home-hosted', schema: 1 },
-      control: { port: 3999, host: '127.0.0.1' },
+      control: { port: 3999, host: '127.0.0.1', auth: { enabled: true, sessionTtlMs: 90000 } },
       auth: { enabled: true },
       tls: { mode: 'auto' },
       host: { enabled: true },
@@ -262,13 +262,25 @@ describe('the settings split', () => {
     setControl(dir, { port: 6311 }, 'dsh-home-hosted')
 
     const written = readGlobalSettings(dir).raw!
-    expect(written.control).toEqual({ port: 6311, host: '127.0.0.1' })
+    expect(written.control).toEqual({ port: 6311, host: '127.0.0.1', auth: { enabled: true, sessionTtlMs: 90000 } })
     expect(written.auth).toEqual({ enabled: true })
     expect(written.tls).toEqual({ mode: 'auto' })
     expect(written.host).toEqual({ enabled: true })
     expect(written.backups).toEqual({ enabled: false })
     // The schema the file declared survives, and the writer is stamped.
     expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 1 })
+
+    // A nested control group merges the way the panel's own `updateControl` does,
+    // so patching one key of `auth` keeps its siblings. The fixture carries a
+    // second key for exactly that reason: with only `enabled`, replacing and
+    // merging look identical.
+    setControl(dir, { auth: { enabled: false } }, 'dsh-home-hosted')
+    expect(readGlobalSettings(dir).raw?.control).toEqual({
+      port: 6311,
+      host: '127.0.0.1',
+      auth: { enabled: false, sessionTtlMs: 90000 },
+    })
+
     // Nothing is written at the pre-0.7 root.
     expect(fs.existsSync(path.join(dir, 'settings.json'))).toBe(false)
   })
