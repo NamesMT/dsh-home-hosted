@@ -135,6 +135,25 @@ The practical consequence for a foreign panel is the three mechanisms `docs/WORK
 config file, its own CLI, or a token the user is asked about. A panel the user has not confirmed is
 never reached by a fourth route invented here.
 
+## Two RPC endpoints have no caller, and that is fine
+
+`servers.get` and `entries.restore` are handled by the service, typed in `RpcEndpoint`, and tested —
+but no client or agent tool invokes either, which is the shape worth checking rather than assuming.
+
+Both are **redundant surface, not unreachable capability**:
+
+- `entries.restore`'s job is reached through `entries.remove`, which restores an entry this plugin
+  merely adopted instead of deleting it (`removeManagedEntry` → the `adopted` branch). That is proven
+  behaviourally, not by reading: `test/service` removes an adopted entry and asserts the panel got no
+  `DELETE` and the entry's own `onPortConflict` came back.
+- `servers.get` returns one entry's view, and `servers.list` — which every consumer uses — returns
+  every entry's view for the workspace.
+
+They are left in place rather than deleted: they are a coherent RPC surface for a caller that wants
+one entry, deleting them is a wire change for no user-visible gain, and the capability each names is
+already reachable. Recorded here so the next reader does not have to re-derive whether it was an
+oversight.
+
 ## Credentials
 
 home-hosted keeps only an API token's hash, so a token this plugin did not create can never be
