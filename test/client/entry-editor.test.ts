@@ -5,29 +5,40 @@
  * an accident.
  */
 import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { EDITOR_FIELDS, EMPTY_DRAFT, EntryEditor, OUT_OF_SCOPE_FIELDS } from '../../src/client/entry-editor.js'
 import { englishTranslator } from '../../src/client/locales.js'
+import { panelEntryFields } from '../helpers/panel-schema.js'
 
 /**
- * The panel's real `serverSchema`, read from the pinned dependency's sourcemap —
- * never a hand-copied list, because a hand-copied list is the bug this guards.
+ * Where the panel UI's *source* lives, when this checkout happens to have it.
+ *
+ * Resolved, not hard-coded: `HHOSTED_PANEL_SOURCE` wins, and otherwise the
+ * conventional sibling directory of this package is tried. The earlier version named
+ * one absolute path on one machine, which meant the assertions below ran nowhere else.
  */
-function panelEntryFields(): string[] {
-  const map = JSON.parse(
-    fs.readFileSync('node_modules/home-hosted/dist/cli.js.map', 'utf8'),
-  ) as { sourcesContent: string[] }
-  const source = map.sourcesContent.find(text => text?.includes('export const serverSchema'))
-  expect(source, 'the pinned dependency should ship the schema this test reads').toBeDefined()
-  const start = source!.indexOf('export const serverSchema = type({')
-  const block = source!.slice(start, source!.indexOf(".onUndeclaredKey('reject')", start))
-  const fields = [...block.matchAll(/^ {2}([a-zA-Z]+):/gm)].map(match => match[1]!)
-  // A regex that matched nothing would make every assertion below vacuous.
-  expect(fields.length).toBeGreaterThan(20)
-  return fields
+function panelEditorSource(): string | null {
+  const override = process.env.HHOSTED_PANEL_SOURCE
+  // An explicit override is authoritative, including when it points nowhere: that is
+  // how a person (or this file's own test) asks for the absent case.
+  if (override !== undefined && override.length > 0)
+    return fs.existsSync(override) ? override : null
+  // Otherwise the conventional sibling directory of this package, computed from this
+  // file rather than hard-coded to one machine's home directory.
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const sibling = path.resolve(here, '..', '..', '..', 'home-hosted', 'uis', 'stock', 'src', 'components', 'server', 'ServerConfigEditor.vue')
+  return fs.existsSync(sibling) ? sibling : null
 }
+
+/**
+ * Decided at **module load**, because `runIf`/`skipIf` are evaluated at collection
+ * time — before any `beforeAll` runs — so a flag set in a hook could never work.
+ */
+const PANEL_SOURCE = panelEditorSource()
 
 describe('the entry editor\'s field scope', () => {
   it('accounts for every field the panel accepts, as rendered or explicitly out of scope', () => {
@@ -92,19 +103,37 @@ describe('the entry editor\'s field scope', () => {
  * one place. `src/tools.ts` carries its own parity test (`test/tools`); this records
  * what each one is for, so a future field can be classified instead of guessed at.
  */
-describe("the three consumers of the panel entry surface", () => {
-  it('gives each consumer a different, stated job', () => {
-    // The model: every field, so a prompt can set anything (test/tools asserts parity).
-    // The panel UI: every field, and it is the one linked to from this page.
-    // This editor: the common fields, with the rest explicitly out of scope.
-    const panelUiPath = '/home/mt/mine/home-hosted/uis/stock/src/components/server/ServerConfigEditor.vue'
-    // Skip when the sibling checkout is absent: CI checks this package alone, and a
-    // test that hard-depends on another checkout would fail there for no good reason.
-    // (This package's own panel UI is a compiled bundle, so it cannot be read.)
-    if (!fs.existsSync(panelUiPath))
-      return
-    const panelUi = fs.readFileSync(panelUiPath, 'utf8')
+describe('the three consumers of the panel entry surface', () => {
+  /**
+   * This assertion needs the panel UI's **source**, which only a checkout that also
+   * has that repository can offer: the pinned dependency ships a compiled bundle, and
+   * the bundle carries the *schema* but not the form controls — grepping it would pass
+   * even if the panel had no control at all, which is worse than no test.
+   *
+   * So it **skips loudly** rather than returning early. An early `return` inside a test
+   * is reported by vitest as a pass, so the suite would claim to have checked something
+   * it never ran (the same shape as the six upstream tests this replaced); `skipIf` is
+   * evaluated at collection time and reports `skipped`, which is the truth.
+   */
+  it.skipIf(PANEL_SOURCE === null)('can set every field this editor leaves out', () => {
+    const panelUi = fs.readFileSync(PANEL_SOURCE!, 'utf8')
     for (const field of OUT_OF_SCOPE_FIELDS)
       expect(panelUi, `the panel UI should be able to set ${field}`).toContain(field)
+  })
+
+  /**
+   * The half that **always** runs, so CI still verifies the decision rather than
+   * skipping everything: the fields this editor does not render must all be accepted
+   * by the panel (read from the pinned dependency), and the ones it claims are out of
+   * scope must be a subset of that — never invented, never overlapping what is
+   * rendered.
+   */
+  it('keeps its out-of-scope list inside what the panel actually accepts', () => {
+    const panel = panelEntryFields()
+    for (const field of OUT_OF_SCOPE_FIELDS)
+      expect(panel, `"${field}" is declared out of scope but the panel does not accept it`).toContain(field)
+    // And no field is both rendered here and declared out of scope.
+    for (const field of EDITOR_FIELDS)
+      expect(OUT_OF_SCOPE_FIELDS as readonly string[]).not.toContain(field)
   })
 })

@@ -117,14 +117,27 @@ describe('account resolution', () => {
     }
   })
 
+  /**
+   * A database that does **not** hold the directory's owner is the case the name
+   * describes, and the previous version could never reach it: `PASSWD` deliberately
+   * contains uid 1000 (the CI user) while a `tempHome()` directory is owned by whoever
+   * runs the suite, so its guard was false on every machine and the test asserted
+   * nothing. Here the owner is deliberately absent from the supplied rows, so the
+   * question is actually asked: no account may be invented from that uid.
+   */
   it('never reports a uid the user database does not know as a chosen account', () => {
     const dir = tempHome()
     try {
-      const resolved = accountOf({ passwd: PASSWD, env: { LOGNAME: 'root' }, uid: 0, ownerPaths: [dir] })
-      // Whatever the machine's own uid is, an answer that is not root must come
-      // from a row of the database the caller supplied — never from a guess.
-      if (resolved !== null && !resolved.root && !PASSWD.some(row => row.uid === fs.statSync(dir).uid))
-        expect(PASSWD.map(row => row.uid)).toContain(resolved.uid)
+      const ownerUid = fs.statSync(dir).uid
+      const rootOnly = parsePasswd('root:x:0:0:root:/root:/bin/sh')
+      const resolved = accountOf({ passwd: rootOnly, env: { LOGNAME: 'root', USER: 'root' }, uid: 0, ownerPaths: [dir] })
+      // Forced: the fixture cannot accidentally describe the owner, so the assertion
+      // below always has a real answer to judge.
+      expect(rootOnly.some(row => row.uid === ownerUid)).toBe(false)
+      // Root or nothing is acceptable; an account derived from the owner's uid is not,
+      // since that uid is exactly what the database could not confirm.
+      if (resolved !== null)
+        expect(resolved.uid, 'a uid the database does not hold was reported as an account').not.toBe(ownerUid)
     }
     finally {
       cleanup(dir)

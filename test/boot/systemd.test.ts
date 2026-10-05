@@ -348,9 +348,15 @@ describe('systemd system', () => {
 
   it('installs through `sudo -n` and never through a shell', async () => {
     let installed = false
+    // The staged unit is a temp file the install deletes once copied, so read it out
+    // of the very argv the faked `sudo install` was handed — the same technique the
+    // `User=` test below uses. Asserting on a path afterwards can never run.
+    let stagedContent = ''
     const runner = fakeRun((command, args) => {
-      if (command === 'sudo' && args.includes('install'))
+      if (command === 'sudo' && args.includes('install')) {
         installed = true
+        stagedContent = fs.readFileSync(args[args.length - 2] ?? '', 'utf8')
+      }
       if (command === 'systemctl' && args.includes('is-enabled'))
         return installed ? { code: 0, stdout: 'enabled\n' } : { code: 4 }
       if (command === 'sudo' && args.includes('enable')) {
@@ -373,10 +379,10 @@ describe('systemd system', () => {
     expect(runner.lines()).toContain('sudo -n systemctl daemon-reload')
     expect(runner.lines()).toContain(`sudo -n systemctl enable --now ${unitName}.service`)
     // Never `User=root`: the account is whoever the login named, and a root answer
-    // is dropped rather than written.
-    const staged = path.join(home, `home-hosted-${unitName}.service`)
-    if (fs.existsSync(staged))
-      expect(fs.readFileSync(staged, 'utf8')).not.toContain('User=root')
+    // is dropped rather than written. Asserted on the content actually staged, which
+    // is the only moment it exists.
+    expect(stagedContent, 'the install should have been handed a staged unit').not.toBe('')
+    expect(stagedContent).not.toContain('User=root')
   })
 
   it('writes User= for the login that elevated, never for a root environment', async () => {

@@ -182,12 +182,17 @@ describe('boot launcher', () => {
       .toContain(h.dshHome)
   })
 
-  it('runs through the shebang the way a unit will, on POSIX', () => {
+  /**
+   * The shebang is written on every platform — `buildLauncherSource` emits it
+   * unconditionally — so guarding this on `process.platform !== 'win32'` made the
+   * assertion silently vacuous on the Windows runner, which is a pass the suite never
+   * earned. It is asserted everywhere instead.
+   */
+  it('runs through the shebang the way a unit will', () => {
     const h = harness()
     writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
     const script = fs.readFileSync(launcherPath(h.state), 'utf8')
-    if (process.platform !== 'win32')
-      expect(script.split('\n')[0]).toBe('#!/usr/bin/env node')
+    expect(script.split('\n')[0]).toBe('#!/usr/bin/env node')
   })
 })
 

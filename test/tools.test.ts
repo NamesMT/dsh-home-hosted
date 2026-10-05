@@ -7,6 +7,7 @@ import { PanelError } from '../src/home-hosted/panel.js'
 import type { HomeHostedService } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
 import { registerAgentTools, toolNameFor } from '../src/tools.js'
+import { panelEntryFields } from './helpers/panel-schema.js'
 import { tempDir } from './helpers/temp.js'
 
 interface RegisteredTool {
@@ -153,14 +154,7 @@ describe('agent tools', () => {
    * apart silently again: a field the panel grows fails here until it is advertised.
    */
   it('advertises every entry field the panel accepts, read from the panel itself', () => {
-    const map = JSON.parse(fs.readFileSync('node_modules/home-hosted/dist/cli.js.map', 'utf8')) as { sourcesContent: string[] }
-    const source = map.sourcesContent.find(text => text?.includes('export const serverSchema'))
-    expect(source, 'the pinned dependency should ship the schema this test reads').toBeDefined()
-    const start = source!.indexOf('export const serverSchema = type({')
-    const block = source!.slice(start, source!.indexOf(".onUndeclaredKey('reject')", start))
-    const accepted = [...block.matchAll(/^ {2}([a-zA-Z]+):/gm)].map(match => match[1]!)
-    // A sanity floor: a regex that matched nothing would make the assertion vacuous.
-    expect(accepted.length).toBeGreaterThan(20)
+    const accepted = panelEntryFields()
 
     const h = harness({ allow: ['servers_edit'] })
     const tool = h.tools.find(candidate => candidate.name === toolNameFor('servers_edit'))!

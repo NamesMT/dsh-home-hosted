@@ -92,6 +92,27 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A test that cannot run must report `skipped`, never `passed`.** vitest treats an
+  early `return` inside a test body as a pass, so a guard like
+  `if (!fs.existsSync(dependency)) return` makes the suite claim a verification it never
+  performed. Use `it.skipIf(condition)` / `it.runIf(condition)` with the condition
+  evaluated at **module load** — they are resolved at collection time, before any
+  `beforeAll`, so a flag set in a hook cannot work. Four instances of this were found
+  and fixed here, each having silently asserted nothing: an editor-scope guard that
+  skipped on CI, a Windows-guarded shebang check (`buildLauncherSource` emits the
+  shebang unconditionally, so the guard was pointless), a systemd `User=root` check
+  reading a file the install had already `rmSync`ed (read it from the faked `sudo
+  install` argv instead, while it exists), and an account test whose own fixture
+  guaranteed its `if` was false on every machine. When a conditional is unavoidable,
+  **force the branch with a preceding assertion** (`expect(cond).toBe(false)`) so the
+  guarded assertion always runs — `test/client/api.test.ts` is the model: every
+  `if (!parsed.ok) expect(...)` follows `expect(parsed.ok).toBe(false)`.
+- **A test that reads a path relative to the process's cwd is a portability trap**, not
+  a signal: it works when vitest starts at the repo root and fails anywhere else.
+  Resolve from `import.meta.url` (`test/helpers/panel-schema.ts` is the shared reader
+  for the panel's own `serverSchema`). Never hard-code an absolute path from one
+  machine — the earlier editor guard named `/home/mt/...` and so ran nowhere else.
+
 - Tests never bind a fixed port, touch a real service manager, or write outside a temp dir; boot
   providers take the injected `run` seam and pin payloads with snapshots.
 - macOS temp dirs resolve differently (`/var/…` → `/private/var/…`): compare canonical paths.
