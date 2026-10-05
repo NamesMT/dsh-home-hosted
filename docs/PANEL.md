@@ -16,8 +16,16 @@ The range is stated twice and both must agree: `dependencies['home-hosted']` in 
 is older). Bumping one alone makes the page recommend a range the plugin is not built against. A bump
 is therefore those two plus the version-coupled tests — *unless* the release moved something this
 plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/settings`, or a CLI
-subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them, and neither
-did 0.7.3 (DNS-01 through the panel's own DNS accounts, and a Namecheap API provider).
+subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them; neither
+did 0.7.3 (DNS-01 through the panel's own DNS accounts, and a Namecheap API provider); and neither
+did anything from 0.7.4 through 0.7.17 — checked commit by commit, `src/shared/contracts.ts` and
+`src/config/migrations.ts` were not touched at all, and the one commit that did touch
+`src/api/settings.ts` added the proxy-exposure guard to that route's own handler, which cannot reach
+a plugin that writes `control` to disk rather than PATCHing the endpoint.
+
+So the pin stays at `^0.7.3`, and a capability that needs a *newer* 0.7.x degrades rather than
+raising the floor — a local panel older than the capability is a real scenario. `logs` (0.7.12) is a
+file read either way, and `restart <id>` (0.7.13) falls back to the stop/start pair it replaced.
 
 That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
 and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it
