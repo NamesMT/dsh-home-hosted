@@ -164,6 +164,36 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A list that must stay in step with a type
+
+The pattern: **the list is the source and the type is derived** (`type X = (typeof LIST)[number]`).
+A hand-written union beside an annotated `readonly X[]` forces every *entry* to be valid while
+leaving **presence** unchecked, so a member can be added to the type without reaching the list.
+
+- **Mutate one side and read the error count; do not judge by looking.** Pairs that looked
+  identical behaved differently: `AgentToolName` was exhaustiveness-guarded by three
+  `Record<AgentToolName, …>` (adding a member gave 3 errors) yet **removing a name from its list
+  gave 0**; `OnPortConflict` gave **0 in either direction**. Both lists are derived now — removing
+  an entry gives 8 and 9 errors respectively.
+- **The harm decides whether it matters.** An omission is only a defect where the list *validates*
+  or *explains*: `AGENT_TOOL_NAMES` backs `knownTool`, so a tool left out is refused when selected
+  and counted away in the picker; `ON_PORT_CONFLICT_POLICIES` backs `isOnPortConflict` **and** the
+  "use one of …" sentence, so a message could name a value the validator rejects.
+- **A `Record<X, …>` or an exhaustive switch is already compiler-checked** — those need nothing.
+  `ForeignMechanism`, `TokenState`, `CliSource` and `BootState` are in that category.
+- **A union with no parallel list cannot have this bug.** `CliPreference`, `TokenProbe`,
+  `UiAction`, `InstanceSource`, `UiStyle`, `DshSurface` are literal types only.
+- **A deliberate subset is not a parallel list.** `MUTATING_AGENT_TOOLS` is a subset of the tool
+  list, `INSTALLED_STATES` is 3 of 5 boot states, and `BOOT_MECHANISM_NAMES` omits `auto` (the
+  settings file's value, not a mechanism). Deriving those from the union would be wrong; the
+  deviation is asserted instead.
+- **A `Partial<Record<…>>` can be deliberate too.** `FOREIGN_MECHANISMS` omits most endpoints on
+  purpose — a missing entry means "cannot be aimed at another panel", refused as
+  `INSTANCE_UNSUPPORTED` and pinned by two tests. Not every absence is a gap.
+- **A constant nothing imports is not enforcing anything.** `OWNED_ENTRY_KEYS` was exported, used
+  nowhere, and named in a comment as the source of a rule that `ownedPatch`'s literals enforce.
+  Removed, and the comment now names the four keys where they are written.
+
 ## A heuristic reused on a different input shape
 
 - **A ratio bound tuned for long words is wrong for short ones.** "Half the shorter word" is right
