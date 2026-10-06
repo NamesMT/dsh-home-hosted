@@ -164,6 +164,35 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## Guarantees that rest on the runtime
+
+Three properties here are stated as if this code owned them, and actually rest on Node, on
+`rename(2)` or on `spawn`. Each is now pinned with a real test that fails if the underlying
+behaviour changes, because a property nobody tests is a property nobody knows is still true.
+
+- **The panel token does not cross a cross-origin redirect.** `PanelClient.request` attaches
+  `authorization: Bearer <token>` and passes **no `redirect` option**, so the transport
+  follows a 3xx with credentials attached unless it strips them itself. Undici strips
+  `authorization` cross-origin and keeps it same-origin — *required* for a panel that
+  redirects its own API path, and the thing that stops a panel (or anything answering for
+  one) redirecting this plugin's token to a host the user never named. Pinned with two real
+  loopback servers, the second recording what it received; the cross-origin case counts hits
+  as well, because a runtime that never followed the redirect would also see no credential.
+- **No value ever becomes a command.** `src/util/exec.ts` passes `shell: false`, so an
+  argument is never interpreted. Pinned by driving the real seam with `a; touch <proof>` and
+  `$(id)`, then checking the file was not created and `id` did not run — inverting the seam
+  to `shell: true` fails both and prints the leak.
+- **A write is atomic and a failure leaves the old file.** `writeFileAtomic` renames a
+  sibling temp file into place, which is why a reader never sees half a file and a
+  secret-bearing file is never briefly world-readable. Pinned by the **inode changing** on
+  rewrite (in-place truncation keeps it), no `.tmp` surviving, and content surviving an
+  `EACCES` failure. The test that merely said "atomic" asserted content, which a plain
+  `writeFileSync` satisfies.
+
+**The habit**: when a comment promises something the runtime provides — a redirect rule, a
+signal reaching a child, a rename being atomic — drive the real thing and assert it. A stub
+cannot answer a question about the transport.
+
 ## Oracles
 
 - **A hand-written model of someone else's parser is evidence, not equivalence — and nothing
