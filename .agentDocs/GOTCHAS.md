@@ -164,6 +164,30 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A validator that decides by texture
+
+The signature: a check on the **shape** of a value that has a canonical form with many
+spellings, or a guard whose comment claims more than its code checks.
+
+- **An id that becomes a path segment must be the id shape.** `workspaceDir` joins a workspace
+  id under `.hh/`, and `readWorkspaces` accepted **any** non-empty string. A registry naming
+  `../../etc` was read without error, `defaultWorkspace` returned it, and `serversFile`
+  resolved outside the state root — a path the foreign-panel write path
+  (`createForeign`/`updateForeign`/`deleteForeign`) then **writes through**. Guarding only the
+  RPC entry point (`callWorkspace`) is what left the gap, because a foreign panel's id arrives
+  from a file on disk; the builder asserts now too, since that is the one point the entry
+  points share. The panel's own schema is `^[a-z0-9][a-z0-9_-]*$`.
+- **A version has spellings a string compare gets wrong.** `compareVersions` compared the
+  prerelease tail with `<`, so `rc.2` sorted above `rc.10` — and the ordering decides which
+  `dsh` a boot entry runs. Prerelease identifiers compare numerically where both are numeric.
+  **The same algorithm is inlined into both generated launchers**, so the fix had to land twice;
+  a test that asserted the implementation's *text* is what let it pass while wrong. It runs the
+  inlined function now instead.
+- **Compare sibling branches against each other.** The address validator this class is named
+  for had a thorough IPv4 list and two IPv6 prefixes; here, `getServer`/`freePort` validated and
+  the foreign-file path did not. The asymmetry is the tell, and it is visible by reading the two
+  branches side by side rather than either alone.
+
 ## Guarantees that rest on the runtime
 
 Three properties here are stated as if this code owned them, and actually rest on Node, on
