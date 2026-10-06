@@ -165,6 +165,16 @@ the CLI, so a row for it could only crash-loop.) Server entries of every other k
 </details>
 
 <details>
+<summary><b>Read more</b></summary>
+
+Topic docs, one per area — written for whoever has to touch it next:
+
+[Boot autostart](docs/BOOT.md) · [the panel](docs/PANEL.md) · [server entries](docs/ENTRIES.md) ·
+[workspaces and several panels](docs/WORKSPACES.md) · [agent tools](docs/AGENT-TOOLS.md)
+
+</details>
+
+<details>
 <summary><b>Managed entry and port policy</b></summary>
 
 One entry (`dsh`), one toggle: the panel keeps it alive, restarts it and reclaims its port. A
