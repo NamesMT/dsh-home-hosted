@@ -164,6 +164,31 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## Line endings, and reading a file as text
+
+There is **no Windows leg here** (deliberate, per `platform-gate.yml`), so a CRLF break would reach a
+user before CI. The substitute used: convert every `src/`/`test/` file to CRLF and re-run the suite.
+
+- **The sweep is the evidence, not the claim.** 119 files converted to CRLF, **874 tests passed, 0
+  failed** — so nothing here is CRLF-sensitive today. Verified the conversion took effect
+  (`git ls-files --eol` → `w/crlf`, 31024 lines changed) rather than trusting the script.
+- **A slice boundary must be refused when absent.** `source.indexOf('\n', at)` returns **-1** when
+  the line ends the file, and `slice(at, -1)` silently drops the last character — it looked
+  harmless once because the dropped character was a paren, not a value. Normalize `\r\n`, and
+  **throw** when the boundary is missing. A slice that runs past its boundary bleeds into the next
+  function, which is what failed a Windows platform gate elsewhere.
+- **A generated string is LF by construction.** A template literal normalizes `<CR><LF>` to `<LF>`
+  per the spec, so a test slicing *generated* source is safe regardless of the checkout — verified
+  by evaluating a CRLF source file's literal.
+- **`.trim()` on the extracted value neutralizes a trailing CR**, which is why the `split('\n')`
+  sites in `systemd.ts`, `xdg.ts` and `common.ts` are fine. **Check the consumer before calling a
+  missing trim a bug**: `parsePasswd` does return `fields[5]` untrimmed (a CRLF 6-field row gives
+  `home: "/home/ci\r"`), but its only consumer trims, so it is latent rather than live.
+- **A non-LF changelog breaks `release-notes.mjs`**: a CR-only file splits into one line, so the
+  anchored `^##` heading never matches and it reports a missing section. Reported, not changed —
+  CI is `ubuntu-latest`, a Windows checkout gives CRLF (which works), and no `.gitattributes` forces
+  anything.
+
 ## Guard strength, not guard presence
 
 A list can be "covered" and still let a member vanish. **Measure by removing one member and reading
