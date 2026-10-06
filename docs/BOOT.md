@@ -191,6 +191,19 @@ fallback gets a command that works.
 Enabling and switching differ only in the retirement: a switch already has an entry keeping the panel
 alive, so its plan carries the old mechanism's removal.
 
+## The page says what a mechanism name means
+
+The picker's values are the identifiers the setting stores — `systemd-system`, `systemd-user`,
+`xdg-autostart`, `launchd-agent` — and they are not self-explanatory, so the page prints the host's own
+one-line reason for the chosen one ("systemd is not the init system here (no /run/systemd/system)", "a
+LaunchAgent loads at login, not at boot", "this needs root here, so the plugin stages the plist and
+shows the sudo commands"). Those sentences come from `BootCandidate.reason`, which the host already
+computed for every mechanism, available or not.
+
+The `Details` block describes the mechanism that is actually **installed**, which is a different one
+while a switch is pending, so both it and the picker read one shared lookup rather than each formatting
+the name their own way.
+
 ## Privilege
 
 Boot scope needs privilege somewhere on every platform: a system unit, or `loginctl enable-linger` on

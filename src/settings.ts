@@ -62,6 +62,15 @@ function isBootMechanism(value: unknown): value is PluginSettings['autostart']['
   return typeof value === 'string' && BOOT_MECHANISMS.includes(value)
 }
 
+/**
+ * The `lastAttempt` the page can render: a record, never `null`, a bare value or an
+ * array. The array matters — `typeof [] === 'object'`, and letting one through renders
+ * an entry with an empty detail, i.e. a failure report for something that never failed.
+ */
+function isBootAttempt(value: unknown): value is NonNullable<PluginSettings['autostart']['lastAttempt']> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string): PluginSettings {
   const entries = Array.isArray(raw?.entries)
     ? raw.entries.map(intent => normalizeIntent(intent, fallbackEntryId))
@@ -78,13 +87,19 @@ function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string)
   // release wrote for "unset".
   const choseNothing = legacyFile && declared !== null && migrated !== null && isLegacyDefaultAllowlist(declared)
   const allow = migrated === null || choseNothing ? [...DEFAULT_SETTINGS.agentTools.allow] : migrated
+  // Only a real attempt is kept. `lastAttempt?: BootAttempt` means *absent or an
+  // object*, and spreading anything else through broke that: a file (or an RPC patch)
+  // carrying an explicit `null` — which is what a cleared optional looks like once it
+  // has been written back — reached the page as `null`, and `bootAttemptView` reads
+  // `.ok` off it, so the Boot section crashed on render. A non-object is treated as
+  // "no attempt kept", which is what the field means.
   const attempt = raw?.autostart?.lastAttempt
   return {
     version: SETTINGS_VERSION,
     autostart: {
       enabled: raw?.autostart?.enabled === true,
       mechanism: isBootMechanism(raw?.autostart?.mechanism) ? raw.autostart.mechanism : 'auto',
-      ...(attempt === undefined ? {} : { lastAttempt: attempt }),
+      ...(isBootAttempt(attempt) ? { lastAttempt: attempt } : {}),
     },
     // A pre-0.2.0 file expressed management only by holding an intent for the
     // harness entry; the page's toggle needs the flag it never had.

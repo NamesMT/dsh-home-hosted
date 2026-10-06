@@ -155,6 +155,35 @@ describe('settings store', () => {
   })
 })
 
+/**
+ * `lastAttempt?: BootAttempt` means absent or a record. Spreading a non-record through
+ * `normalize` broke that, and the page reads `.ok` off the result: a stored `null` — what
+ * a cleared optional looks like written back — crashed the Boot section on render, and an
+ * array rendered a *failure report* for an attempt that never happened.
+ */
+describe('a lastAttempt that is not a record', () => {
+  let dir: TempDir
+
+  afterEach(() => dir?.cleanup())
+
+  it('is kept as "no attempt", never stored as null or an array', () => {
+    for (const stored of [null, undefined, 'nonsense', 42, [], true]) {
+      dir = tempDir()
+      const file = path.join(dir.path, 'settings.json')
+      writeJsonFile(file, { version: SETTINGS_VERSION, autostart: { enabled: false, mechanism: 'auto', lastAttempt: stored } })
+      expect(new SettingsStore(file, 'dsh').get().autostart.lastAttempt, `${JSON.stringify(stored)} should not be kept`).toBeUndefined()
+    }
+  })
+
+  it('still keeps a real attempt', () => {
+    dir = tempDir()
+    const file = path.join(dir.path, 'settings.json')
+    const attempt = { ok: false, action: 'install', mechanism: null, detail: 'the mechanism refused', commands: [], at: 1 }
+    writeJsonFile(file, { version: SETTINGS_VERSION, autostart: { enabled: false, mechanism: 'auto', lastAttempt: attempt } })
+    expect(new SettingsStore(file, 'dsh').get().autostart.lastAttempt).toEqual(attempt)
+  })
+})
+
 describe('upgrading an older settings file', () => {
   it('renames tools an older release split apart', () => {
     scratch = tempDir()

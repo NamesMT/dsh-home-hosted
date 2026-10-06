@@ -50,6 +50,20 @@ describe('bootAttemptView', () => {
     expect(bootAttemptView(undefined)).toBeNull()
   })
 
+  /**
+   * The field is `lastAttempt?: BootAttempt` — absent or a record — but a cleared
+   * optional written back is an explicit `null`, and this read `.ok` off it. That threw
+   * during render and took the whole Boot section down, so the non-records are handled at
+   * both ends: `SettingsStore.normalize` refuses to store one, and this returns "none"
+   * rather than reading it.
+   */
+  it('treats every non-record as "no attempt kept"', () => {
+    for (const value of [null, undefined, 'nonsense', 42, [], true])
+      expect(bootAttemptView(value as never), `${JSON.stringify(value)} should read as no attempt`).toBeNull()
+    // And a real record still survives.
+    expect(bootAttemptView({ ok: false, action: 'install', mechanism: null, detail: 'd', commands: [], at: 1 })?.detail).toBe('d')
+  })
+
   it('normalises a failed attempt', () => {
     expect(bootAttemptView({
       ok: false,

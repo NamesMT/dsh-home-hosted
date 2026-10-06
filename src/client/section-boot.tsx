@@ -24,6 +24,23 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
   }))
 
   const switching = isSwitchingMechanism(boot.mechanism, autostart.mechanism)
+
+  // The option values *are* internal names (`systemd-system`, `xdg-autostart`), because
+  // that is what the setting stores and what the host reports back. The host already
+  // computes a sentence explaining each one — "systemd is the init system here", "a
+  // LaunchAgent loads at login, not at boot", "this needs root here, so the plugin stages
+  // the plist and shows the sudo commands" — and the page was dropping it, so a person (and
+  // a model reading the rendered page) had to know what the identifier meant.
+  //
+  // One lookup serves both places the name appears: the hint under the picker, and the
+  // `Details` block, which describes the mechanism that is actually *installed* — a
+  // different one while a switch is pending, and previously unnamed there entirely.
+  const reasonFor = (mechanism: string): string | null =>
+    candidates.find(candidate => candidate.mechanism === mechanism)?.reason ?? null
+  const mechanismNote = autostart.mechanism === 'auto'
+    ? t('bootMechanismAutoHint')
+    : reasonFor(autostart.mechanism)
+  const installedNote = boot.mechanism === null ? null : reasonFor(boot.mechanism)
   const installed = boot.mechanism !== null
 
   // Enabling an entry that does not start anything proves nothing, so the host
@@ -71,6 +88,7 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
         />
       )}
     >
+      {mechanismNote !== null && mechanismNote.length > 0 ? <Hint>{mechanismNote}</Hint> : null}
       {handover ? <Hint>{t('bootHandover')}</Hint> : null}
       {switchWarning ? <Note tone="warn">{t('bootSwitchRetires')}</Note> : null}
 
@@ -144,6 +162,8 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
         <Spec label={t('bootBootCapable')}>{boot.bootCapable ? t('yes') : t('no')}</Spec>
         <Spec label={t('bootPrivileged')}>{boot.privileged ? t('yes') : t('no')}</Spec>
         <Spec label={t('bootUnitPath')}><Code>{dash(boot.unitPath)}</Code></Spec>
+        <Spec label={t('bootMechanism')}>{dash(boot.mechanism)}</Spec>
+        {installedNote === null ? null : <Hint>{installedNote}</Hint>}
         {boot.detail.length > 0 ? <Hint>{boot.detail}</Hint> : null}
       </Details>
     </Section>

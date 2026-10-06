@@ -94,6 +94,30 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A stored optional that can be `null` is not the same as one that is absent, and the read
+  path that assumes absence crashes.** `autostart.lastAttempt` is `lastAttempt?:
+  BootAttempt`, and `SettingsStore.normalize` spread it through whenever it was not
+  `undefined` — so an explicit `null` (what a cleared optional looks like once written
+  back, and what the RPC accepts, since `RpcRequest.payload` is `unknown` and the patch is
+  cast rather than validated) reached the page as `null`. `bootAttemptView` then read `.ok`
+  off it and **the whole Boot section failed to render**. Fixed at both ends: `normalize`
+  now keeps only a record (`!Array.isArray`, since `typeof [] === 'object'` and an array
+  rendered a failure report for an attempt that never happened), and the render helper
+  returns "none kept" for any non-record.
+- **A diagnostic that quotes internal vocabulary is not a diagnostic.** The mechanism
+  picker's option values *are* `systemd-system` / `xdg-autostart`, because that is what the
+  setting stores — but the host already sends a sentence for each one
+  (`BootCandidate.reason`: "systemd is not the init system here (no /run/systemd/system)",
+  "a LaunchAgent loads at login, not at boot", "this needs root here, so the plugin stages
+  the plist and shows the sudo commands") and **the page was dropping it**. A person, and a
+  model reading the rendered page, had to already know what the identifier meant. The
+  `Details` block was worse: it now names `boot.mechanism` — the *installed* one, which
+  differs while a switch is pending — and previously explained neither. Both places read
+  one `reasonFor(mechanism)` lookup, so the two renderings cannot drift.
+- **Word a convention as a possibility, not a fact.** The mechanism reasons above are the
+  host's own observation about *this* machine, not claims about what the name universally
+  means, so a reader is not told that `systemd-system` always behaves one way.
+
 - **A guard test's input must fail for the reason the test claims.** Each platform
   `validate(spec)` runs its checks in order, so an input that violates an *earlier* rule
   tells you nothing about the later one — the assertion looks like coverage and is

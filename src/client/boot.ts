@@ -50,9 +50,18 @@ export function bootRefusal(value: unknown): BootFailure | null {
   }
 }
 
-/** Normalise the persisted last attempt for rendering; null when the host kept none. */
-export function bootAttemptView(attempt: BootAttempt | undefined): BootAttemptView | null {
-  if (attempt === undefined) return null
+/**
+ * Normalise the persisted last attempt for rendering; null when the host kept none.
+ *
+ * A non-record is treated as "none kept" rather than read: this is a render path, and it
+ * used to assume the optional field could only be absent. An explicit `null` — what a
+ * cleared optional looks like once written back — made it throw on `.ok` and took the
+ * whole Boot section down with it. `SettingsStore.normalize` now refuses to store one,
+ * and this keeps a malformed payload from turning into a blank section if one arrives by
+ * another route.
+ */
+export function bootAttemptView(attempt: BootAttempt | null | undefined): BootAttemptView | null {
+  if (typeof attempt !== 'object' || attempt === null || Array.isArray(attempt)) return null
   return {
     ok: attempt.ok === true,
     action: attempt.action === 'uninstall' ? 'uninstall' : 'install',
