@@ -57,7 +57,17 @@ export function panelPortConflictPolicies(): string[] {
   if (source === undefined)
     throw new Error(`the pinned panel's policy enum was not found in ${panelSchemaMapPath()}`)
   const at = source.indexOf('onPortConflictSchema = type.enumerated')
-  const line = source.slice(at, source.indexOf('\n', at))
+  // `indexOf` returns **-1** when the line ends the file, and `slice(at, -1)` then silently
+  // drops the last character — measured: it happened to keep every policy here because the
+  // dropped character was the closing paren, not a value. `\r\n` line endings make the same
+  // search miss. Normalize and refuse to slice on a boundary that was not found, so the failure
+  // is loud instead of a quiet truncation.
+  const normalized = source.replace(/\r\n/g, '\n')
+  const at2 = normalized.indexOf('onPortConflictSchema = type.enumerated')
+  const end = normalized.indexOf('\n', at2)
+  if (end === -1)
+    throw new Error('the policy enum line has no ending newline, so it cannot be sliced safely')
+  const line = normalized.slice(at2, end)
   const policies = [...line.matchAll(/'([a-z]+)'/g)].map(match => match[1]!)
   // A regex that matched nothing would make the caller's assertion vacuous.
   if (policies.length < 5)
