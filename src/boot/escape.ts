@@ -10,6 +10,21 @@
 
 const CONTROL = /[\u0000-\u001F\u007F]/
 
+/**
+ * Reject a value a newline (or another control character) could break out of its field.
+ *
+ * One rule for three formats, and the width was **measured** rather than assumed, because
+ * a wider rule would refuse legitimate values for nothing:
+ *
+ * - **systemd** — `systemd-analyze verify` (261) reads `User=a<U+2028>RunAs=root` as a
+ *   single value and only a genuine `LF` begins a new directive;
+ * - **cmd.exe** — `rem a<U+2028>echo INJECTED` runs as one line; it splits on `LF` alone,
+ *   not on `CR`, `U+0085`, `U+2028` or `U+2029`;
+ * - **XML/plist** — a parser keeps `U+0085`/`U+2028`/`U+2029` as character data.
+ *
+ * So `\r`, NUL and `DEL` are the ones worth catching, and characters that *are*
+ * significant to `cmd` (`%`, `&`, `|`, `^`) are handled by `batchEscape`, not here.
+ */
 export function assertNoControl(value: string, what: string): string {
   if (CONTROL.test(value))
     throw new Error(`${what} must not contain control characters or newlines`)

@@ -94,6 +94,33 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **One control-character rule is the right width for all three boot formats, and that
+  was measured rather than assumed.** A value carrying `\n` is how it escapes its field
+  in a systemd unit, a plist and a `.cmd` line — three different threats that
+  `assertNoControl` covers with one regex. Checked against real parsers: `systemd-analyze
+  verify` (systemd 261) reads `User=a<U+2028>RunAs=root` as *one* value and only a genuine
+  `LF` starts a new directive; real `cmd.exe` runs `rem a<U+2028>echo INJECTED` as one
+  line and splits on `LF` alone; Python's XML parser keeps `U+0085`/`U+2028`/`U+2029` as
+  character data. So a *wider* rule would reject legitimate values for no gain. The rule
+  does catch `\r`, NUL and `DEL` — the ones that matter — and `%`/`&`/`|`/`^` in a
+  `.cmd` are handled by the escaping (`batchEscape`), not by this guard.
+- **A guard is only as good as its coverage, and an exported builder must not rely on its
+  callers.** `systemdUserUnit`, `systemdSystemUnit`, `launchdPlist` and `xdgDesktopEntry`
+  all call `validate(spec)` themselves; `windowsRunPayload` did not, yet interpolates
+  `spec.marker` straight into the `rem` line of the generated `.cmd`. Every production
+  caller validated, so nothing was exposed — but that is an assumption invisible from
+  inside the function, and a hostile marker produces
+  `rem ok<CRLF>echo PWNED<CRLF>node …`. It validates its own spec now, pinned by a test
+  that fails when the guard is removed.
+- **The thin delegators are defence in depth, not the sole guard — verified by breaking
+  each one.** `assertArg`, `assertLabel` and `assertRegistryValueName` are one-liners
+  over `assertNoControl`, and neutering any of them fails no test today: the *escapers*
+  (`systemdExecWord`, `systemdText`, `desktopExec`, `windowsArg`) independently reject the
+  same input. Their unique contributions are the non-empty rules, and those are
+  unreachable from the real path (`assertUnitName` runs first and cannot return empty).
+  Left as-is deliberately: they are a second line, and their delegated rule is covered by
+  the `assertNoControl` test.
+
 - **A copy of another project's constant needs a parity test, because the second copy is
   what goes stale.** `config-file.ts` mirrors the panel's `SERVER_MERGE_KEYS` /
   `CONTROL_MERGE_KEYS` — and a missing member is not cosmetic: a nested group the list

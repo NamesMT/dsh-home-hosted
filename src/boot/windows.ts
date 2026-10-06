@@ -85,6 +85,13 @@ export interface WindowsRunPayload {
 }
 
 export function windowsRunPayload(ctx: BootProviderContext, spec: BootSpec): WindowsRunPayload {
+  // Every other artifact builder validates its own spec (`systemdUserUnit`,
+  // `systemdSystemUnit`, `launchdPlist`, `xdgDesktopEntry`), and this one interpolates
+  // `spec.marker` straight into a `rem` line of the generated `.cmd`. Its callers do
+  // validate, so no production path is exposed — but an exported builder that is safe
+  // only because of its callers is the assumption the next reader would not see, and
+  // the guard is a cheap one to keep in step with the others.
+  validate(spec)
   const direct = windowsCommandLine(spec.command, spec.args)
   if (direct.length <= RUN_VALUE_LIMIT)
     return { data: direct, wrapperPath: null, wrapperContent: null }

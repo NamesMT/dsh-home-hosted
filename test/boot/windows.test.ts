@@ -101,6 +101,34 @@ describe('windows run key', () => {
     expect((await provider.status(winSpec())).state).toBe('enabled-running')
   })
 
+  /**
+   * The `.cmd` wrapper interpolates `spec.marker` straight into a `rem` line, and this
+   * builder used to be the **only** artifact builder that did not validate its own spec
+   * (`systemdUserUnit`, `systemdSystemUnit`, `launchdPlist` and `xdgDesktopEntry` all
+   * do). Its callers validated, so no production path was exposed — but that is an
+   * assumption a reader of this function cannot see, and the consequence is a `.cmd`
+   * line a newline can escape:
+   *
+   *   `rem ok<CRLF>echo PWNED<CRLF>node ...`
+   *
+   * The other three platforms were checked with a real parser and split on a genuine
+   * `LF` only (real `systemd-analyze verify`, real `cmd.exe`, Python's XML parser all
+   * treat U+0085/U+2028/U+2029 as ordinary characters), so a single control-character
+   * rule is the right width — it just has to be *applied* here too.
+   */
+  it('refuses to build a wrapper from a spec it never validated', () => {
+    const ctx = ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } })
+    // Long enough to force the wrapper, with a marker a newline would escape.
+    const hostile = winSpec({
+      marker: 'ok\r\necho PWNED',
+      args: ['C:\\home-hosted\\dist\\cli.js', 'up', `C:\\Users\\tester\\${'x'.repeat(260)}`],
+    })
+    expect(() => windowsRunPayload(ctx, hostile)).toThrow(/control characters/)
+    // And the same builder still accepts what it always did.
+    const fine = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', `C:\\Users\\tester\\${'x'.repeat(260)}`] })
+    expect(windowsRunPayload(ctx, fine).wrapperContent).toContain('@echo off')
+  })
+
   it('writes a .cmd wrapper when the command line exceeds the Run value limit', async () => {
     const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', `C:\\Users\\tester\\${'x'.repeat(260)}`] })
     const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)

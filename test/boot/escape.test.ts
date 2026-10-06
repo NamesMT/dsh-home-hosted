@@ -148,6 +148,29 @@ describe('validation', () => {
     expect(assertNoControl('plain', 'value')).toBe('plain')
   })
 
+  /**
+   * The rule's *width*, pinned. A wider rule would look safer and would refuse
+   * legitimate values for no gain, so the boundary is asserted rather than left to the
+   * next reader's instinct. Each rejection below was checked against a real parser:
+   * `systemd-analyze verify` 261, real `cmd.exe`, and Python's XML parser all treat
+   * `U+0085`/`U+2028`/`U+2029` as ordinary characters and split on a genuine `LF` only.
+   */
+  it('catches the separators that matter and allows the ones that do not', () => {
+    // Caught: every C0 control plus DEL, which is what actually breaks a field.
+    for (const ch of ['\u0000', '\n', '\r', '\t', '\u000B', '\u000C', '\u001B', '\u007F'])
+      expect(() => assertNoControl(`a${ch}b`, 'value'), `${JSON.stringify(ch)} should be refused`).toThrow(/control characters/)
+
+    // Allowed: separators a parser does *not* split on. Refusing these would reject
+    // legitimate labels and paths for nothing.
+    for (const ch of ['\u0085', '\u2028', '\u2029', '\u200B', '\uFEFF'])
+      expect(assertNoControl(`a${ch}b`, 'value'), `${JSON.stringify(ch)} should be allowed`).toBe(`a${ch}b`)
+
+    // And the characters that *are* significant to `cmd.exe` are not this guard's job:
+    // they are escaped, not refused, so a legitimate `100%` or `a&b` survives.
+    for (const ch of ['%', '&', '|', '^', '"', "'", '\\'])
+      expect(assertNoControl(`a${ch}b`, 'value')).toBe(`a${ch}b`)
+  })
+
   it('rejects an empty marker and a marker that would break an XML comment', () => {
     expect(() => assertMarker('   ')).toThrow(/empty/)
     expect(assertMarker('managed-by:dsh')).toBe('managed-by:dsh')
