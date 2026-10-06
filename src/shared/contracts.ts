@@ -218,10 +218,19 @@ export interface RpcRequest {
 // Server entries
 // ---------------------------------------------------------------------------
 
-export type OnPortConflict = 'block' | 'warn' | 'follow' | 'reclaim' | 'kill'
+/**
+ * Every policy home-hosted's config schema accepts; anything else stops it booting.
+ *
+ * The list is the source and the type is derived from it — measured, because this pair had **no**
+ * compiler guard in either direction: adding a union member alone produced 0 errors and removing
+ * a policy from this list alone also produced 0. The omission is not cosmetic, since
+ * `isOnPortConflict` validates against the list and the refusal at `servers.update` builds its
+ * "use one of …" message from it, so a policy left out would be refused by name while the config
+ * schema still accepts it.
+ */
+export const ON_PORT_CONFLICT_POLICIES = ['block', 'warn', 'follow', 'reclaim', 'kill'] as const
 
-/** Every policy home-hosted's config schema accepts; anything else stops it booting. */
-export const ON_PORT_CONFLICT_POLICIES: readonly OnPortConflict[] = ['block', 'warn', 'follow', 'reclaim', 'kill']
+export type OnPortConflict = (typeof ON_PORT_CONFLICT_POLICIES)[number]
 
 export function isOnPortConflict(value: unknown): value is OnPortConflict {
   return typeof value === 'string' && (ON_PORT_CONFLICT_POLICIES as readonly string[]).includes(value)
@@ -261,9 +270,6 @@ export interface EntryIntent {
   onPortConflict: OnPortConflict
   stopKillPortHolders: boolean
 }
-
-/** Keys an intent owns: a patch touches these and nothing else. */
-export const OWNED_ENTRY_KEYS = ['autostart', 'onPortConflict', 'persistent', 'stop'] as const
 
 export interface ServerEntryView {
   id: string
@@ -517,17 +523,18 @@ export interface BootStatus {
 // Plugin settings (UI-managed, persisted outside the Cordis config)
 // ---------------------------------------------------------------------------
 
-export type AgentToolName =
-  | 'status'
-  | 'workspaces_list'
-  | 'servers_list'
-  | 'servers_lifecycle'
-  | 'servers_edit'
-  | 'autostart_manage'
-  | 'ui_manage'
-  | 'panel_logs'
-
-export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
+/**
+ * The list is the source and the type is derived from it, for the reason `RPC_ENDPOINT_NAMES` and
+ * `BOOT_MECHANISM_NAMES` record: `readonly AgentToolName[]` forces every *entry* to name a real
+ * tool without requiring that every tool is present.
+ *
+ * Measured, because the union looked safe: adding a member to the union alone produced **three**
+ * `Record<AgentToolName, …>` errors (the tool specs, and two label maps), so the union is
+ * exhaustiveness-checked — but **removing** a name from this list produced **zero** errors. The
+ * omission is not cosmetic: `knownTool` validates the settings allow-list against it, so a tool
+ * left out of the list would be refused when a person selected it, and the picker counts it away.
+ */
+export const AGENT_TOOL_NAMES = [
   'status',
   'workspaces_list',
   'servers_list',
@@ -536,7 +543,9 @@ export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   'autostart_manage',
   'ui_manage',
   'panel_logs',
-]
+] as const
+
+export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number]
 
 /**
  * Tools that change something. They ask for approval only when the calling

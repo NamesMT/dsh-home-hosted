@@ -170,12 +170,14 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   for `stats`/`status` and wrong for `--no-open`/`--no-yes` (distance 3, which passes a bound of
   3) — it names an **unrelated flag**. Short names share prefixes, so a ratio alone cannot work:
   the distance must also be small in **absolute** terms.
-- **A shared prefix contributes no information.** `servers.` is 8 free characters across eight
-  endpoints, so a full-name distance made `servers.zzz` look close to `servers.get`. A rule that
-  scores only the suffix fixes that but then matches on `.list` alone, suggesting `servers.list`
-  for `orkspaces.list`. Measured on the real corpus, the plain full-name distance scores
-  identically to both alternatives and needs no special case — **measure the candidates rather
-  than reasoning about which rule is better**.
+- **The absolute cap is what rejects a shared prefix, and it is sufficient.** `servers.zzz` scores
+  3 against `servers.get`; an absolute cap of 2 rejects it, and `servers.lst`→`servers.list` (1)
+  still resolves. The `servers.` prefix reads as "8 free characters" **only if the proportional
+  term is allowed to dominate** — which is exactly what the cap prevents. So do **not** reintroduce
+  suffix scoring to fix that case: it is already fixed, and the rule it adds breaks the other half
+  (`orkspaces.list`→`servers.list`, matching on `.list` alone). Measured on the real corpus, all
+  three candidate rules score identically, so the simplest wins — but the *reason* to drop suffix
+  scoring is that the cap covers the case, not that the two are equivalent.
 - **An input that is already valid has no typo.** One real endpoint suggests another at distance 2
   (`servers.start` / `servers.restart`), so the helper returns nothing when the given name is in
   the set. The caller may not need that, but the rule belongs where it is reusable.

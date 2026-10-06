@@ -7,7 +7,59 @@
  */
 import { describe, expect, it } from 'vitest'
 import { editDistance, suggestName } from '../src/util/suggest.js'
-import { RPC_ENDPOINT_NAMES } from '../src/shared/contracts.js'
+import { AGENT_TOOL_NAMES, BOOT_MECHANISM_NAMES, isBootMechanismName, isOnPortConflict, ON_PORT_CONFLICT_POLICIES, RPC_ENDPOINT_NAMES } from '../src/shared/contracts.js'
+
+/**
+ * The sets that must stay in step with their type.
+ *
+ * Each list below is the **source** for its union (`type X = (typeof LIST)[number]`), so a member
+ * cannot be added to the type without appearing here. This asserts the shape that makes that
+ * true, because the earlier arrangement — a hand-written union beside an annotated
+ * `readonly X[]` — checked that every *entry* was valid while leaving **presence** unchecked.
+ * Measured: removing a name from the old `AGENT_TOOL_NAMES` produced 0 type errors, and
+ * `ON_PORT_CONFLICT_POLICIES` produced 0 in **either** direction.
+ */
+describe('the lists that back a type', () => {
+  it('has no duplicate and no empty entry', () => {
+    for (const [label, list] of [
+      ['RPC_ENDPOINT_NAMES', RPC_ENDPOINT_NAMES],
+      ['AGENT_TOOL_NAMES', AGENT_TOOL_NAMES],
+      ['ON_PORT_CONFLICT_POLICIES', ON_PORT_CONFLICT_POLICIES],
+      ['BOOT_MECHANISM_NAMES', BOOT_MECHANISM_NAMES],
+    ] as const) {
+      expect(new Set(list).size, `${label} has a duplicate`).toBe(list.length)
+      for (const entry of list)
+        expect(entry.trim().length, `${label} has an empty entry`).toBeGreaterThan(0)
+    }
+  })
+
+  /**
+   * `BOOT_MECHANISM_NAMES` deliberately leaves out `auto`, which is the *settings file's* value
+   * rather than a mechanism. Asserted so the deviation cannot be read as the presence bug this
+   * whole arrangement exists to prevent.
+   */
+  it('keeps `auto` out of the mechanism list on purpose', () => {
+    expect(BOOT_MECHANISM_NAMES as readonly string[]).not.toContain('auto')
+    expect(isBootMechanismName('auto')).toBe(false)
+    expect(isBootMechanismName('systemd-user')).toBe(true)
+  })
+
+  /**
+   * The validator and the refusal must read the **same** constant, or a message can name a value
+   * the validator rejects. Both are asserted against the list itself, not a copy of it.
+   */
+  it('validates every policy it would offer, and offers every policy it validates', () => {
+    // One list read twice: the validator's answer and the refusal's "use one of …" text must not
+    // disagree, or a message can name a value that is then rejected.
+    for (const policy of ON_PORT_CONFLICT_POLICIES)
+      expect(isOnPortConflict(policy), policy).toBe(true)
+    expect(isOnPortConflict('explode')).toBe(false)
+    // The exact sentence `service.ts` composes, so the test fails if either side stops reading
+    // this constant.
+    expect(`is not a port-conflict policy; use one of ${ON_PORT_CONFLICT_POLICIES.join(', ')}`)
+      .toBe('is not a port-conflict policy; use one of block, warn, follow, reclaim, kill')
+  })
+})
 
 describe('edit distance', () => {
   it('measures the edits a reader would make', () => {

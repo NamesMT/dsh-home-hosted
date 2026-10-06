@@ -1,7 +1,10 @@
 /**
- * What this plugin decides about a server entry, and how that intent maps onto
- * the entry: only the keys in `OWNED_ENTRY_KEYS` are ever written, so a person's
- * own command, args, env, health block and everything else survive untouched.
+ * What this plugin decides about a server entry, and how that intent maps onto the entry.
+ *
+ * Only `autostart`, `onPortConflict`, `persistent` and `stop.killPortHolders` are ever written —
+ * named here because that is where the rule lives (`ownedPatch` below). An earlier version named
+ * an `OWNED_ENTRY_KEYS` constant instead, which nothing imported: the rule was already enforced
+ * by these literals, so the constant only looked like its source.
  */
 import type { EntryIntent, OnPortConflict, ServerEntry, ServerEntryPatch } from '../shared/contracts.js'
 import { isOnPortConflict } from '../shared/contracts.js'
