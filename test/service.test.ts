@@ -347,6 +347,38 @@ describe('home-hosted service', () => {
    * for a real reason — a missing entry, a stopped panel — must be reported, not
    * quietly turned into a stop the caller never asked for.
    */
+  /**
+   * The refusal shapes are matched by **position**, not by substring.
+   *
+   * `unknown command:` and `Unexpected argument '<token>'` are only refusals when they stand
+   * at the start of a line — the CLI's own messages. A bare substring match also fired on a
+   * *genuine* failure that merely quotes an entry id, and this is not cosmetic: a false
+   * positive here makes the caller run stop+start on an entry it never needed to touch, which
+   * is the non-atomic hazard the degradation exists to avoid. The id reaches this unvalidated
+   * (`String(input.id)`), so it is the caller's text.
+   */
+  it('does not read a genuine failure as an unknown command when it quotes the id', async () => {
+    for (const stderr of [
+      'home-hosted: no server "unknown command: x" exists',
+      'error: failed to start unknown command: handler',
+      'no server "Unexpected argument \'x\'" exists',
+    ]) {
+      const calls: string[][] = []
+      const { service, home } = await harness({
+        otherPanels: ['other-panel'],
+        execCli: async (args): Promise<RunResult> => {
+          calls.push(args)
+          return { command: 'hh', args, code: 1, signal: null, stdout: '', stderr, timedOut: false, error: null }
+        },
+      })
+      const other = path.join(path.dirname(home), 'other-panel')
+      await expect(service.call('servers.restart', { id: 'web', home: other }), stderr)
+        .rejects.toMatchObject({ code: 'CLI_FAILED' })
+      // Only the one restart: no stop was issued against an entry that was never the problem.
+      expect(calls.map(call => call[0]), stderr).toEqual(['restart'])
+    }
+  })
+
   it('never degrades a restart that failed for a real reason', async () => {
     const calls: string[][] = []
     const { service, home } = await harness({

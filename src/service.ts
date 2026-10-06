@@ -107,7 +107,21 @@ export class HomeHostedError extends Error {
  */
 function unknownCommand(result: RunResult): boolean {
   const text = `${result.stderr}\n${result.stdout}\n${result.error ?? ''}`
-  return /does not know this command|unknown command:|Unexpected argument/i.test(text)
+  // Anchored to the shapes the three real refusals actually print, rather than a bare
+  // substring. An unanchored `unknown command:` also matched a *genuine* failure that merely
+  // quotes an entry id — `no server "unknown command: x" exists` — and a false positive here
+  // is not cosmetic: the caller then runs stop+start on an entry it never needed to touch,
+  // which is exactly the non-atomic hazard the degradation exists to avoid.
+  //
+  // `unknown command:` is emitted at the start of a line by the curated dispatch, and the
+  // 404 refusal reads "… which does not know this command …".
+  // `unknown command:` is the whole line the curated dispatch writes, optionally behind the
+  // `error ` prefix `fail()` adds. `Unexpected argument '<token>'` likewise stands alone at
+  // the start of a line — never inside a quoted id, which is what the old substring match let
+  // through.
+  return /^(?:error )?unknown command:/im.test(text)
+    || /\bwhich does not know this command\b/i.test(text)
+    || /^(?:error )?Unexpected argument /im.test(text)
 }
 
 function foreignView(entry: ServerEntry, workspace: string): ServerEntryView {
