@@ -49,6 +49,16 @@ host-only one — it uses `node:` APIs and the client never touches it. Adding a
 
 A fact that a user needs goes in `docs/`. A fact that only prevents a future defect goes here.
 
+**What this structure deliberately does not have**, so nobody adds it back:
+
+- **No mandated reply template.** A fixed set of sections per answer puts empty headers on most
+  replies and contradicts the conciseness rule.
+- **No per-turn ledger.** A file rewritten every turn, in a repo independent sessions touch, rots;
+  `git log` already carries history, and `AGENTS.md` plus these files carry what outlives a session.
+- **No `(MANDATORY)`/`(HIGH PRIORITY)` framing.** The markers add no authority to the sentence.
+- **No eight-section document template.** A short Goal/Scope/Design/How-to-test shape is what these
+  files actually hold; the rest was empty headings.
+
 ## Writing to the panel: API first, then file
 
 The panel's API is preferred when it answers and this plugin's token proves itself. Otherwise the

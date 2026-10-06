@@ -131,6 +131,31 @@ nobody reads is worse than a long file.
   list of where something used to live is archaeology, not guidance.
 - Do not drop a caveat to save a line. Concise means no filler, not fewer facts.
 
+## How to work here
+
+- **Check who calls it before you change it** — grep the callers and the tests that name it. Two
+  guards here looked like the one that runs and were not: a launchd hint has two copies (one per
+  return) so breaking "it" hit the wrong site, and `assertArg`/`assertLabel` are thin delegators whose
+  real protection is the escaper behind them.
+- **Never overwrite or delete a large section you have not understood.** Read it, or say what you
+  could not determine and ask.
+- **Do not invent requirements.** Build what was asked; if something else looks needed, say so and
+  let it be decided.
+- **Report the risk, not only the change** — what could break, what you could not verify, and every
+  assumption. Worth checking by kind: correctness, security, operational, integration.
+- **Name the highest-leverage improvement you saw, even when you did not make it.** A fix that
+  removes a class of bug beats one that removes an instance — say which it is so the work can be
+  prioritised, and do not silently widen scope to do it.
+- **Verify before claiming, and say which direction you checked.** A passing test is not evidence it
+  pinned anything: a "text rules" test that copied the regexes it asserted survived the exact change
+  its comment forbade. [GOTCHAS](.agentDocs/GOTCHAS.md) has the habits that catch this; mark anything
+  unverified as unverified.
+- **If recall of this project is missing** (a fresh session, a compacted context, a different
+  machine), read this file, `.agentDocs/` and `git log` before acting, and ask 1–3 targeted questions
+  instead of reconstructing intent from guesswork.
+- **Leave the docs better than you found them**: delete what is stale, compact what has grown, and
+  never leave a pointer to content that does not exist.
+
 ## User-facing docs
 
 `README.md` and the topical `docs/*.md` are for a person, not an agent:
