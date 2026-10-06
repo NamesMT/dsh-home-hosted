@@ -169,10 +169,12 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
 - **Check what actually bounds the loop.** A constant's comment said it "grows only when a request
   needs more lines than it held" — it was a `const`, never assigned. The *loop* grew. Before
   changing a bound, name the thing that enforces it: the condition, or merely the allocation.
-- **Measure the unit the comment uses**, and measure the realistic input. `panel.console` reads a
-  5 MB-rotated console: 27 ms / ~15 MB for a single-line file, 1 ms for a typical 60k-line log.
-  The synthetic 40 MB case (170 ms / ~80 MB) is outside what the rotation allows, so no change was
-  warranted — a bound is only a defect if a reachable input reaches it.
+- **Measure the unit the comment uses**, and measure the realistic input. The panel rotates its
+  console at 5 MB (`LOG_ROTATE_BYTES` in home-hosted's `daemon-log.ts`, not this repo), so a
+  `panel.console` read is bounded to about that: 27 ms / ~15 MB held for a single-line file, 1 ms
+  for a typical 60k-line log. A synthetic 40 MB case (170 ms / ~80 MB) is outside what the
+  rotation allows, so no change was warranted — **a bound is only a defect if a reachable input
+  reaches it**.
 - **A bounded read must not lose data.** 2000 of 2000 lines reachable incrementally, in order, no
   gaps; requesting one line at a time loses nothing. Prove the remainder is not dropped before
   accepting a limit.
