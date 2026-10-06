@@ -107,13 +107,14 @@ manager, or restart the harness you are running in to "check" something.
   `assertRegistryValueName(assertUnitName(unitName))`, where `assertUnitName` already
   refuses `''`, `' '`, `'.'`, `'-x'`). They are now asserted **directly**, at a call with no
   preceding check, and the reachability claim itself is asserted rather than described.
-- **The `.desktop` oracle was verified against the real parser, not trusted.** The
-  round-trip test reads a `.desktop` value through a hand-written `keyFileRead` that models
-  GLib's escapeset. Compiling a small `g_key_file_get_string` reader and comparing it
-  against that model on eleven values — including a lone trailing backslash and `a\"b` —
-  gave **zero mismatches**, so the round-trip assertions genuinely pin what they claim. A
-  hand-written model of someone else's parser is exactly the kind of thing that quietly
-  drifts from the parser it imitates.
+- **The `.desktop` oracle was spot-checked against the real parser once — nothing re-checks it.**
+  The round-trip test reads a `.desktop` value through a hand-written `keyFileRead` that models
+  GLib's escapeset. Compiling a small `g_key_file_get_string` reader and comparing it against that
+  model on eleven values — including a lone trailing backslash and `a\"b` — gave **zero
+  mismatches**. That was a one-off probe, not a committed test: it needs a C compiler and GLib, so
+  CI cannot run it. It is evidence about the model as of that check, not a verified equivalence —
+  a hand-written imitation of someone else's parser can still drift from it afterwards. Re-run the
+  comparison if the model or the escapeset changes.
 
 - **One control-character rule is the right width for all three boot formats, and that
   was measured rather than assumed.** A value carrying `\n` is how it escapes its field
