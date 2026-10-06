@@ -206,6 +206,33 @@ describe('launchd agent', () => {
     expect(plist).toContain(`<string>${path.join(logDir, `${LABEL}.err.log`)}</string>`)
   })
 
+  /**
+   * The third return of `status()`: the plist is ours, but launchd has no reachable domain
+   * for this uid — both `gui/<uid>` and `user/<uid>` refuse to print. It is a real state (a
+   * LaunchAgent loaded at the next login, seen from a process with no session), and it has
+   * its own `detail` branch, which **no test reached**: instrumenting the branch printed
+   * nothing across the whole boot suite, and removing only its log-path hint failed nothing.
+   *
+   * The hint is asserted here for the reason it exists: the plist is present, so launchd was
+   * told where to write, and a person reading this line needs those two paths.
+   */
+  it('names the log files when the plist is ours but no domain is reachable', async () => {
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true })
+    fs.writeFileSync(plistPath, launchdPlist(agentSpec))
+    // Every `launchctl print` fails, so `domainOf()` returns null.
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[0] === 'print')
+        return { code: 113, stderr: 'Could not find domain' }
+      return { code: 0 }
+    })
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    const status = await provider.status(agentSpec)
+    expect(status.state).toBe('enabled-running')
+    expect(status.detail).toMatch(/no reachable domain/)
+    expect(status.detail).toContain(path.join(logDir, `${LABEL}.out.log`))
+    expect(status.detail).toContain(path.join(logDir, `${LABEL}.err.log`))
+  })
+
   it('tolerates bootout exit 3 and removes the plist', async () => {
     fs.mkdirSync(path.dirname(plistPath), { recursive: true })
     fs.writeFileSync(plistPath, launchdPlist(agentSpec))

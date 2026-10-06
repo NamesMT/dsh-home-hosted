@@ -402,19 +402,91 @@ describe('the text rules that read powershell stdout', () => {
   const absentStdout = ''
   const absentStderr = 'Get-Command : The term \'Register-ScheduledTask\' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.\r\nAt line:1 char:1\r\n+ Get-Command Register-ScheduledTask\r\n'
 
-  it('finds the cmdlet in the real table and not in the real error', () => {
-    expect(/Register-ScheduledTask/.test(presentStdout)).toBe(true)
-    expect(/Register-ScheduledTask/.test(absentStdout)).toBe(false)
-    // And the trap, asserted so nobody "improves" the rule by scanning both streams:
-    expect(/Register-ScheduledTask/.test(absentStderr)).toBe(true)
+  it('finds the cmdlet in the real table and not in the real error', async () => {
+    // Driven through the **provider**, so this exercises the rule that ships. Asserting the
+    // regexes here instead would pin nothing: changing the rule to scan `stdout` and
+    // `stderr` together — the plausible "improvement" this test exists to prevent — fails no
+    // assertion when the regexes are copied into the test, and does fail the one below.
+    const present = ctxFor({
+      home: tempHome(),
+      platform: 'win32',
+      run: fakeRun((command, args) => {
+        const script = args[2] ?? ''
+        if (command === 'powershell.exe' && script === 'Get-Command Register-ScheduledTask')
+          return { code: 0, stdout: presentStdout, stderr: '' }
+        if (command === 'powershell.exe' && script.includes('IsInRole'))
+          return { code: 0, stdout: 'True\r\n' }
+        if (command === 'schtasks.exe')
+          return { code: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' }
+        return { code: 0, stdout: '' }
+      }).run,
+      sudo: async () => true,
+    })
+    const taken: string[] = []
+    const presentRun = present.run
+    const presentProvider = createWindowsTaskProvider({ ...present, run: async (c, a = []) => { taken.push(`${c} ${a.join(' ')}`); return presentRun(c, a) } })
+    await presentProvider.install(winSpec())
+    // The cmdlet path ran: PowerShell was asked to register. (The fake does not make the
+    // task appear afterwards, so the install itself reports failure — the PATH is what
+    // this asserts, because that is what the rule decides.)
+    expect(taken.some(line => line.includes('New-ScheduledTaskAction'))).toBe(true)
+
+    // The trap: the SAME real error text, but on stderr, must not be read as "available".
+    // `taskRunner({ cmdlet: false })` covers this shape; this pins the real strings.
+    const absent = ctxFor({
+      home: tempHome(),
+      platform: 'win32',
+      run: fakeRun((command, args) => {
+        const script = args[2] ?? ''
+        if (command === 'powershell.exe' && script === 'Get-Command Register-ScheduledTask')
+          return { code: 1, stdout: absentStdout, stderr: absentStderr }
+        if (command === 'powershell.exe' && script.includes('IsInRole'))
+          return { code: 0, stdout: 'True\r\n' }
+        if (command === 'schtasks.exe' && args.includes('/Query'))
+          return { code: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' }
+        return { code: 0, stdout: '' }
+      }).run,
+      sudo: async () => true,
+    })
+    const seen: string[] = []
+    const realRun = absent.run
+    const absentProvider = createWindowsTaskProvider({ ...absent, run: async (c, a = []) => { seen.push(`${c} ${a.join(' ')}`); return realRun(c, a) } })
+    await absentProvider.install(winSpec())
+    // The XML fallback was chosen, i.e. the stderr text was NOT read as a present cmdlet.
+    // Scanning both streams would take the PowerShell path and never reach schtasks.
+    expect(seen.some(line => line.includes('New-ScheduledTaskAction')), 'PowerShell register script must not run').toBe(false)
   })
 
-  it('reads the real elevation answer, which arrives CRLF-terminated', () => {
-    // `True\r\n` is what powershell.exe prints; `trim()` plus the `i` flag handle it,
-    // and the rule is anchored so `Trueish` or `NotTrue` would not pass.
-    expect(/^true$/im.test('True\r\n'.trim())).toBe(true)
-    expect(/^true$/im.test('False\r\n'.trim())).toBe(false)
-    expect(/^true$/im.test('NotTrue\r\n'.trim())).toBe(false)
-    expect(/^true$/im.test('Trueish\r\n'.trim())).toBe(false)
+  it('reads the real elevation answer through the rule that ships', async () => {
+    // `True\r\n` is what powershell.exe prints. Driven through the provider rather than
+    // asserted as a copied regex: un-anchoring the real rule (`/true/i`) fails no test that
+    // only re-tests the regex, and does fail this one, because `NotTrue`/`Trueish` would
+    // then read as elevated and the install would run without privilege.
+    const isElevated = async (stdout: string): Promise<string> => {
+      const dir = tempHome()
+      const provider = createWindowsTaskProvider(ctxFor({
+        home: dir,
+        platform: 'win32',
+        run: fakeRun((command, args) => {
+          const script = args[2] ?? ''
+          if (command === 'powershell.exe' && script.includes('IsInRole'))
+            return { code: 0, stdout }
+          if (command === 'powershell.exe' && script === 'Get-Command Register-ScheduledTask')
+            return { code: 0, stdout: 'Function        Register-ScheduledTask\r\n' }
+          if (command === 'schtasks.exe' && args.includes('/Query'))
+            return { code: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' }
+          return { code: 0, stdout: '' }
+        }).run,
+        sudo: async () => false,
+      }))
+      return (await provider.install(winSpec())).detail
+    }
+    // The real answer: elevated, so the install proceeds past the privilege gate.
+    expect(await isElevated('True\r\n')).not.toMatch(/needs an elevated process/)
+    expect(await isElevated('False\r\n')).toMatch(/needs an elevated process/)
+    // The anchoring: neither of these is `True`, and reading either as elevated would
+    // register a task with no privilege.
+    expect(await isElevated('NotTrue\r\n')).toMatch(/needs an elevated process/)
+    expect(await isElevated('Trueish\r\n')).toMatch(/needs an elevated process/)
   })
 })

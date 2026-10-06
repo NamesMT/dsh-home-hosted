@@ -94,6 +94,24 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A test that re-states a rule pins nothing; it has to drive the code that ships.** I wrote
+  a "text rules" test that *copied* the two PowerShell regexes into the assertion. It passed,
+  and it was worthless: changing the real rule to scan `stdout` **and** `stderr` — the exact
+  "improvement" the test said it prevented — failed no assertion, because the copied regex was
+  unchanged. Same for un-anchoring `/^true$/im` to `/true/i`. Both are driven through
+  `createWindowsTaskProvider` now, so the plausible change fails the test that forbids it.
+  When a test would still pass after the rule under it is broken, it is documentation, not a
+  test.
+- **Instrument the branch, then break the guard you named — in that order.** A green tick
+  says the assertion held, not that the branch ran. I found a launchd `status()` return (the
+  `domain === null` path) that **no test reached**: a temporary `console.error` in it printed
+  nothing across the whole boot suite, and removing only its log-path hint failed nothing.
+  It has coverage now, and the probe confirms the branch fires.
+- **Grep the whole file for a second occurrence before editing one by hand.** My first attempt
+  to break the launchd hint removed the wrong copy (there are two, one per return), which
+  looked like "the test does not cover the hint" when it did. Confirm *which* site you changed
+  before drawing a conclusion from the result.
+
 - **Naming the artifact is not naming where its output went, and the two files are
   different.** A boot-run panel writes to a *different* place from the panel's own console
   (`<home>/.hh/.logs/home-hosted.log`, which `panel_logs` reads): `launchd` is told to write
