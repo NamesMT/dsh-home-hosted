@@ -27,12 +27,23 @@ these hold the reasoning and the traps.
 
 ## Commands
 
+First run: `pnpm install --frozen-lockfile` (Node ≥ 24, pnpm 12). Stack: TypeScript on Node, bundled
+by **esbuild** (`scripts/build*.mjs`) — not vite or tsdown; dsh's Cordis plugin API on the host;
+React 19 + happy-dom for the page and its tests; Vitest for the suite.
+
+`pnpm run <script>` for anything colliding with a pnpm built-in — a bare `pnpm up` runs pnpm's own
+update, not this project's.
+
 ```sh
 pnpm typecheck && pnpm test && pnpm build   # what CI runs (Linux)
 pnpm build:host | pnpm build:client         # one half at a time
 pnpm exec vitest run test/client -t <name>  # focused run
 gh workflow run release.yml -f version=0.4.0 # release; see Releasing
 ```
+
+`pnpm-workspace.yaml` pins `minimumReleaseAge: 0` (the pinned `home-hosted` is deliberately current)
+and `allowBuilds: esbuild` — esbuild's `postinstall` fetches its platform binary, which pnpm 12
+blocks by default, so a fresh checkout that ignores that file cannot build.
 
 Test the page against a throwaway profile (`dsh plugin --profile scratch add .`): **never** install a
 real boot entry, run a real service manager, or restart the harness you are running in to "check"
@@ -144,6 +155,10 @@ nobody reads is worse than a long file.
   or a platform rule**: [GOTCHAS](.agentDocs/GOTCHAS.md).
 
 ## Releasing
+
+**Commits are conventional** (`fix:`, `feat:`, `docs:`…), because `scripts/check-release-version.mjs`
+parses them: it refuses a patch while a `!` or `BREAKING CHANGE:` commit is pending and warns on a
+minor without one, so a message that does not parse is a release that cannot be dispatched.
 
 Versions are dispatched, never hand-edited:
 
