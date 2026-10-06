@@ -93,8 +93,11 @@ function readWhole(file: string): ReadResult {
   if (!fs.existsSync(file))
     return { lines: [], newlines: 0, unterminated: false, error: null }
   try {
-    const text = fs.readFileSync(file, 'utf8')
-    return { lines: splitLines(text), newlines: countNewlines(text), unterminated: text.length > 0 && !text.endsWith('\n'), error: null }
+    // Read the bytes, count the separators on them, and decode once — the same order the block
+    // reader uses, so the two agree on the count and neither can split a character.
+    const bytes = fs.readFileSync(file)
+    const text = bytes.toString('utf8')
+    return { lines: splitLines(text), newlines: countNewlines(bytes), unterminated: text.length > 0 && !text.endsWith('\n'), error: null }
   }
   catch (error) {
     return { lines: [], newlines: 0, unterminated: false, error: message(error) }
@@ -105,10 +108,18 @@ function readWhole(file: string): ReadResult {
 const TAIL_BLOCK_BYTES = 64 * 1024
 
 /** Line separators in one block, counted in place rather than by splitting it. */
-function countNewlines(text: string): number {
+/**
+ * `0x0A` bytes in a block.
+ *
+ * Counted on the bytes, not on decoded text: a newline cannot occur inside a multi-byte UTF-8
+ * sequence, so the answer is identical — and it lets the caller count a block **without**
+ * decoding it, which is what keeps a character split across two blocks from being decoded as
+ * two replacement characters.
+ */
+function countNewlines(block: Uint8Array): number {
   let count = 0
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10)
+  for (let index = 0; index < block.length; index += 1) {
+    if (block[index] === 10)
       count += 1
   }
   return count
@@ -151,17 +162,28 @@ function readTail(file: string, limit: number): ReadResult {
     // every pass: that made the loop quadratic in the number of blocks, and a capped
     // request on a 96 MB console spent most of its time in the condition.
     let newlines = 0
+    const blocks: Buffer[] = []
     // `limit + 1` separators, because a file's own trailing newline terminates no line.
     while (end > 0 && newlines < limit + 1) {
       const start = Math.max(0, end - TAIL_BLOCK_BYTES)
       const length = end - start
       const buffer = Buffer.alloc(length)
       fs.readSync(fd, buffer, 0, length, start)
-      const block = buffer.toString('utf8')
-      newlines += countNewlines(block)
-      text = block + text
+      // Counted on the **bytes**: `0x0A` cannot occur inside a multi-byte sequence, so this is
+      // the same number as counting the decoded text — and it avoids a decode per block.
+      newlines += countNewlines(buffer)
+      blocks.unshift(buffer)
       end = start
     }
+
+    // Decoded **once**, over the assembled bytes. Decoding each block on its own split any
+    // multi-byte character that straddled a boundary into two replacement characters — a
+    // non-ASCII log line became corrupt exactly at every 64 KiB mark. The comment above used to
+    // say a boundary "can land mid-line", which is true and was the only case considered;
+    // mid-character is the other one, and it is silent because `toString` substitutes U+FFFD
+    // rather than throwing. Concatenating costs nothing extra here: the loop already kept the
+    // whole window as a string.
+    text = Buffer.concat(blocks).toString('utf8')
 
     // A block boundary can land mid-line; the loop only exits once `limit + 1`
     // separators are present, so at least `limit` complete lines follow the

@@ -49,6 +49,32 @@ describe('the panel console', () => {
     expect(readPanelConsole(root, { lines: 1 }).lines).toEqual(['three'])
   })
 
+  /**
+   * The block reader used to decode **each 64 KiB block on its own**, so a multi-byte
+   * character straddling a boundary became two replacement characters — a non-ASCII log line
+   * corrupted at every block mark, silently, because `toString('utf8')` substitutes U+FFFD
+   * rather than throwing. The comment above the loop said a boundary "can land mid-line",
+   * which is true and was the only case considered; mid-character is the other one.
+   *
+   * The file below is valid UTF-8: the same bytes read whole decode clean, and only the tail
+   * reader used to corrupt them.
+   */
+  it('keeps a multi-byte character that straddles a block boundary', () => {
+    const root = home()
+    const block = 64 * 1024
+    // Byte 25 starts a three-byte character; the first read begins at `len - block`, which is
+    // placed one byte into it.
+    const text = `${'x'.repeat(25)}日${'z'.repeat(block - 2)}\n`
+    writeConsole(root, text)
+    expect(Buffer.from(fs.readFileSync(panelConsolePath(root))).toString('utf8')).not.toContain('\uFFFD')
+
+    const read = readPanelConsole(root, { lines: 1 })
+    expect(read.lines.join('\n')).not.toContain('\uFFFD')
+    expect(read.lines.join('\n')).toContain('日')
+    // And the whole-file path agrees, so the two readers do not disagree on the count.
+    expect(readPanelConsole(root, { lines: 0 }).lines.join('\n')).toContain('日')
+  })
+
   it('reads across a rotation, oldest first', () => {
     // One rotation is all the panel keeps (`rotateLog`), and the interesting part of a
     // crash is usually the end of the file that just rotated away.
