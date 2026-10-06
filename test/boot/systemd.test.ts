@@ -553,6 +553,35 @@ describe('systemd system', () => {
     expect(status.commands).toEqual([])
   })
 
+  /**
+   * The system scope states its own journal command — `journalctl -u <unit>`, without
+   * `--user`. Both forms were run against this machine's real `home-hosted.service`, which
+   * is why they are two strings and not one: a system unit's output is not in the user's
+   * journal.
+   */
+  it('names the system-scope journal command once the unit is installed', async () => {
+    const installed = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 0, stdout: 'enabled\n' }
+      return { code: 0, stdout: 'UnitFileState=enabled\nActiveState=active\nResult=success\nNRestarts=0\n' }
+    })
+    const status = await createSystemdSystemProvider(ctxFor({ home, run: installed.run, isRoot: true })).status(spec({ unitName }))
+    expect(status.state).toBe('enabled-running')
+    expect(status.detail).toContain(`journalctl -u ${unitName}.service`)
+    // Not the user form: these are different journals.
+    expect(status.detail).not.toContain('journalctl --user')
+
+    // And the absent case names nothing, on the same provider.
+    const absent = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 4 }
+      return { code: 0, stdout: '' }
+    })
+    const gone = await createSystemdSystemProvider(ctxFor({ home, run: absent.run, sudo: async () => false })).status(spec({ unitName }))
+    expect(gone.state).toBe('not-installed')
+    expect(gone.detail).not.toContain('journalctl')
+  })
+
   it('reports nothing to remove when no system unit is there and there is no privilege', async () => {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-enabled'))
