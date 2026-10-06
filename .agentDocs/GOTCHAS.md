@@ -217,6 +217,30 @@ behaviour changes, because a property nobody tests is a property nobody knows is
 signal reaching a child, a rename being atomic — drive the real thing and assert it. A stub
 cannot answer a question about the transport.
 
+## Cost paid on a path that does not use it
+
+- **A test seam that one call site ignores is a seam that does not hold.** `preflightLauncher`
+  spawns the real `home-hosted` CLI, which loads its whole graph (~500 ms) to print a version.
+  It bypassed the `execCli` seam every other CLI call goes through, so a test that stubbed the
+  CLI still paid for it — **once per `status()`**, because a fresh service per test always
+  misses the 60 s cache. Two files construct the service; both now inject the preflight.
+  Measured: `test/service.test.ts` 26.4 s → 4.1 s, `test/reconcile.test.ts` 6.7 s → 1.4 s,
+  the suite 31.6 s → 5.3 s. **The preflight itself stays** — it answers something only running
+  it can ("does the launcher the boot entry runs actually work?"), so it is injected, not
+  removed.
+- **The version a record already holds should not be looked up again.** The generated launcher
+  re-derived `versionOf(record.entry)` instead of using the version `writeLauncher` wrote
+  beside it, so a recorded pin whose entry is not a package layout fell through to the local
+  tier — a `.pnpm` scan of 130 entries. The tiers are lazy now, best-first.
+- **Measure in layers; my first two answers were wrong.** The harness was 4 ms, not the cost;
+  `status()` was 650 ms and `cli()` inside it, of which the preflight was 563 ms; the preflight
+  was ~500 ms of *CLI startup*, not the PATH scan I blamed first (a wide PATH measured 643 ms
+  against 47 ms narrow, which looked conclusive and was the wrong 550 ms). Timing probes at each
+  level, and a bare `node` startup plus the real CLI's `--version` as a reference, is what
+  separated them.
+- **Not a defect**: `test/launcher.test.ts` spends 1.9 s in one test that signals real processes
+  and asserts nothing is orphaned. That duration *is* what it verifies.
+
 ## Oracles
 
 - **A hand-written model of someone else's parser is evidence, not equivalence — and nothing
