@@ -3,13 +3,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { BootStatus, HomeHostedStatus, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
+import type { BootStatus, HomeHostedStatus, InstanceView, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
 import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { panelConsolePath } from '../src/home-hosted/panel-console.js'
 import { EXPECTED_RANGE } from '../src/home-hosted/resolve.js'
 import { readLauncherRecord } from '../src/home-hosted/launcher.js'
+import { canonicalPath } from '../src/home-hosted/instances.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
@@ -259,6 +260,33 @@ describe('the cli cache', () => {
       `a preference change must invalidate the cache; got the same record twice: ${JSON.stringify(after)}`,
     ).toBeGreaterThan(first!.writtenAt)
   })
+})
+
+/** The panel inventory's cache, whose window is likewise a promise about a count. */
+describe('the instances cache', () => {
+  it('serves the panel inventory from cache inside the window, and re-reads past it', async () => {
+    // The inventory is read by every status poll and by the prompt provider at every assembly,
+    // so "cached for a short while" is a promise about a **count of disk scans** — and a new
+    // panel root appearing must still be seen once the window passes, or a panel someone just
+    // started would never show up.
+    const { service, home } = await harness({ otherPanels: ['other-panel'] })
+    const other = path.join(path.dirname(home), 'other-panel')
+    const roots = (list: InstanceView[]): string[] => list.map(instance => instance.home).sort()
+    expect(roots(await service.instances()), 'the declared panel is listed to begin with').toContain(canonicalPath(other))
+
+    // It disappears from disk. Nothing tells the service, so only a re-scan can notice — which
+    // is what makes this a count of scans rather than of results.
+    fs.rmSync(other, { recursive: true, force: true })
+
+    // Inside the window: the cached list still names it.
+    expect(roots(await service.instances()), 'inside the window the cache is served').toContain(canonicalPath(other))
+
+    // Past the window: re-read, so the gone root is gone. Moving the clock rather than sleeping
+    // keeps the suite fast; `afterEach` restores real timers.
+    vi.setSystemTime(Date.now() + 10_001)
+    expect(roots(await service.instances()), 'past the window the disk is re-read').not.toContain(canonicalPath(other))
+  })
+
 })
 
 describe('the launcher preflight', () => {
