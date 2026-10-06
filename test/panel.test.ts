@@ -217,4 +217,70 @@ describe('token probes', () => {
     expect(await verifyToken(panel.url, 'wrong')).toBe(false)
     expect(await verifyToken('http://127.0.0.1:1', 'secret', 1000)).toBe(false)
   })
+
+  /**
+   * Every call attaches `authorization: Bearer <token>`, and the request passes no
+   * `redirect` option — so the runtime follows a 3xx **with credentials attached** unless
+   * it strips them itself. Node's fetch (undici) strips `authorization` on a cross-origin
+   * hop and keeps it same-origin. That is what stops a panel (or anything that can answer
+   * for one) from redirecting this plugin's token to a host the user never named, and it
+   * is a property of the runtime, not of anything here.
+   *
+   * Real loopback servers on two different ports, with the second recording what it
+   * received: a stub cannot answer this, because the behaviour under test *is* the
+   * transport's.
+   */
+  it('does not leak the panel token across a cross-origin redirect', async () => {
+    let hits = 0
+    let received: string | null | undefined
+    const sink = http.createServer((request, response) => {
+      hits += 1
+      received = request.headers.authorization ?? null
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"servers":[]}')
+    })
+    extra.push(sink)
+    await new Promise<void>(resolve => sink.listen(0, '127.0.0.1', () => resolve()))
+    const sinkPort = (sink.address() as AddressInfo).port
+
+    const redirector = http.createServer((_request, response) => {
+      response.writeHead(302, { location: `http://127.0.0.1:${sinkPort}/elsewhere` })
+      response.end()
+    })
+    extra.push(redirector)
+    await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', () => resolve()))
+    const redirectorPort = (redirector.address() as AddressInfo).port
+
+    const client = new PanelClient({ baseUrl: `http://127.0.0.1:${redirectorPort}`, token: 'secret-token' })
+    await client.listServers()
+
+    // Non-vacuous in both directions: the sink WAS reached (so the redirect was followed),
+    // and it saw no credential. Without `hits`, a runtime that never followed the redirect
+    // would also leave `received` null and this would pass while proving nothing.
+    expect(hits).toBe(1)
+    expect(received).toBe(null)
+  })
+
+  it('still sends the token on a same-origin redirect', async () => {
+    let received: string | null | undefined
+    const server = http.createServer((request, response) => {
+      if (request.url === '/api/servers') {
+        response.writeHead(302, { location: '/api/servers/moved' })
+        response.end()
+        return
+      }
+      received = request.headers.authorization ?? null
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"servers":[]}')
+    })
+    extra.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as AddressInfo).port
+
+    const client = new PanelClient({ baseUrl: `http://127.0.0.1:${port}`, token: 'secret-token' })
+    await client.listServers()
+
+    // Same origin: the plugin's own panel redirecting its own API path still authenticates.
+    expect(received).toBe('Bearer secret-token')
+  })
 })
