@@ -87,10 +87,13 @@ export interface WindowsRunPayload {
 export function windowsRunPayload(ctx: BootProviderContext, spec: BootSpec): WindowsRunPayload {
   // Every other artifact builder validates its own spec (`systemdUserUnit`,
   // `systemdSystemUnit`, `launchdPlist`, `xdgDesktopEntry`), and this one interpolates
-  // `spec.marker` straight into a `rem` line of the generated `.cmd`. Its callers do
-  // validate, so no production path is exposed — but an exported builder that is safe
-  // only because of its callers is the assumption the next reader would not see, and
-  // the guard is a cheap one to keep in step with the others.
+  // `spec.marker` into a `rem` line and `spec.unitName` into a path of the generated `.cmd`.
+  //
+  // The guard is load-bearing, not merely defensive: `install()` validates before calling, but
+  // **`uninstall()` does not** — it calls only `assertMarker`, then reaches here twice (once to
+  // inspect the owned wrapper, once to remove it). Without this, `unitName` would reach
+  // `path.join(..., `${spec.unitName}.cmd`)` unchecked, and a value like `../evil` would escape
+  // the directory. An earlier version of this comment claimed every caller validates; two do not.
   validate(spec)
   const direct = windowsCommandLine(spec.command, spec.args)
   if (direct.length <= RUN_VALUE_LIMIT)

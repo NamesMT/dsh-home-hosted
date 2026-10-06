@@ -201,6 +201,21 @@ describe('windows run key', () => {
     expect(again.changed).toBe(false)
     expect(again.detail).toMatch(/already gone/)
   })
+
+  /**
+   * `uninstall()` validates only `spec.marker` itself — it calls `assertMarker` and nothing else —
+   * so the command, its arguments and the label all reach the payload builder unchecked. The guard
+   * inside `windowsRunPayload` is therefore load-bearing on this path, not merely defensive.
+   *
+   * A relative command is the clean probe: `validate` refuses it and nothing earlier on this path
+   * does, so removing the builder's guard makes this fail.
+   */
+  it('refuses a spec field that only the payload builder checks', async () => {
+    const { provider } = makeProvider()
+    const result = await provider.uninstall(winSpec({ command: 'rel.exe' }))
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/absolute/)
+  })
 })
 
 describe('windows scheduled task', () => {
