@@ -164,6 +164,23 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A message that makes the reader work it out
+
+- **A refusal that denies a capability the caller merely mistyped is worse than one naming the
+  mistake.** `boot.install` cast `input.mechanism as BootMechanism`, so `systemd_user` reached
+  the ladder, found no provider, and came back **"no boot mechanism is available on linux"** —
+  measured against the real ladder as `ok: false` with three candidates available. Now refused
+  by name, listing what would be accepted and the omit case. The list is the shared
+  `BOOT_MECHANISM_NAMES`, so the suggestion cannot name a mechanism that does not exist.
+- **Prevent a mistake where you can, explain it where you cannot.** The tool parameter was a
+  free `string`; it is now `enum`-erated from that same constant, which stops a model from
+  naming a mechanism at all. `ON_PORT_CONFLICT_POLICIES` was already done this way in the same
+  file.
+- **Check the path is one a person or model actually hits.** The page's picker can only send
+  values from `bootMechanisms()`, so the improvement lands on the **tool and RPC** path — a
+  model typing a mechanism, not a machine-only surface. Worth measuring before adding, because
+  a hint on a script-facing path is noise.
+
 ## Control flow that branches on text
 
 - **A branch on a message is a branch on wording.** `stopNoteFor` checked
