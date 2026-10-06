@@ -45,6 +45,24 @@ describe('CLI version handling', () => {
     expect(compareVersions('0.6.1-rc.1', '0.6.1')).toBeLessThan(0)
     expect(compareVersions('0.5.0', '0.6.1')).toBeLessThan(0)
     expect(compareVersions('0.6.1', '0.6.1')).toBe(0)
+    // The version classes a plain string compare gets wrong, and which decide whether a
+    // capability is "supported" and which `dsh` a boot entry runs.
+    for (const [a, b, want] of [
+      ['1.0.0-rc.2', '1.0.0-rc.10', -1],   // numeric prerelease identifiers
+      ['1.0.0-alpha', '1.0.0-beta', -1],   // alphanumeric, lexicographic
+      ['1.0.0-alpha.1', '1.0.0-alpha', 1], // a prefix sorts first
+      ['1.0.0-1', '1.0.0-alpha', -1],      // numeric below alphanumeric
+      ['0.02.0', '0.2.0', 0],              // leading zeroes
+      ['0.9.0', '0.10.0', -1],             // numeric core, not lexical
+      ['1.0.0-rc.1', '1.0.0', -1],         // prerelease below its release
+      ['1.0.0', '1.0.0-rc.1', 1],
+    ] as const) {
+      expect(compareVersions(a, b), `compare(${a}, ${b})`).toBe(want)
+      // `-0` is `0` for ordering: compare numerically, not with `Object.is`.
+      expect(compareVersions(b, a) === 0, `compare(${b}, ${a})`).toBe(want === 0)
+      if (want !== 0)
+        expect(Math.sign(compareVersions(b, a)), `compare(${b}, ${a})`).toBe(-Math.sign(want))
+    }
   })
 
   it('accepts both bin manifest shapes', () => {

@@ -92,20 +92,36 @@ export function readLauncherRecord(stateDir: string): LauncherRecord | null {
  * are shared between the two scripts and this is the only one whose body is
  * byte-identical, so it is the only duplication that was real.
  */
+// Kept in step with `compareVersions` in `resolve.ts`: same algorithm, inlined because a
+// generated script must be self-contained. Prerelease identifiers compare numerically where
+// both are numeric, or `rc.2` would sort above `rc.10` and the launcher would run the older.
 const COMPARE_VERSIONS_SOURCE = String.raw`function compare(a, b) {
   const split = value => {
-    const [core, pre = null] = String(value).split('-', 2)
-    return { parts: core.split('.').map(part => Number.parseInt(part, 10) || 0), pre }
+    const [core, pre = ''] = String(value).split('-', 2)
+    return { parts: core.split('.').map(part => Number.parseInt(part, 10) || 0), pre: pre.length > 0 ? pre.split('.') : [] }
   }
   const left = split(a); const right = split(b)
   for (let i = 0; i < 3; i += 1) {
     const diff = (left.parts[i] ?? 0) - (right.parts[i] ?? 0)
     if (diff !== 0) return diff < 0 ? -1 : 1
   }
-  if (left.pre === right.pre) return 0
-  if (left.pre === null) return 1
-  if (right.pre === null) return -1
-  return left.pre < right.pre ? -1 : 1
+  if (left.pre.length === 0 || right.pre.length === 0) {
+    if (left.pre.length === right.pre.length) return 0
+    return left.pre.length === 0 ? 1 : -1
+  }
+  for (let i = 0; i < Math.max(left.pre.length, right.pre.length); i += 1) {
+    const one = left.pre[i]; const two = right.pre[i]
+    if (one === undefined) return -1
+    if (two === undefined) return 1
+    if (one === two) continue
+    const oneNum = /^\d+$/.test(one) ? Number.parseInt(one, 10) : null
+    const twoNum = /^\d+$/.test(two) ? Number.parseInt(two, 10) : null
+    if (oneNum !== null && twoNum !== null) return oneNum < twoNum ? -1 : 1
+    if (oneNum !== null) return -1
+    if (twoNum !== null) return 1
+    return one < two ? -1 : 1
+  }
+  return 0
 }`
 
 /** The generated script's source; exported so a test can inspect it. */

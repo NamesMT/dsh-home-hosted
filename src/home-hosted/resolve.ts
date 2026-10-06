@@ -81,11 +81,21 @@ export function parseVersion(output: string | null): string | null {
   return match === null ? null : `${match[1]}.${match[2]}.${match[3]}${match[4] === undefined ? '' : `-${match[4]}`}`
 }
 
-/** Numeric comparison; a prerelease sorts below its own release. */
+/**
+ * Numeric comparison, semver-compatible; a prerelease sorts below its own release.
+ *
+ * Prerelease identifiers are compared **piece by piece, numerically where both are numeric**,
+ * because a plain string compare puts `rc.2` *above* `rc.10` — the opposite of semver, and
+ * this ordering decides which `dsh` a boot entry runs. The same algorithm is inlined into
+ * both generated launchers as `COMPARE_VERSIONS_SOURCE`; keep the two in step.
+ */
 export function compareVersions(a: string, b: string): number {
-  const split = (value: string): { parts: number[], pre: string | null } => {
-    const [core, pre = null] = value.split('-', 2)
-    return { parts: (core ?? '').split('.').map(part => Number.parseInt(part, 10) || 0), pre }
+  const split = (value: string): { parts: number[], pre: string[] } => {
+    const [core, pre = ''] = value.split('-', 2)
+    return {
+      parts: (core ?? '').split('.').map(part => Number.parseInt(part, 10) || 0),
+      pre: pre.length > 0 ? pre.split('.') : [],
+    }
   }
   const left = split(a)
   const right = split(b)
@@ -94,13 +104,34 @@ export function compareVersions(a: string, b: string): number {
     if (diff !== 0)
       return diff < 0 ? -1 : 1
   }
-  if (left.pre === right.pre)
-    return 0
-  if (left.pre === null)
-    return 1
-  if (right.pre === null)
-    return -1
-  return left.pre < right.pre ? -1 : 1
+  // No prerelease outranks any prerelease: `1.0.0` > `1.0.0-rc.1`.
+  if (left.pre.length === 0 || right.pre.length === 0) {
+    if (left.pre.length === right.pre.length)
+      return 0
+    return left.pre.length === 0 ? 1 : -1
+  }
+  for (let index = 0; index < Math.max(left.pre.length, right.pre.length); index += 1) {
+    const one = left.pre[index]
+    const two = right.pre[index]
+    // A shorter prerelease list sorts first when it is a prefix of the other.
+    if (one === undefined)
+      return -1
+    if (two === undefined)
+      return 1
+    if (one === two)
+      continue
+    const oneNum = /^\d+$/.test(one) ? Number.parseInt(one, 10) : null
+    const twoNum = /^\d+$/.test(two) ? Number.parseInt(two, 10) : null
+    if (oneNum !== null && twoNum !== null)
+      return oneNum < twoNum ? -1 : 1
+    // Numeric identifiers always sort below alphanumeric ones.
+    if (oneNum !== null)
+      return -1
+    if (twoNum !== null)
+      return 1
+    return one < two ? -1 : 1
+  }
+  return 0
 }
 
 function detailFor(source: CliSource, version: string | null, supported: boolean, prefer: CliPreference, unusableOverride: string | null = null): string {

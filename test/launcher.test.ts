@@ -191,9 +191,15 @@ describe('boot launcher', () => {
     const launcher = grab(buildLauncherSource(options as never))
     const dshLauncher = grab(buildDshLauncherSource({ ...options, entryExtension: '.cjs' } as never))
     expect(launcher).toBe(dshLauncher)
-    // The real algorithm, not an empty fragment: a prerelease sorts below its release.
-    expect(launcher).toContain('left.pre === null')
-    expect(launcher).toContain("String(value).split('-', 2)")
+    // The real algorithm, not an empty fragment — asserted by **running** it rather than by
+    // matching its text, so the implementation can change without the test going stale.
+    expect(launcher).toContain('function compare(a, b)')
+    const compare = new Function(`${launcher}; return compare`)() as (a: string, b: string) => number
+    expect(compare('0.4.1-rc.1', '0.4.1')).toBeLessThan(0)
+    expect(compare('0.4.1', '0.4.1-rc.1')).toBeGreaterThan(0)
+    expect(compare('0.9.0', '0.10.0')).toBeLessThan(0)
+    // Numeric prerelease identifiers, the case a plain string compare gets backwards.
+    expect(compare('1.0.0-rc.2', '1.0.0-rc.10')).toBeLessThan(0)
     // Interpolating a fragment must not introduce an import into a self-contained script.
     expect(buildLauncherSource(options as never)).not.toMatch(/from '\.\.?\//)
   })
