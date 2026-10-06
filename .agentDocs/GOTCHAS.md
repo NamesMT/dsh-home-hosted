@@ -46,7 +46,7 @@ if the code broke. Every trap below is a case where it did not.
 - **A test that reads a path relative to the process cwd is a portability trap**, not a signal: it
   passes at the repo root and fails anywhere else. Resolve from `import.meta.url`
   (`test/helpers/panel-schema.ts` is the shared reader for the panel's own `serverSchema`). Never
-  hard-code one machine's absolute path — an earlier guard named `/home/mt/...` and so ran nowhere
+  hard-code one machine's absolute path — an earlier guard hard-coded one machine's path and so ran nowhere
   else.
 - **A component can be driven, not only reasoned about.** `happy-dom` is a devDependency and a
   `// @vitest-environment happy-dom` comment on one file is the whole setup; with `react-dom/client`
