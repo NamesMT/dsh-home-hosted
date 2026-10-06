@@ -27,13 +27,6 @@ these hold the reasoning and the traps.
 
 ## Commands
 
-First run: `pnpm install --frozen-lockfile` (Node ≥ 24, pnpm 12). Stack: TypeScript on Node, bundled
-by **esbuild** (`scripts/build*.mjs`) — not vite or tsdown; dsh's Cordis plugin API on the host;
-React 19 + happy-dom for the page and its tests; Vitest for the suite.
-
-`pnpm run <script>` for anything colliding with a pnpm built-in — a bare `pnpm up` runs pnpm's own
-update, not this project's.
-
 ```sh
 pnpm typecheck && pnpm test && pnpm build   # what CI runs (Linux)
 pnpm build:host | pnpm build:client         # one half at a time
@@ -41,9 +34,9 @@ pnpm exec vitest run test/client -t <name>  # focused run
 gh workflow run release.yml -f version=0.4.0 # release; see Releasing
 ```
 
-`pnpm-workspace.yaml` pins `minimumReleaseAge: 0` (the pinned `home-hosted` is deliberately current)
-and `allowBuilds: esbuild` — esbuild's `postinstall` fetches its platform binary, which pnpm 12
-blocks by default, so a fresh checkout that ignores that file cannot build.
+`pnpm-workspace.yaml` is load-bearing, so do not tidy it away: dropping `allowBuilds: esbuild` makes
+`pnpm install` fail outright (measured — pnpm 12 blocks esbuild's `postinstall`, which fetches its
+platform binary), and `minimumReleaseAge: 0` is deliberate, not a leftover.
 
 Test the page against a throwaway profile (`dsh plugin --profile scratch add .`): **never** install a
 real boot entry, run a real service manager, or restart the harness you are running in to "check"
@@ -139,13 +132,15 @@ nobody reads is worse than a long file.
   real protection is the escaper behind them.
 - **Never overwrite or delete a large section you have not understood.** Read it, or say what you
   could not determine and ask.
-- **Do not invent requirements.** Build what was asked; if something else looks needed, say so and
-  let it be decided.
 - **Report the risk, not only the change** — what could break, what you could not verify, and every
   assumption. Worth checking by kind: correctness, security, operational, integration.
-- **Name the highest-leverage improvement you saw, even when you did not make it.** A fix that
-  removes a class of bug beats one that removes an instance — say which it is so the work can be
-  prioritised, and do not silently widen scope to do it.
+- **Fix the root cause, not the instance.** When the same bug keeps reappearing under different
+  names — a copied helper, a rule stated twice, a guard bypassed by a second code path — fix the
+  class: one shared implementation, one formatter, one guard. That is the work, not a follow-up to
+  ask for. Say what you changed and what it now prevents, and keep it inside the task's scope rather
+  than refactoring the world. Two here were exactly that: eight private `isRecord` copies (one of
+  which accepted an array) became one predicate, and two hand-written launchd log-path sites became
+  one `launchdLogPaths` shared with the plist builder.
 - **Verify before claiming, and say which direction you checked.** A passing test is not evidence it
   pinned anything: a "text rules" test that copied the regexes it asserted survived the exact change
   its comment forbade. [GOTCHAS](.agentDocs/GOTCHAS.md) has the habits that catch this; mark anything
