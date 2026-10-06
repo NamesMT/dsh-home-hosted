@@ -94,6 +94,27 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A guard test's input must fail for the reason the test claims.** Each platform
+  `validate(spec)` runs its checks in order, so an input that violates an *earlier* rule
+  tells you nothing about the later one — the assertion looks like coverage and is
+  decoration. Audited every guard here by breaking its rule in isolation and seeing which
+  assertion failed, and by counting the **runtime** characters of any test value (`'\n'` is
+  one character, `'\\n'` is two — a "newline is refused" test that passes backslash-n
+  proves nothing about newlines). Findings: two rules were genuinely uncovered —
+  `assertLabel`'s and `assertRegistryValueName`'s `!== ''` checks — and both are
+  **unreachable through a real `validate(spec)`** (`spec.label` is the constant
+  `'home-hosted control panel'`, and the registry name is
+  `assertRegistryValueName(assertUnitName(unitName))`, where `assertUnitName` already
+  refuses `''`, `' '`, `'.'`, `'-x'`). They are now asserted **directly**, at a call with no
+  preceding check, and the reachability claim itself is asserted rather than described.
+- **The `.desktop` oracle was verified against the real parser, not trusted.** The
+  round-trip test reads a `.desktop` value through a hand-written `keyFileRead` that models
+  GLib's escapeset. Compiling a small `g_key_file_get_string` reader and comparing it
+  against that model on eleven values — including a lone trailing backslash and `a\"b` —
+  gave **zero mismatches**, so the round-trip assertions genuinely pin what they claim. A
+  hand-written model of someone else's parser is exactly the kind of thing that quietly
+  drifts from the parser it imitates.
+
 - **One control-character rule is the right width for all three boot formats, and that
   was measured rather than assumed.** A value carrying `\n` is how it escapes its field
   in a systemd unit, a plist and a `.cmd` line — three different threats that

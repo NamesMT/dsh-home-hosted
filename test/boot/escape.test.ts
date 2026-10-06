@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   assertAbsolute,
   assertEnvKey,
+  assertLabel,
   assertMarker,
   assertNoControl,
+  assertRegistryValueName,
   assertUnitName,
   assertXmlCommentSafe,
   systemdPath,
@@ -169,6 +171,34 @@ describe('validation', () => {
     // they are escaped, not refused, so a legitimate `100%` or `a&b` survives.
     for (const ch of ['%', '&', '|', '^', '"', "'", '\\'])
       expect(assertNoControl(`a${ch}b`, 'value')).toBe(`a${ch}b`)
+  })
+
+  /**
+   * The two guards whose *unique* rule is the empty check, asserted at their own
+   * boundary because the platform path cannot reach it.
+   *
+   * `assertLabel` and `assertRegistryValueName` each add `!== ''` on top of
+   * `assertNoControl`, and neither rule is reachable through a real `validate(spec)`:
+   * `spec.label` is the constant `'home-hosted control panel'`, and the registry name is
+   * `assertRegistryValueName(assertUnitName(unitName))` — and `assertUnitName` already
+   * refuses `''`, `' '`, `'.'`, `'-x'` and anything with a space. Breaking either rule
+   * therefore fails no test, which is why they are pinned here **directly**: the call has
+   * no preceding check, so the assertion cannot be satisfied by an earlier guard. This is
+   * not decoration — it is the only place the rule is exercised at all.
+   */
+  it('refuses an empty label and an empty registry value name', () => {
+    expect(() => assertLabel('   ')).toThrow(/empty/)
+    expect(() => assertLabel('a\nb')).toThrow(/control characters/)
+    expect(assertLabel('home-hosted control panel')).toBe('home-hosted control panel')
+
+    expect(() => assertRegistryValueName('   ')).toThrow(/empty/)
+    expect(() => assertRegistryValueName('a\nb')).toThrow(/control characters/)
+    expect(assertRegistryValueName('home-hosted')).toBe('home-hosted')
+
+    // And the reachability claim above, asserted rather than described: the unit-name
+    // guard refuses every input that would make the empty check fire downstream.
+    for (const unusable of ['', ' ', '\t', '.', '-x', 'a b'])
+      expect(() => assertUnitName(unusable), `${JSON.stringify(unusable)} should be refused by assertUnitName`).toThrow()
   })
 
   it('rejects an empty marker and a marker that would break an XML comment', () => {
