@@ -12,7 +12,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import type { BootInstallResult, BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
-import { FOREIGN_MECHANISMS, isOnPortConflict, isRecord, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import { BOOT_MECHANISM_NAMES, FOREIGN_MECHANISMS, isBootMechanismName, isOnPortConflict, isRecord, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
@@ -1801,6 +1801,28 @@ export class HomeHostedService extends Service {
     return foreign ? defaultWorkspace(home) : this.managedWorkspace()
   }
 
+  /**
+   * A mechanism a caller named, or `undefined` for "let the host choose".
+   *
+   * The cast this replaced accepted any string, so a mistyped `systemd_user` reached the
+   * ladder, found no provider and came back as **"no boot mechanism is available on linux"** —
+   * false, since mechanisms are available, and silent about the actual mistake. Naming what
+   * would be accepted is the fix; the list comes from the shared constant, so this cannot
+   * suggest a mechanism that does not exist.
+   */
+  private mechanismArg(requested: unknown): BootMechanism | undefined {
+    if (requested === undefined || requested === null || requested === '')
+      return undefined
+    if (!isBootMechanismName(requested)) {
+      const known = BOOT_MECHANISM_NAMES.join(', ')
+      throw new HomeHostedError(
+        `${JSON.stringify(requested)} is not a boot mechanism; one of ${known} — omit it to let the host choose`,
+        'INVALID_MECHANISM',
+      )
+    }
+    return requested
+  }
+
   async call(endpoint: RpcEndpoint, payload: unknown): Promise<unknown> {
     const input = (payload ?? {}) as Record<string, unknown>
     // A target names a panel; an endpoint with no way to reach another one must
@@ -1978,10 +2000,10 @@ export class HomeHostedService extends Service {
       }
 
       case 'boot.install':
-        return await this.installBoot(input.mechanism as BootMechanism | undefined)
+        return await this.installBoot(this.mechanismArg(input.mechanism))
 
       case 'boot.uninstall':
-        return await this.uninstallBoot(input.mechanism as BootMechanism | undefined)
+        return await this.uninstallBoot(this.mechanismArg(input.mechanism))
 
       case 'boot.verify':
         return await this.bootStatus()

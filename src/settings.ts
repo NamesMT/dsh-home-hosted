@@ -6,7 +6,7 @@
  */
 import { AGENT_TOOL_NAMES, DEFAULT_SETTINGS, isOnPortConflict } from './shared/contracts.js'
 import type { AgentToolName, EntryIntent, PluginSettings, SettingsPatch } from './shared/contracts.js'
-import { isRecord, SETTINGS_VERSION } from './shared/contracts.js'
+import { isBootMechanismName, isRecord, SETTINGS_VERSION } from './shared/contracts.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
 import { defaultIntent } from './home-hosted/entries.js'
 
@@ -56,10 +56,9 @@ function isLegacyDefaultAllowlist(names: readonly string[]): boolean {
  */
 const PRE_MERGE_SETTINGS_VERSION = 2
 
-const BOOT_MECHANISMS: readonly string[] = ['auto', 'systemd-user', 'systemd-system', 'launchd-agent', 'launchd-daemon', 'xdg-autostart', 'windows-run', 'windows-task', 'container', 'unsupported']
-
+/** `auto` is this file's own value; the mechanisms themselves come from the shared list. */
 function isBootMechanism(value: unknown): value is PluginSettings['autostart']['mechanism'] {
-  return typeof value === 'string' && BOOT_MECHANISMS.includes(value)
+  return value === 'auto' || isBootMechanismName(value)
 }
 
 /**

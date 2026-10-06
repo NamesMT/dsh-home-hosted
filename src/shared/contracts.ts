@@ -452,6 +452,30 @@ export type BootMechanism =
   | 'container'
   | 'unsupported'
 
+/**
+ * Every mechanism the union above names, as a value.
+ *
+ * One list, because two consumers need it: the settings validator, and the refusal a caller
+ * gets for a name that is not one — naming what *would* be accepted beats reporting that
+ * nothing is available, which is what a mistyped `systemd_user` used to produce.
+ */
+export const BOOT_MECHANISM_NAMES: readonly BootMechanism[] = [
+  'systemd-user',
+  'systemd-system',
+  'xdg-autostart',
+  'launchd-agent',
+  'launchd-daemon',
+  'windows-run',
+  'windows-task',
+  'container',
+  'unsupported',
+]
+
+/** Whether an unknown value names a boot mechanism; the settings file's `auto` is not one. */
+export function isBootMechanismName(value: unknown): value is BootMechanism {
+  return typeof value === 'string' && (BOOT_MECHANISM_NAMES as readonly string[]).includes(value)
+}
+
 export type BootState =
   | 'not-installed'
   | 'installed-disabled'

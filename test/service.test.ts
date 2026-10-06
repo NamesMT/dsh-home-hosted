@@ -644,6 +644,32 @@ describe('home-hosted service', () => {
     expect(configFile(home).endsWith('servers.config.json')).toBe(true)
   })
 
+  /**
+   * A mechanism name that is not one is refused by name, not passed through.
+   *
+   * The dispatch cast `input.mechanism as BootMechanism`, so a mistyped `systemd_user` reached
+   * the ladder, found no provider for it, and came back as **"no boot mechanism is available on
+   * linux"** — false (mechanisms are plainly available) and silent about the actual mistake.
+   * The refusal names the value and what would be accepted instead.
+   */
+  it('refuses a mechanism that is not one, and says which are', async () => {
+    for (const bad of ['systemd_user', 'restart', 'zebra', 'auto']) {
+      const { service } = await harness()
+      await expect(service.call('boot.install', { mechanism: bad }), bad)
+        .rejects.toMatchObject({ code: 'INVALID_MECHANISM', message: expect.stringContaining(JSON.stringify(bad)) })
+      // And the message lists the real ones, including the exact value the caller nearly meant.
+      await expect(service.call('boot.install', { mechanism: bad })).rejects.toThrow(/systemd-user/)
+    }
+  })
+
+  it('still accepts a real mechanism and an omitted one', async () => {
+    const { service } = await harness()
+    // Omitted is "let the host choose" and stays valid.
+    await expect(service.call('boot.install', {})).resolves.toBeDefined()
+    // And a named one is not refused for being named.
+    await expect(service.call('boot.install', { mechanism: 'systemd-user' })).resolves.toBeDefined()
+  })
+
   it('toggles agent tools through settings.update and reflects boot installs', async () => {
     const { service, settings } = await harness()
     await service.call('settings.update', { patch: { agentTools: { enabled: true, allow: ['status'] } } })
