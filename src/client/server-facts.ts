@@ -7,15 +7,13 @@
  * Translator-injected and pure, like `status.ts`, so the wording is pinned by
  * a test without mounting anything.
  */
+import { isRecord } from '../shared/contracts.js'
 import type { TranslateFn } from './context.js'
 import { EMPTY } from './format.js'
 
 /** The panel's own probe interval; anything else is worth showing. */
 const DEFAULT_INTERVAL_MS = 5000
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function numberField(record: Record<string, unknown>, key: string): number | null {
   const value = record[key]

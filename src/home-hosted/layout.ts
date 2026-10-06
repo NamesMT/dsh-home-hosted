@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { DEFAULT_WORKSPACE } from '../shared/contracts.js'
+import { DEFAULT_WORKSPACE, isRecord } from '../shared/contracts.js'
 
 export { DEFAULT_WORKSPACE }
 
@@ -70,9 +70,6 @@ export interface WorkspacesRead {
   error: string | null
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /** The registry `.hh/workspaces.json` holds; an empty list is "not started yet". */
 export function readWorkspaces(home: string): WorkspacesRead {

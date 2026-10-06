@@ -7,6 +7,7 @@
  * never treats the change as an external edit.
  */
 import type { FreePortResult, ServerEntry, ServerEntryPatch, ServerEntryView } from '../shared/contracts.js'
+import { isRecord } from '../shared/contracts.js'
 
 /**
  * What `GET /api/servers*` answers with: a live *view*, which nests the entry
@@ -27,9 +28,6 @@ interface ApiServerView extends Omit<ServerEntryView, 'workspace'> {
  */
 type ApiServerConfig = ServerEntry & { workspaceId?: string }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 export class PanelError extends Error {
   constructor(

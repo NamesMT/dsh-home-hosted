@@ -6,7 +6,7 @@
  */
 import { AGENT_TOOL_NAMES, DEFAULT_SETTINGS, isOnPortConflict } from './shared/contracts.js'
 import type { AgentToolName, EntryIntent, PluginSettings, SettingsPatch } from './shared/contracts.js'
-import { SETTINGS_VERSION } from './shared/contracts.js'
+import { isRecord, SETTINGS_VERSION } from './shared/contracts.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
 import { defaultIntent } from './home-hosted/entries.js'
 
@@ -63,13 +63,15 @@ function isBootMechanism(value: unknown): value is PluginSettings['autostart']['
 }
 
 /**
- * The `lastAttempt` the page can render: a record, never `null`, a bare value or an
- * array. The array matters — `typeof [] === 'object'`, and letting one through renders
- * an entry with an empty detail, i.e. a failure report for something that never failed.
+ * `lastAttempt` narrowed for the page: a record with the shape it can render.
+ *
+ * Delegates the "is it an object" half to the shared predicate rather than repeating it —
+ * the name and the narrowed type are what this wrapper is for.
  */
 function isBootAttempt(value: unknown): value is NonNullable<PluginSettings['autostart']['lastAttempt']> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  return isRecord(value)
 }
+
 
 function normalize(raw: Partial<PluginSettings> | null, fallbackEntryId: string): PluginSettings {
   const entries = Array.isArray(raw?.entries)

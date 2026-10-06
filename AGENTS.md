@@ -94,6 +94,34 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **`isRecord` is one shared predicate now, and it was eight private definitions in eight
+  files** (seven byte-identical, plus one that accepted an array).
+  `src/shared/contracts.ts` exports the plain-object narrowing every untyped boundary uses;
+  It lived under four names — `isRecord`, `isRecordValue`, `isPlainObject`,
+  `isBootAttempt` — in `home-hosted/config-file.ts`, `home-hosted/layout.ts`,
+  `home-hosted/panel.ts`, `service.ts`, `settings.ts`, `client/server-facts.ts`,
+  `client/settings.ts` and `client/api.ts`. `src/shared/` is
+  **safe for both halves** — it has no imports at all and both esbuild entries already
+  inline it — so the consolidation crosses no boundary. (`src/util/*` is the one that does:
+  it uses `node:` APIs and the client never touches it.) Weakening the shared body to drop
+  `!Array.isArray` fails five tests, so the half that matters is pinned directly in
+  `test/settings`.
+- **The one copy that differed accepted an array, and the difference was real but
+  unreachable.** `client/api.ts`'s private copy was `typeof value === 'object' && value
+  !== null`, because `typeof [] === 'object'`. That let `parseResponse` read a `message` off
+  an array and report it, where the strict predicate reports "a failure without a message".
+  It cannot happen: the only input is `await response.json()`, and `JSON.stringify([1, 2])`
+  with a `.message` set emits `[1,2]` — JSON carries an array's indices and length, never a
+  string property. Making that copy strict failed nothing, which is the measurement that
+  says "unobservable" rather than "harmless by luck". It imports the shared predicate now
+  rather than keeping an eighth copy, and the reasoning lives at the call site so the next
+  reader does not have to re-derive it.
+- **`typeof [] === 'object'` is the reason the `!Array.isArray` half is load-bearing, not
+  decoration.** Without it an array narrows to `Record<string, unknown>` and
+  `Object.entries` silently yields its *indices* instead of failing — the corruption is
+  quiet, which is why one predicate rather than seven near-copies is worth the shared
+  module.
+
 - **A stored optional that can be `null` is not the same as one that is absent, and the read
   path that assumes absence crashes.** `autostart.lastAttempt` is `lastAttempt?:
   BootAttempt`, and `SettingsStore.normalize` spread it through whenever it was not

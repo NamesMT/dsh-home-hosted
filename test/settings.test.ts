@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SettingsStore } from '../src/settings.js'
+import { isRecord } from '../src/shared/contracts.js'
 import type { AgentToolName } from '../src/shared/contracts.js'
 import { AGENT_TOOL_NAMES, SETTINGS_VERSION } from '../src/shared/contracts.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
@@ -161,6 +162,22 @@ describe('settings store', () => {
  * a cleared optional looks like written back — crashed the Boot section on render, and an
  * array rendered a *failure report* for an attempt that never happened.
  */
+/**
+ * The one shared predicate seven files used to define privately — including one that
+ * accepted an array, because `typeof [] === 'object'`. The array case is the reason the
+ * `!Array.isArray` half exists: without it an array narrows to a record and
+ * `Object.entries` silently yields its *indices*.
+ */
+describe('isRecord', () => {
+  it('accepts a plain object and refuses everything else', () => {
+    expect(isRecord({})).toBe(true)
+    expect(isRecord({ a: 1 })).toBe(true)
+    expect(isRecord(Object.create(null) as object)).toBe(true)
+    for (const value of [null, undefined, [], [1], 'x', 0, true, () => {}, Symbol('s')])
+      expect(isRecord(value), `${String(value)} should not be a record`).toBe(false)
+  })
+})
+
 describe('a lastAttempt that is not a record', () => {
   let dir: TempDir
 

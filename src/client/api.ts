@@ -21,7 +21,7 @@ import type {
   UiResult,
   WorkspaceSummary,
 } from '../shared/contracts.js'
-import { RPC_PATH, RPC_VERSION } from '../shared/contracts.js'
+import { isRecord, RPC_PATH, RPC_VERSION } from '../shared/contracts.js'
 
 /** Authenticated harness channel prefix. */
 export const API_BASE = '/api'
@@ -59,15 +59,20 @@ function failure(code: string, message: string, detail?: unknown): Envelope<neve
   return { ok: false, error }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Unwrap one `{ v, endpoint, result }` response body; never throws. */
+/**
+ * Unwrap one `{ v, endpoint, result }` response body; never throws.
+ *
+ * `isRecord` is the shared predicate, and this file is why the sharing matters: its local
+ * copy accepted an **array**, because `typeof [] === 'object'`. The difference was real but
+ * unreachable — `JSON.stringify([1, 2])` with a `.message` set emits `[1,2]`, so a JSON
+ * response can never deliver an array carrying one, and the only input here is
+ * `await response.json()`. Rather than leave the one copy that differs, the strict
+ * predicate is imported: a reader should not have to re-derive that to know it is safe.
+ */
 export function parseResponse(json: unknown): Envelope<unknown> {
   if (!isRecord(json)) return failure('bad-response', 'The panel returned a non-object response')
   if (typeof json.v === 'number' && json.v !== RPC_VERSION) {

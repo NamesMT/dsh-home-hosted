@@ -4,13 +4,10 @@
  * the host (which would freeze values that are still inheriting defaults).
  */
 import type { AgentToolName, PluginSettings, SettingsPatch } from '../shared/contracts.js'
-import { AGENT_TOOL_NAMES } from '../shared/contracts.js'
+import { AGENT_TOOL_NAMES, isRecord } from '../shared/contracts.js'
 
 export type { SettingsPatch } from '../shared/contracts.js'
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function valuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true
@@ -33,7 +30,7 @@ export function diffObject<T extends Record<string, unknown>>(
   for (const key of Object.keys(next)) {
     const before = (base as Record<string, unknown>)[key]
     const after = (next as Record<string, unknown>)[key]
-    if (isPlainObject(before) && isPlainObject(after)) {
+    if (isRecord(before) && isRecord(after)) {
       const child = diffObject(before, after)
       if (Object.keys(child).length > 0) out[key] = child
     }

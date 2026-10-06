@@ -59,6 +59,22 @@ export function isWorkspaceId(value: unknown): value is string {
   return typeof value === 'string' && WORKSPACE_ID_PATTERN.test(value)
 }
 
+/**
+ * A plain object, and nothing else: not `null`, and not an array.
+ *
+ * This is the shape every untyped boundary here narrows to, and it lived as **seven**
+ * private copies (`isRecord`, `isRecordValue`, `isPlainObject`, `isBootAttempt`) across
+ * both halves before this one. They agreed except for `client/api.ts`, which accepted an
+ * array — see the note there for why that difference is unobservable rather than a bug.
+ *
+ * The `!Array.isArray` is the load-bearing half: `typeof [] === 'object'` is true, so
+ * without it an array reads as a record and `for (const [key, value] of Object.entries(…))`
+ * silently yields its *indices*.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export interface SettingsPatch {
   autostart?: Partial<PluginSettings['autostart']>
   manageDsh?: boolean

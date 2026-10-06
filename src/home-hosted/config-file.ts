@@ -17,6 +17,7 @@
  */
 import fs from 'node:fs'
 import type { ServerEntry, ServerEntryPatch } from '../shared/contracts.js'
+import { isRecord } from '../shared/contracts.js'
 import { readJson, writeFileAtomic } from '../util/fsx.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, migrationRefusal, serversFile } from './layout.js'
 
@@ -70,7 +71,7 @@ export function readConfig(home: string, workspace: string = DEFAULT_WORKSPACE):
   // way a malformed file gets past this guard and is still written back: spreading
   // it into the object form it should have been turns `[{…}]` into `{"0":{…}}`.
   // The panel refuses a non-object servers file outright, so this does too.
-  if (!isRecordValue(raw))
+  if (!isRecord(raw))
     return { raw: null, exists: true, error: 'the workspace config file does not contain a JSON object' }
   if (!Array.isArray(raw.servers) && raw.servers !== undefined)
     return { raw: null, exists: true, error: 'the workspace config file has a servers field that is not an array' }
@@ -78,7 +79,7 @@ export function readConfig(home: string, workspace: string = DEFAULT_WORKSPACE):
   // them, so a `null` or a string in the list made those throw a raw TypeError —
   // a crash where the panel reports `servers[i]: …` and keeps the rest running.
   if (Array.isArray(raw.servers)) {
-    const index = raw.servers.findIndex(entry => !isRecordValue(entry))
+    const index = raw.servers.findIndex(entry => !isRecord(entry))
     if (index >= 0)
       return { raw: null, exists: true, error: `the workspace config file has an entry at servers[${index}] that is not an object` }
   }
@@ -115,9 +116,9 @@ export function readGlobalSettings(home: string): SettingsReadResult {
   }
   // Same rule as the servers file: a JSON array parses and would be spread into
   // the object form on the next write, so it is refused rather than reshaped.
-  if (!isRecordValue(raw))
+  if (!isRecord(raw))
     return { raw: null, exists: true, error: 'the panel settings file does not contain a JSON object' }
-  if (raw.control !== undefined && !isRecordValue(raw.control))
+  if (raw.control !== undefined && !isRecord(raw.control))
     return { raw: null, exists: true, error: 'the panel settings file has a control field that is not an object' }
   return { raw, exists: true, error: null }
 }
@@ -190,9 +191,6 @@ export const SERVER_MERGE_KEYS = new Set(['restart', 'health', 'stop'])
  */
 export const CONTROL_MERGE_KEYS = new Set(['auth', 'tls'])
 
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /**
  * Merge one nested group recursively — `health.http` is a group of its own.
@@ -211,7 +209,7 @@ function mergeGroup(target: Record<string, unknown>, patch: Record<string, unkno
       delete merged[key]
       continue
     }
-    if (isRecordValue(value) && isRecordValue(merged[key])) {
+    if (isRecord(value) && isRecord(merged[key])) {
       merged[key] = mergeGroup(merged[key], value)
       continue
     }
@@ -245,7 +243,7 @@ export function patchEntry(raw: RawConfig, id: string, patch: ServerEntryPatch):
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined)
         continue
-      if (SERVER_MERGE_KEYS.has(key) && isRecordValue(value) && isRecordValue(merged[key]))
+      if (SERVER_MERGE_KEYS.has(key) && isRecord(value) && isRecord(merged[key]))
         (merged as Record<string, unknown>)[key] = mergeGroup(merged[key] as Record<string, unknown>, value)
       else
         (merged as Record<string, unknown>)[key] = value
@@ -266,7 +264,7 @@ export function patchControl(raw: GlobalSettings, patch: Record<string, unknown>
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined)
       continue
-    if (CONTROL_MERGE_KEYS.has(key) && isRecordValue(value) && isRecordValue(control[key]))
+    if (CONTROL_MERGE_KEYS.has(key) && isRecord(value) && isRecord(control[key]))
       control[key] = mergeGroup(control[key] as Record<string, unknown>, value)
     else
       control[key] = value

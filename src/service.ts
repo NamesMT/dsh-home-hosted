@@ -12,7 +12,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import type { BootInstallResult, BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
-import { FOREIGN_MECHANISMS, isOnPortConflict, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import { FOREIGN_MECHANISMS, isOnPortConflict, isRecord, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
@@ -85,10 +85,6 @@ export class HomeHostedError extends Error {
   }
 }
 
-/** An entry another panel's config holds: no live status without that panel's API. */
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /**
  * Whether a failed CLI call failed because that panel does not know the command.
@@ -774,7 +770,7 @@ export class HomeHostedService extends Service {
     const raw = readJson<Record<string, unknown>>(this.snapshotsFile)
     if (raw === null)
       return {}
-    if (raw.version === 2 && isRecordValue(raw.entries))
+    if (raw.version === 2 && isRecord(raw.entries))
       return raw.workspace === this.managedWorkspace() ? raw.entries as Record<string, ServerEntry> : {}
     // A file from before workspaces: there was one workspace, and it was `default`.
     return this.managedWorkspace() === DEFAULT_WORKSPACE ? raw as Record<string, ServerEntry> : {}
