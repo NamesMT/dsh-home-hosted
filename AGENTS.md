@@ -11,7 +11,7 @@ to either half **must** be followed by its build: CI builds too, but a stale `li
 install. Never move the build behind a `prepare` script (a local install runs none, and a git-hosted
 one is refused until allowlisted).
 
-## Deeper docs
+## Docs
 
 Read on demand, not every session. This file holds orientation and the rules that prevent defects;
 these hold the reasoning and the traps.
@@ -42,7 +42,7 @@ Test the page against a throwaway profile (`dsh plugin --profile scratch add .`)
 real boot entry, run a real service manager, or restart the harness you are running in to "check"
 something.
 
-## Layout
+## Structure
 
 - `src/index.ts` — plugin entry (settings, service, RPC, tools, startup reconcile, sign-in notice).
 - `src/config.ts` — the Cordis row config: `stateDir`, `homeHostedCommand`, `defaultEntryId`.
@@ -113,17 +113,6 @@ nobody reads is worse than a long file.
 - **The panel console is a first-class diagnostic** (`panel.console`): read from disk, so it needs no
   session, no token and no answering panel, and matches `home-hosted logs` line for line.
 
-## Conciseness (applies everywhere)
-
-**Prune verbose; keep correctness.** This covers code, comments, user docs and agent docs alike.
-
-- Code: say it once, name it well. A comment only for non-obvious *intent*, never to restate the line.
-- Docs: one idea per sentence; prefer a table or a line to a paragraph. Cut any sentence that would
-  not change what a reader does.
-- **Delete history `git log` already holds.** Keep the *rule* that came out of it, not the story — a
-  list of where something used to live is archaeology, not guidance.
-- Do not drop a caveat to save a line. Concise means no filler, not fewer facts.
-
 ## How to work here
 
 - **Check who calls it before you change it** — grep the callers and the tests that name it. Two
@@ -141,15 +130,28 @@ nobody reads is worse than a long file.
   than refactoring the world. Two here were exactly that: eight private `isRecord` copies (one of
   which accepted an array) became one predicate, and two hand-written launchd log-path sites became
   one `launchdLogPaths` shared with the plist builder.
-- **Verify before claiming, and say which direction you checked.** A passing test is not evidence it
-  pinned anything: a "text rules" test that copied the regexes it asserted survived the exact change
-  its comment forbade. [GOTCHAS](.agentDocs/GOTCHAS.md) has the habits that catch this; mark anything
-  unverified as unverified.
+- **Verify before claiming, and say what you checked.** A green test proves only what it asserts —
+  **break the thing it guards and watch it fail.** If it still passes, either the test is decoration
+  or a different guard is running; find out which. A "text rules" test here copied the regexes it
+  asserted and survived the exact change its comment forbade — that is the failure this prevents.
+  Where a stub cannot answer the question, drive the real thing. Mark anything unverified as
+  unverified.
 - **If recall of this project is missing** (a fresh session, a compacted context, a different
   machine), read this file, `.agentDocs/` and `git log` before acting, and ask 1–3 targeted questions
   instead of reconstructing intent from guesswork.
 - **Leave the docs better than you found them**: delete what is stale, compact what has grown, and
   never leave a pointer to content that does not exist.
+
+## Conciseness
+
+**Prune verbose; keep correctness.** This covers code, comments, user docs and agent docs alike.
+
+- Code: say it once, name it well. A comment only for non-obvious *intent*, never to restate the line.
+- Docs: one idea per sentence; prefer a table or a line to a paragraph. Cut any sentence that would
+  not change what a reader does.
+- **Delete history `git log` already holds.** Keep the *rule* that came out of it, not the story — a
+  list of where something used to live is archaeology, not guidance.
+- Do not drop a caveat to save a line. Concise means no filler, not fewer facts.
 
 ## User-facing docs
 
@@ -161,18 +163,6 @@ nobody reads is worse than a long file.
   commit*. A stale doc is a bug like stale code.
 - **A user-facing change also lands in `.agentDocs/` when it changes a rule or a trap** — but keep the
   *reasoning* there and the *rule* here.
-
-## Where to extend
-
-- **Endpoint**: `contracts.ts` (endpoint + payload) → `service.ts` dispatch → `src/client/api.ts` when
-  the page needs it.
-- **Agent tool**: `contracts.ts` (`AgentToolName`, mutating set) → a spec in `tools.ts` → locale labels.
-- **Panel inventory**: `src/home-hosted/instances.ts` (which roots exist) → `service.instances()`
-  (cache) → `instances-notice.ts` (what the agent is told) · `tools.ts` (which panel a call may hit).
-- **Boot mechanism**: a provider in `src/boot/<mechanism>.ts` → the list in `ladder.ts` → `test/boot`.
-- **Page**: a `src/client/section-*.tsx` → wire it in `page.tsx` → locales (both languages).
-- **Why a shape is what it is**: [ARCHITECTURE](.agentDocs/ARCHITECTURE.md). **Before touching a guard
-  or a platform rule**: [GOTCHAS](.agentDocs/GOTCHAS.md).
 
 ## Releasing
 
@@ -191,3 +181,15 @@ changelogen derive the changelog and bump/commit/tag `v<version>`, creates the G
 publishes through npm trusted publishing. Below 1.0 the minor means "read the notes and act"; anything
 else is a patch. `prepublishOnly` runs typecheck + tests, so a release cannot ship a red suite.
 `pnpm pack` ships the `files` list in `package.json`; `.agentDocs/` is deliberately not published.
+
+## Where to extend
+
+- **Endpoint**: `contracts.ts` (endpoint + payload) → `service.ts` dispatch → `src/client/api.ts` when
+  the page needs it.
+- **Agent tool**: `contracts.ts` (`AgentToolName`, mutating set) → a spec in `tools.ts` → locale labels.
+- **Panel inventory**: `src/home-hosted/instances.ts` (which roots exist) → `service.instances()`
+  (cache) → `instances-notice.ts` (what the agent is told) · `tools.ts` (which panel a call may hit).
+- **Boot mechanism**: a provider in `src/boot/<mechanism>.ts` → the list in `ladder.ts` → `test/boot`.
+- **Page**: a `src/client/section-*.tsx` → wire it in `page.tsx` → locales (both languages).
+- **Why a shape is what it is**: [ARCHITECTURE](.agentDocs/ARCHITECTURE.md). **Before touching a guard
+  or a platform rule**: [GOTCHAS](.agentDocs/GOTCHAS.md).
