@@ -164,6 +164,29 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## Correct only for the input it happens to receive
+
+- **A decode per block is wrong for a character that straddles two.** Two readers split on
+  boundaries that have nothing to do with characters: the console's 64 KiB blocks and a
+  process pipe's chunks. `Buffer.toString('utf8')` on each **substitutes U+FFFD** rather than
+  throwing, so a non-ASCII log line or CLI refusal was corrupted silently at every boundary.
+  Measured: a valid-UTF-8 file read clean whole, corrupted through `readTail` (2 replacement
+  chars); a real child writing one byte into a three-byte character produced 3. Fixed by
+  counting separators on the **bytes** (`0x0A` cannot occur inside a multi-byte sequence, so
+  the count is identical and needs no decode) and decoding once — or a `StringDecoder` where
+  the input arrives in chunks and cannot be reassembled cheaply.
+- **A comment that names one case is not a proof of the other.** The console's loop said a
+  boundary "can land mid-line" — true, and the only case considered; mid-character is the
+  second, and it is the one nothing checked. When a guard reasons about a boundary, enumerate
+  what can straddle it, not just what came to mind.
+- **A module with no direct test is covered only by what its callers happen to exercise.**
+  `exec.ts` had none, which is why the corruption survived; the new test drives **real
+  children**, because only a real pipe produces the chunk boundary under test.
+- **A test that samples the real environment cannot fail for a reason the environment does not
+  exhibit.** A bounds assertion reading this machine's values is green because they are in
+  range, not because the bound holds. Construct the input that breaks it — here, a file with
+  the character placed at the boundary — or the test is pinning the machine.
+
 ## A message that makes the reader work it out
 
 - **A refusal that denies a capability the caller merely mistyped is worse than one naming the
