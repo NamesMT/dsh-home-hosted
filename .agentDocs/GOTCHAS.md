@@ -164,6 +164,31 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A documented bound
+
+- **Check what actually bounds the loop.** A constant's comment said it "grows only when a request
+  needs more lines than it held" — it was a `const`, never assigned. The *loop* grew. Before
+  changing a bound, name the thing that enforces it: the condition, or merely the allocation.
+- **Measure the unit the comment uses**, and measure the realistic input. `panel.console` reads a
+  5 MB-rotated console: 27 ms / ~15 MB for a single-line file, 1 ms for a typical 60k-line log.
+  The synthetic 40 MB case (170 ms / ~80 MB) is outside what the rotation allows, so no change was
+  warranted — a bound is only a defect if a reachable input reaches it.
+- **A bounded read must not lose data.** 2000 of 2000 lines reachable incrementally, in order, no
+  gaps; requesting one line at a time loses nothing. Prove the remainder is not dropped before
+  accepting a limit.
+- **A guard on an irreversible action needs its decision logic tested, not its invocation.** The
+  release gate is called by one workflow step and had **no coverage**; its verdicts are exit codes,
+  so test them as exit codes. Two defects were hiding there — a version regex that accepted
+  `0.7.018` (`\d+` allows a leading zero; `semver.valid()` returns null) and a hand-written
+  `compare` ordering prereleases as text, refusing `rc.10` over `rc.2`.
+- **Compare a hand-written validator against the real library on ugly inputs** — leading zeros, the
+  empty string, a trailing separator — and name any deliberate deviation, or it looks like the bug
+  you just fixed. `semver@7` installed outside the repo is enough; the shipped test imports nothing.
+- **Read an exit code directly, never through a pipe.** `node script.mjs x | head` reports `head`'s
+  status, which made a failing guard look passing.
+- **A mutation only proves something if it reverts the change.** Reverting the release gate by
+  comparing a *copy* of the old function proved nothing; removing `oneNum` entirely did.
+
 ## The same claim stated more than once
 
 - **A fixture copied per file drifts in its defaults, not its shape.** Five client tests built
