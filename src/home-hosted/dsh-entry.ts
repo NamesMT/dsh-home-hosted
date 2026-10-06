@@ -398,8 +398,6 @@ function isBareCommand(stored: string, platform: NodeJS.Platform = process.platf
   return shim || (platform === 'win32' ? lower === 'dsh' : stored === 'dsh')
 }
 
-
-/** The shim names a row may carry as a bare command. */
 /**
  * Whether an entry *could* need that repair, without resolving anything.
  *
