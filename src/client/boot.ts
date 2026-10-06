@@ -13,6 +13,17 @@ export interface BootFailure {
 export interface BootAttemptView extends BootFailure {
   ok: boolean
   action: BootAttempt['action']
+  /**
+   * The mechanism the attempt was made for, carried so the note can be gated on it.
+   *
+   * It used to be dropped here, which made the comparison impossible: a persisted
+   * refusal was shown against the live *state* alone, so switching the preference from
+   * `systemd-system` to `xdg-autostart` left the page displaying the old mechanism's
+   * refusal **and its copy-pasteable `sudo` commands** — instructions for a mechanism
+   * the person had just deselected. The fresh path always compared both; the persisted
+   * one could not, and the missing field was the reason.
+   */
+  mechanism: BootMechanism | null
 }
 
 /** A refusal answered in this turn, together with the live status it answered. */
@@ -47,6 +58,7 @@ export function bootAttemptView(attempt: BootAttempt | undefined): BootAttemptVi
     action: attempt.action === 'uninstall' ? 'uninstall' : 'install',
     detail: typeof attempt.detail === 'string' ? attempt.detail : '',
     commands: stringList(attempt.commands),
+    mechanism: attempt.mechanism ?? null,
   }
 }
 
@@ -101,5 +113,8 @@ export function visibleBootAttempt(
   mechanism: BootMechanism | null,
 ): BootAttemptView | null {
   if (fresh !== null && fresh.state === state && fresh.mechanism === mechanism) return fresh
+  // A persisted refusal describes the mechanism it was made for, so it stops being news
+  // when the preference moves to another one — the same comparison the fresh path makes.
+  if (persisted !== null && persisted.mechanism !== mechanism) return null
   return isStaleAttempt(persisted, state) ? null : persisted
 }

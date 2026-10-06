@@ -17,9 +17,9 @@ import {
   deletePayload,
   lifecyclePayload,
   ServersSection,
+  scopedSelection,
   updatePayload,
 } from '../../src/client/section-servers.js'
-import { scopedSelection } from '../../src/client/section-servers.js'
 import { WorkspacesSection } from '../../src/client/section-workspaces.js'
 import type { HomeHostedStatus, ManagedEntryStatus, ServerEntryView, WorkspaceSummary } from '../../src/shared/contracts.js'
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'

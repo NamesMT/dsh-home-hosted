@@ -63,6 +63,8 @@ describe('bootAttemptView', () => {
       action: 'install',
       detail: 'Bootstrap failed: 5: Input/output error',
       commands: ['launchctl bootstrap gui/501 x.plist'],
+      // Carried, not dropped: the note is gated on the mechanism it was made for.
+      mechanism: 'launchd-agent',
     })
   })
 
@@ -74,7 +76,7 @@ describe('bootAttemptView', () => {
       detail: 'removed',
       commands: undefined as unknown as string[],
       at: 2,
-    })).toEqual({ ok: true, action: 'uninstall', detail: 'removed', commands: [] })
+    })).toEqual({ ok: true, action: 'uninstall', detail: 'removed', commands: [], mechanism: 'systemd-user' })
   })
 })
 

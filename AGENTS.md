@@ -107,6 +107,13 @@ manager, or restart the harness you are running in to "check" something.
 - **The codebase's own pattern for this is `visibleBootAttempt`**: a fresh attempt is
   shown only while its `state` and `mechanism` still match the live ones. Copy that
   shape for any new contextual value rather than adding a "clear it on change" effect.
+  The *persisted* path had only half of it — `bootAttemptView` **dropped** the
+  mechanism, so the note could only be gated on `state`: switching the preference from
+  `systemd-system` to `xdg-autostart` left the page showing the old mechanism's refusal
+  and its copy-pasteable `sudo` commands, i.e. instructions for something just
+  deselected. The view now carries the mechanism and both paths compare it. When a
+  comparator only checks part of what it describes, check whether a field was dropped
+  before it ever got there.
 
 - **`Number.parseInt` takes a *prefix*, so a partly numeric argument becomes a number
   nobody asked for.** `1e3` → 1, `12abc` → 12, and `0x10` → **0**, which is the "whole
@@ -126,6 +133,14 @@ manager, or restart the harness you are running in to "check" something.
   fragment, with output verified byte-identical. The other seven genuinely differ and
   must not be merged. Extract a shared helper only where the copies can diverge.
 
+- **A component can be driven, not only reasoned about.** `happy-dom` is a devDependency
+  and a `// @vitest-environment happy-dom` comment on one file is the whole setup; with
+  `react-dom/client` + `act` that mounts a real section and clicks it, with no provider
+  stack. Use it when a fix lives in a component's *wiring* — `scopedSelection` being
+  correct proves the helper, not that the section applies it to all three of its
+  selections. `test/client/servers-scoping.test.tsx` is the pattern, including a control
+  case (same workspace, unrelated re-render) so a failure cannot be misread as "the
+  editor closed for some other reason".
 - **A test that cannot run must report `skipped`, never `passed`.** vitest treats an
   early `return` inside a test body as a pass, so a guard like
   `if (!fs.existsSync(dependency)) return` makes the suite claim a verification it never

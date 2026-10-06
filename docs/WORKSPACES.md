@@ -18,6 +18,16 @@ editor or a confirmation opened on workspace A's `web` stays live under workspac
 own in-flight keys (`busyKey`) already included the workspace, and the section's local selections now
 do too.
 
+The scoping is verified by driving the section under `happy-dom` and clicking it — open the editor,
+switch workspace, read the screen — not only by calling the resolver, so the wiring for all three
+selections is exercised. A control case re-renders in the *same* workspace and asserts the editor
+stays open, so the failure cannot be mistaken for "it closed for some other reason".
+
+The same lesson applies to the boot section's own stored state: `bootAttemptView` used to drop the
+mechanism, so its note could only be gated on `state` and a persisted refusal survived a change of
+preference — with the *old* mechanism's copy-pasteable commands. The view carries it now, and both
+the fresh and persisted paths compare it.
+
 The plugin manages exactly one workspace — **the panel's `default`**, fixed — because its intent (the
 `dsh` entry, snapshots, reconcile) is a promise about one entry in one place. Making that a setting
 bought nothing but a way to write into the wrong workspace, so it is a constant. The page and the agent
