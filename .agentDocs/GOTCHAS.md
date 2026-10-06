@@ -164,6 +164,25 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A comparison narrower than its own comment
+
+The tell is a comment that makes a **checkable promise** — "never", "always", "only", "must
+not" — so the sentence is the test to write, and the cheapest place to find one that is false.
+Take the literal example the comment gives and run it.
+
+- **`isBareCommand` applied opposite case rules in its two branches.** Its doc says a bare name
+  is "a name PATH decides", and PATH decides case differently per platform: `which` on POSIX is
+  case-sensitive, `where.exe` on Windows is not. `stored === 'dsh'` was case-sensitive while the
+  `.cmd`/`.exe` branch was `/i`, so each platform had one branch using the other's rule — and on
+  Windows `DSH` is the same command, so the row was never repaired. **Narrow the condition, do
+  not delete the fallback**: `.cmd`/`.exe` stay case-insensitive on both platforms because they
+  are Windows shim names and each is still a name PATH might answer for. A first attempt that
+  made the whole comparison platform-aware turned POSIX `DSH.CMD` true→false, trading one
+  direction's defect for the other's.
+- **Where a case fold IS right, it is a convenience on user-typed text** — the tool's `all`,
+  `matchesMechanism`'s free-text answer, a file extension. Those are literals a person types,
+  not identities two things are being told apart by.
+
 ## Correct only for the input it happens to receive
 
 - **A decode per block is wrong for a character that straddles two.** Two readers split on
