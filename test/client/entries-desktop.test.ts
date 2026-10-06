@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { EntriesSection } from '../../src/client/section-entries.js'
 import { statusSignals } from '../../src/client/status.js'
 import { en, englishTranslator } from '../../src/client/locales.js'
-import type { SectionProps } from '../../src/client/props.js'
+import { sectionProps as props } from '../helpers/section-props.js'
 import type { HomeHostedStatus, ManagedEntryStatus } from '../../src/shared/contracts.js'
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'
 
@@ -53,16 +53,6 @@ function status(surface: 'web' | 'desktop', manageDsh = true): HomeHostedStatus 
   }
 }
 
-function props(status_: HomeHostedStatus): SectionProps {
-  return {
-    t: englishTranslator,
-    status: status_,
-    run: async () => ({ ok: true, value: null }),
-    updateSettings: () => {},
-    busy: null,
-    uiStyle: 'detailed',
-  }
-}
 
 const markup = (status_: HomeHostedStatus): string =>
   renderToStaticMarkup(createElement(EntriesSection, props(status_)))

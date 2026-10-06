@@ -11,7 +11,7 @@ import {
   patchFromDraft,
 } from '../../src/client/entry-editor.js'
 import { en, englishTranslator } from '../../src/client/locales.js'
-import type { SectionProps } from '../../src/client/props.js'
+import { sectionProps as props } from '../helpers/section-props.js'
 import {
   createPayload,
   deletePayload,
@@ -66,17 +66,6 @@ function status(overrides: Partial<HomeHostedStatus> = {}): HomeHostedStatus {
   }
 }
 
-function props(status_: HomeHostedStatus, overrides: Partial<SectionProps> = {}): SectionProps {
-  return {
-    t,
-    status: status_,
-    run: async () => ({ ok: true, value: null }),
-    updateSettings: () => {},
-    busy: null,
-    uiStyle: 'detailed',
-    ...overrides,
-  }
-}
 
 function server(id: string, workspace: string, running = true): ServerEntryView {
   return {

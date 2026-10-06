@@ -5,6 +5,7 @@ import { AgentsSection } from '../../src/client/section-agents.js'
 import { PanelSection, reclaimNote } from '../../src/client/section-panel.js'
 import { en, englishTranslator, zh } from '../../src/client/locales.js'
 import type { SectionProps } from '../../src/client/props.js'
+import { sectionProps } from '../helpers/section-props.js'
 import type { HomeHostedStatus, TokenState } from '../../src/shared/contracts.js'
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'
 
@@ -45,17 +46,10 @@ function status(token: TokenState, reachable: boolean, started: boolean, detail 
   }
 }
 
-function props(status_: HomeHostedStatus, overrides: Partial<SectionProps> = {}): SectionProps {
-  return {
-    t: englishTranslator,
-    status: status_,
-    run: async () => ({ ok: true, value: null }),
-    updateSettings: () => {},
-    busy: null,
-    uiStyle: 'compact',
-    ...overrides,
-  }
-}
+
+/** This section is the compact row list. */
+const props = (status: HomeHostedStatus, overrides: Partial<SectionProps> = {}): SectionProps =>
+  sectionProps(status, { uiStyle: 'compact', ...overrides })
 
 function panelMarkup(status_: HomeHostedStatus): string {
   return renderToStaticMarkup(createElement(PanelSection, props(status_)))

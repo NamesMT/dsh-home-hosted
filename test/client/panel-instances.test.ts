@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { AgentsSection } from '../../src/client/section-agents.js'
 import { PanelSection } from '../../src/client/section-panel.js'
-import { en, englishTranslator } from '../../src/client/locales.js'
+import { en } from '../../src/client/locales.js'
 import type { SectionProps } from '../../src/client/props.js'
+import { sectionProps as props } from '../helpers/section-props.js'
 import type { HomeHostedStatus, InstanceView } from '../../src/shared/contracts.js'
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'
 
@@ -71,16 +72,6 @@ function status(instances: InstanceView[] | undefined): HomeHostedStatus {
   }
 }
 
-function props(status_: HomeHostedStatus): SectionProps {
-  return {
-    t: englishTranslator,
-    status: status_,
-    run: async () => ({ ok: true, value: null }),
-    updateSettings: () => {},
-    busy: null,
-    uiStyle: 'detailed',
-  }
-}
 
 describe('panel inventory on the page', () => {
   it('lists the panels only when there is more than one', () => {

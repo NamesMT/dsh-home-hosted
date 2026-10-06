@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { controlNoteFor, PanelSection, stopNoteFor } from '../../src/client/section-panel.js'
 import { en, englishTranslator } from '../../src/client/locales.js'
-import type { SectionProps } from '../../src/client/props.js'
+import { sectionProps } from '../helpers/section-props.js'
 import type { Envelope, HomeHostedStatus } from '../../src/shared/contracts.js'
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'
 
@@ -43,15 +43,8 @@ function status(reachable: boolean, extra: Partial<HomeHostedStatus> = {}): Home
 }
 
 function panelMarkup(status_: HomeHostedStatus): string {
-  const props: SectionProps = {
-    t: englishTranslator,
-    status: status_,
-    run: async () => ({ ok: true, value: null }),
-    updateSettings: () => {},
-    busy: null,
-    uiStyle: 'compact',
-  }
-  return renderToStaticMarkup(createElement(PanelSection, props))
+  // The stop-panel section is the compact row list.
+  return renderToStaticMarkup(createElement(PanelSection, sectionProps(status_, { uiStyle: 'compact' })))
 }
 
 describe('the stop-panel note', () => {
