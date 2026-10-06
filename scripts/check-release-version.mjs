@@ -10,19 +10,71 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const requested = (process.argv[2] ?? '').trim()
 const { version: current } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Z.-]+)?$/i.test(requested)) {
+/**
+ * The semver grammar, as the registry enforces it.
+ *
+ * `\d+` per component accepted `0.7.018`, which semver forbids (a numeric identifier may not
+ * carry a leading zero) and npm rejects — so the typo passed this gate and would have failed
+ * later *at the publishing step*, blaming changelogen or npm instead of the input. Verified
+ * against the real `semver` library rather than from the specification: every case in
+ * `test/release-version.test.ts` was checked with `semver.valid()`.
+ *
+ * Build metadata is refused deliberately: changelogen writes `package.json` from this string,
+ * and `1.2.3+meta` is a version npm accepts but that no git tag round-trips.
+ */
+const CORE = '(?:0|[1-9]\\d*)'
+const PRERELEASE = `(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)`
+const VERSION = new RegExp(`^${CORE}\\.${CORE}\\.${CORE}(?:-${PRERELEASE}(?:\\.${PRERELEASE})*)?$`)
+
+if (!VERSION.test(requested)) {
   console.error(`[release] "${requested}" is not a version — expected 1.2.3 or 1.2.3-rc.1`)
   process.exit(1)
 }
 
+/**
+ * Semver precedence, matching the `semver` library.
+ *
+ * The prerelease tail was compared as a **string**, so `0.7.4-rc.10` sorted *below*
+ * `0.7.4-rc.2` and a legitimate release was refused with "is not greater than the current".
+ * Identifiers compare piece by piece, numerically where both are numeric — and a numeric
+ * identifier sorts below an alphanumeric one.
+ */
 function compare(left, right) {
-  const a = left.split('-')[0].split('.').map(Number)
-  const b = right.split('-')[0].split('.').map(Number)
-  for (let index = 0; index < 3; index += 1) {
-    if ((a[index] ?? 0) !== (b[index] ?? 0))
-      return (a[index] ?? 0) > (b[index] ?? 0) ? 1 : -1
+  const split = (value) => {
+    const [core, pre = ''] = value.split('-', 2)
+    return { parts: core.split('.').map(Number), pre: pre.length > 0 ? pre.split('.') : [] }
   }
-  return left === right ? 0 : left.includes('-') ? -1 : 1
+  const a = split(left)
+  const b = split(right)
+  for (let index = 0; index < 3; index += 1) {
+    if ((a.parts[index] ?? 0) !== (b.parts[index] ?? 0))
+      return (a.parts[index] ?? 0) > (b.parts[index] ?? 0) ? 1 : -1
+  }
+  if (a.pre.length === 0 || b.pre.length === 0) {
+    if (a.pre.length === b.pre.length)
+      return 0
+    return a.pre.length === 0 ? 1 : -1
+  }
+  for (let index = 0; index < Math.max(a.pre.length, b.pre.length); index += 1) {
+    const one = a.pre[index]
+    const two = b.pre[index]
+    if (one === undefined)
+      return -1
+    if (two === undefined)
+      return 1
+    if (one === two)
+      continue
+    const oneNum = /^\d+$/.test(one) ? Number(one) : null
+    const twoNum = /^\d+$/.test(two) ? Number(two) : null
+    if (oneNum !== null && twoNum !== null)
+      return oneNum < twoNum ? -1 : 1
+    if (oneNum !== null)
+      return -1
+    if (twoNum !== null)
+      return 1
+    return one < two ? -1 : 1
+  }
+  return 0
 }
 
 if (compare(requested, current) <= 0) {
