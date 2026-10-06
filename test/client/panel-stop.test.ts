@@ -68,9 +68,25 @@ describe('the stop-panel note', () => {
   })
 
   it('treats a dropped connection as in-progress, not as a failure', () => {
-    // Stopping the panel this session runs under kills the connection, so the
-    // call cannot answer — claiming a failure there would be false.
-    expect(stopNoteFor(failed('client', 'Failed to fetch'), englishTranslator)).toBe(en.panelStopping)
+    // Stopping the panel this session runs under kills the connection, so the call cannot
+    // answer — claiming a failure there would be false.
+    //
+    // The codes are the ones that can actually arrive, not a convenience: `rpc()` catches its
+    // own fetch rejection and returns `failure('network', …)` — it never throws — so `network`
+    // is what a dropped transport produces. `client` comes from `page.tsx`'s `run()` catch,
+    // when the call throws instead of returning an envelope. The test used only `client`,
+    // which is why an unreachable branch passed for the real path.
+    for (const code of ['network', 'no-fetch', 'client'])
+      expect(stopNoteFor(failed(code, 'Failed to fetch'), englishTranslator), code).toBe(en.panelStopping)
+  })
+
+  it('still reports a real refusal, and the codes it must not treat as dropped', () => {
+    // An `http` failure is the panel answering badly, and `error` is its own refusal: both are
+    // failures and neither may be swallowed as "in progress".
+    for (const code of ['error', 'http', 'bad-response', 'bad-json']) {
+      const note = stopNoteFor(failed(code, 'the panel did not stop'), englishTranslator)
+      expect(note, code).toContain('did not stop')
+    }
   })
 
   it('reports a refusal the host actually sent', () => {

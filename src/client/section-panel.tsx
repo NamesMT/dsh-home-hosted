@@ -46,9 +46,21 @@ export function reclaimNote(envelope: Envelope<unknown>, t: TranslateFn): string
  * A dropped transport is not a failure: stopping the panel this session runs
  * under kills the connection, and claiming "did not stop" there would be false.
  */
+/**
+ * The code a *dropped transport* carries, as a value rather than a message.
+ *
+ * `rpc()` catches its own fetch failure and returns `failure('network', …)` — it never throws —
+ * so `'network'` is what a stop arrives as when the caller's own connection dies, and it has to
+ * be named here. The check used to be `code === 'client'`, which only `page.tsx`'s `run()` catch
+ * produces (when the *call* throws rather than returning an envelope) and which `rpc` never can:
+ * the branch was unreachable on the real path, so stopping the panel showed
+ * **"The panel did not stop: Failed to fetch"** — the false claim this function exists to avoid.
+ */
+const DROPPED_TRANSPORT = new Set(['network', 'no-fetch', 'client'])
+
 export function stopNoteFor(envelope: Envelope<unknown>, t: TranslateFn): string {
   if (!envelope.ok)
-    return envelope.error.code === 'client' ? t('panelStopping') : t('panelStopFailed', { message: envelope.error.message })
+    return DROPPED_TRANSPORT.has(envelope.error.code) ? t('panelStopping') : t('panelStopFailed', { message: envelope.error.message })
   return (envelope.value as { detail?: string } | null)?.detail || t('panelStopped')
 }
 
