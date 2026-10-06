@@ -38,3 +38,25 @@ export function panelEntryFields(): string[] {
     throw new Error(`expected the panel's server schema, found ${fields.length} fields`)
   return fields
 }
+
+/**
+ * A `new Set([...])` literal from the pinned panel's own source, as data.
+ *
+ * The plugin **copies** the panel's merge-key sets, and a missing member is not a
+ * cosmetic difference: a nested group a patch merges into is otherwise *replaced*, so
+ * a partial write silently drops every sibling key. Reading the panel's own source
+ * keeps the copy honest without importing it (upstream exports only `dist/cli.js`).
+ */
+export function panelMergeKeys(name: 'SERVER_MERGE_KEYS' | 'CONTROL_MERGE_KEYS'): string[] {
+  const map = JSON.parse(fs.readFileSync(panelSchemaMapPath(), 'utf8')) as { sourcesContent: string[] }
+  const source = map.sourcesContent.find(text => text?.includes(`export const ${name} = new Set`))
+  if (source === undefined)
+    throw new Error(`the pinned panel does not declare ${name}; its patch module may have moved`)
+  const match = new RegExp(`export const ${name} = new Set\\(\\[([^\\]]*)\\]`).exec(source)
+  if (match === null)
+    throw new Error(`could not read ${name} from the pinned panel's source`)
+  const keys = match[1]!.split(',').map(part => part.trim().replace(/^'|'$/g, '')).filter(part => part.length > 0)
+  if (keys.length === 0)
+    throw new Error(`${name} read as empty, which would make a parity assertion vacuous`)
+  return keys
+}

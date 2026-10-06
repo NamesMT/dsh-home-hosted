@@ -175,10 +175,20 @@ export function upsertEntry(raw: RawConfig, entry: ServerEntry): RawConfig {
  * API keeps `baseDelayMs`, `factor` and the rest; through the file it used to
  * wipe them, and the entry fell back to the panel's defaults.
  */
-const SERVER_MERGE_KEYS = new Set(['restart', 'health', 'stop'])
+export const SERVER_MERGE_KEYS = new Set(['restart', 'health', 'stop'])
 
-/** The control-block groups the panel merges (`CONTROL_MERGE_KEYS`). */
-const CONTROL_MERGE_KEYS = new Set(['auth', 'tls'])
+/**
+ * The control-block groups the panel merges (`CONTROL_MERGE_KEYS`).
+ *
+ * Both sets are **copies** of the panel's own, and `test/config-file` reads the
+ * panel's from the pinned dependency and fails if they diverge. That guard exists
+ * because the failure is silent and destructive: a group this list omits is
+ * *replaced* by a partial patch, so a `{ resources: { maxRssBytes: 1 } }` written
+ * through the file drops every sibling key — measured, not assumed. Upstream adding
+ * a fourth server group would otherwise regress exactly the bug the comment above
+ * describes having fixed, and nothing would say so.
+ */
+export const CONTROL_MERGE_KEYS = new Set(['auth', 'tls'])
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

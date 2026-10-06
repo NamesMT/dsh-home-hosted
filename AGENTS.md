@@ -92,6 +92,25 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A copy of another project's constant needs a parity test, because the second copy is
+  what goes stale.** `config-file.ts` mirrors the panel's `SERVER_MERGE_KEYS` /
+  `CONTROL_MERGE_KEYS` — and a missing member is not cosmetic: a nested group the list
+  omits is *replaced* by a partial patch, so a file write of
+  `{ resources: { maxRssBytes: 1 } }` drops every sibling key (measured, not assumed).
+  Upstream adding a fourth server group would silently regress the bug the code comment
+  describes fixing. `test/config-file` reads the panel's sets from the pinned
+  dependency's sourcemap and fails on divergence, the same way `test/tools` and
+  `test/client/entry-editor` read its `serverSchema`. Only copy a constant you *use* —
+  the plugin writes just `servers.*` and control, so it deliberately does not mirror
+  upstream's notification/DDNS/proxy sets.
+- **Two representations of one thing drift only if a consumer can act on the difference.**
+  Checked and found *not* worth changing: a foreign `servers.*` result carries `workspace`
+  but not `home`, while the tool's prose names the panel. That is not the upstream `ui`
+  bug, because the question "which panel?" is only ever asked on the **tool** path, which
+  always appends the prose — and the RPC (`src/rpc.ts`) is the other consumer, where the
+  caller named the panel itself. No consumer receives a user-chosen panel as JSON alone,
+  so adding `home` would be symmetry, not a fix.
+
 - **UI state that outlives the context that gave it meaning.** `ServersSection` is not
   remounted when the viewed workspace changes (no `key` on it), so its own state
   survives — and `editing`/`deleting`/`freeing`/`freeNote` were keyed by bare server

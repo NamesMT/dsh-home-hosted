@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConfigLayoutError, findEntry, patchControl, patchEntry, readConfig, readGlobalSettings, removeEntry, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
+import { ConfigLayoutError, CONTROL_MERGE_KEYS, findEntry, patchControl, patchEntry, readConfig, readGlobalSettings, removeEntry, SERVER_MERGE_KEYS, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
 import { globalSettingsFile, serversFile } from '../src/home-hosted/layout.js'
 import { makeHhHome, makeLegacyHome } from './helpers/hh.js'
+import { panelMergeKeys } from './helpers/panel-schema.js'
 import { tempDir } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
 import { writeJsonFile } from './helpers/temp.js'
@@ -337,5 +338,42 @@ describe('a pre-0.7 root', () => {
     expect(read.error).toBeNull()
     writeConfig(dir, { servers: [{ id: 'dsh', command: 'dsh' }] })
     expect(findEntry(readConfig(dir).raw!, 'dsh')).toMatchObject({ command: 'dsh' })
+  })
+})
+
+/**
+ * The merge-key sets are **copies** of the panel's own (`src/config/patch.ts`), and
+ * this reads the panel's from the pinned dependency so the two cannot drift silently.
+ *
+ * The failure a missing key causes is quiet and destructive, not cosmetic: a nested
+ * group the list omits is *replaced* by a partial patch, so writing
+ * `{ resources: { maxRssBytes: 1 } }` through the file drops every sibling key. That is
+ * the exact bug the comment above `SERVER_MERGE_KEYS` describes having fixed once.
+ */
+describe('the merge-key copies follow the panel\'s own', () => {
+  it('mirrors every server group the panel merges', () => {
+    expect([...SERVER_MERGE_KEYS].sort()).toEqual(panelMergeKeys('SERVER_MERGE_KEYS').sort())
+  })
+
+  it('mirrors every control group the panel merges', () => {
+    expect([...CONTROL_MERGE_KEYS].sort()).toEqual(panelMergeKeys('CONTROL_MERGE_KEYS').sort())
+  })
+
+  /**
+   * And the consequence, asserted rather than described: a group that *is* mirrored
+   * keeps its sibling keys, while one that is not loses them. If the set above ever
+   * falls behind the panel, the patch path silently becomes the second case.
+   */
+  it('keeps sibling keys of a mirrored group and would lose them otherwise', () => {
+    for (const key of SERVER_MERGE_KEYS) {
+      const next = patchEntry({ servers: [{ id: 'web', command: 'node', [key]: { keep: 1, change: 1 } }] } as never, 'web', { [key]: { change: 2 } } as never)
+      const entry = (next.servers as Array<Record<string, unknown>>)[0]!
+      expect(entry[key], `${key} should merge, not replace`).toEqual({ keep: 1, change: 2 })
+    }
+    // The counter-example: an unmirrored group is replaced, which is what a missing
+    // key would silently turn every group into.
+    const replaced = patchEntry({ servers: [{ id: 'web', command: 'node', resources: { keep: 1, change: 1 } }] } as never, 'web', { resources: { change: 2 } } as never)
+    const entry = (replaced.servers as Array<Record<string, unknown>>)[0]!
+    expect(entry.resources).toEqual({ change: 2 })
   })
 })

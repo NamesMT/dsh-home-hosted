@@ -107,6 +107,13 @@ triggers its file watcher. A write to a workspace's `servers.config.json` does â
   `autostart: false`, then flip `autostart`. A later write to an existing entry is a *changed
   definition*, which only takes effect at that entry's next start.
 
+The file path has one subtlety worth knowing: the panel's API **merges** the nested groups
+(`restart`, `health`, `stop`) key by key, and so must this write, or a partial patch would replace the
+group and silently drop every sibling key â€” `{ restart: { maxRetries: 1 } }` would wipe `baseDelayMs`
+and the rest, and the entry would fall back to the panel's defaults. The plugin mirrors the panel's own
+`SERVER_MERGE_KEYS`/`CONTROL_MERGE_KEYS`, and a test reads those from the installed panel so the copy
+cannot fall behind it.
+
 ## What the plugin owns
 
 Exactly `autostart`, `onPortConflict`, `persistent` and `stop.killPortHolders` (`OWNED_ENTRY_KEYS`).
