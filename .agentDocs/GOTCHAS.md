@@ -164,6 +164,26 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## The same claim stated more than once
+
+- **A fixture copied per file drifts in its defaults, not its shape.** Five client tests built
+  `SectionProps` themselves; two were byte-identical and a third differed only in `uiStyle`. A new
+  **required** field fails typecheck in every copy, so the shape is guarded — the *defaults*
+  (translator, no-op runner, `uiStyle`) are not, and two tests can end up asserting against
+  different pages. Same reason `test/helpers/panel-schema.ts` exists.
+- **Consolidate only where it removes a risk.** Nine `status()` fixtures share the DTO's required
+  shape but differ in values by design, and typecheck already guards all of them (verified: adding
+  a required field produced 7 errors). A shared builder there would add indirection, not safety.
+- **A rename across files must not match string literals.** A blanket `openssl` → `hasOpenssl`
+  rewriting the *command* in seven `execFileSync` calls is the cautionary case. After any such
+  rename, diff for changed literals and grep the injected name to be sure the edit landed.
+- **An unused import survives this repo silently** — no linter, no `noUnusedLocals` — so a
+  migration that removes a helper's body must be followed by a use-check per imported symbol.
+- **A guard that decides whether a test runs must be evaluated at module load.** `runIf`/`skipIf`
+  are read at collection time, so a flag set in a hook can never work; an early `return` inside a
+  test is reported as a **pass**. Both are checked here: the one `skipIf` is module-load, and
+  forcing its condition to fail reports `1 skipped` rather than a pass.
+
 ## A doc read in one context, shipped in another
 
 - **A link from a shipped file to a non-shipped one resolves in the repo and 404s for every user.**
