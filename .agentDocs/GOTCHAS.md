@@ -164,6 +164,25 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A heuristic reused on a different input shape
+
+- **A ratio bound tuned for long words is wrong for short ones.** "Half the shorter word" is right
+  for `stats`/`status` and wrong for `--no-open`/`--no-yes` (distance 3, which passes a bound of
+  3) — it names an **unrelated flag**. Short names share prefixes, so a ratio alone cannot work:
+  the distance must also be small in **absolute** terms.
+- **A shared prefix contributes no information.** `servers.` is 8 free characters across eight
+  endpoints, so a full-name distance made `servers.zzz` look close to `servers.get`. A rule that
+  scores only the suffix fixes that but then matches on `.list` alone, suggesting `servers.list`
+  for `orkspaces.list`. Measured on the real corpus, the plain full-name distance scores
+  identically to both alternatives and needs no special case — **measure the candidates rather
+  than reasoning about which rule is better**.
+- **An input that is already valid has no typo.** One real endpoint suggests another at distance 2
+  (`servers.start` / `servers.restart`), so the helper returns nothing when the given name is in
+  the set. The caller may not need that, but the rule belongs where it is reusable.
+- **Verify the negative case as carefully as the positive one.** For a suggestion the wrong hint is
+  worse than silence, so the test file's negative half is deliberately larger: unrelated inputs,
+  shared-prefix nonsense, and every valid name asserting silence for itself.
+
 ## A documented bound
 
 - **Check what actually bounds the loop.** A constant's comment said it "grows only when a request
