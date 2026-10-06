@@ -12,7 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ParameterPropertySpec, ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { AgentToolName, ForeignMechanism, HomeHostedStatus, InstanceView, RpcEndpoint, UiAction } from './shared/contracts.js'
-import { FOREIGN_MECHANISMS, MUTATING_AGENT_TOOLS, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import { BOOT_MECHANISM_NAMES, FOREIGN_MECHANISMS, MUTATING_AGENT_TOOLS, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
 import { canonicalPath, describeInstance } from './home-hosted/instances.js'
 import type { HomeHostedService } from './service.js'
 import type { SettingsStore } from './settings.js'
@@ -263,7 +263,9 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     parameters: {
       instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'install or uninstall' },
-      mechanism: { type: 'string', description: 'Mechanism, e.g. systemd-system; omit for the plugin setting' },
+      // Enumerated from the shared list, so a model sees the real names and cannot name one
+      // that does not exist — the refusal below it explains a mistake, this prevents one.
+      mechanism: { type: 'string', enum: [...BOOT_MECHANISM_NAMES], description: 'Mechanism; omit for the plugin setting' },
     },
     run: (input) => {
       const action = stringArg(input, 'action')

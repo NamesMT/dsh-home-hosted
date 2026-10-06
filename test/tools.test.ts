@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentToolName, InstanceView, RpcEndpoint } from '../src/shared/contracts.js'
-import { AGENT_TOOL_NAMES } from '../src/shared/contracts.js'
+import { AGENT_TOOL_NAMES, BOOT_MECHANISM_NAMES } from '../src/shared/contracts.js'
 import { PanelError } from '../src/home-hosted/panel.js'
 import type { HomeHostedService } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
@@ -145,6 +145,23 @@ function harness(options: {
 }
 
 describe('agent tools', () => {
+  /**
+   * A `mechanism` a model can name is one that exists.
+   *
+   * The parameter was a free `string` documented "e.g. systemd-system", so a model could send
+   * anything; the host then answered a mistyped name with "no boot mechanism is available on
+   * linux" — false, since mechanisms are available. It is enumerated from the shared list now,
+   * which is the same constant the host's refusal reads, so the two cannot drift.
+   */
+  it('enumerates exactly the mechanisms the host accepts', () => {
+    const h = harness({ allow: ['autostart_manage'] })
+    const tool = h.tools.find(candidate => candidate.name === toolNameFor('autostart_manage'))!
+    const properties = (tool.parameters as { properties: Record<string, { enum?: string[] }> }).properties
+    expect(properties.mechanism?.enum).toEqual([...BOOT_MECHANISM_NAMES])
+    // `auto` is the settings file's own value, not a mechanism: the page sends `{}` for it.
+    expect(properties.mechanism?.enum).not.toContain('auto')
+  })
+
   /**
    * The tool named 15 of the panel's 23 entry fields, so `persistent`, `bootstrap`,
    * `dependsOn`, `envFile`, `resources`, `backupPaths`, `logBufferLines` and
