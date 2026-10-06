@@ -441,25 +441,19 @@ export interface InstanceView {
 // Boot autostart
 // ---------------------------------------------------------------------------
 
-export type BootMechanism =
-  | 'systemd-user'
-  | 'systemd-system'
-  | 'xdg-autostart'
-  | 'launchd-agent'
-  | 'launchd-daemon'
-  | 'windows-run'
-  | 'windows-task'
-  | 'container'
-  | 'unsupported'
-
 /**
- * Every mechanism the union above names, as a value.
+ * Every boot mechanism, as one list.
  *
- * One list, because two consumers need it: the settings validator, and the refusal a caller
- * gets for a name that is not one — naming what *would* be accepted beats reporting that
- * nothing is available, which is what a mistyped `systemd_user` used to produce.
+ * The list is the source and the type is derived from it, rather than two declarations that have to
+ * be kept in step. Written the other way round — a hand-written union plus a list annotated with it —
+ * the annotation only forces each *entry* to be valid; a union member **missing** from the list
+ * compiles silently, and then a valid mechanism is refused by the validator and left out of the
+ * agent tool's `enum`.
+ *
+ * Three consumers read this: the settings validator, the refusal that names what *would* be
+ * accepted, and the tool schema.
  */
-export const BOOT_MECHANISM_NAMES: readonly BootMechanism[] = [
+export const BOOT_MECHANISM_NAMES = [
   'systemd-user',
   'systemd-system',
   'xdg-autostart',
@@ -469,7 +463,9 @@ export const BOOT_MECHANISM_NAMES: readonly BootMechanism[] = [
   'windows-task',
   'container',
   'unsupported',
-]
+] as const
+
+export type BootMechanism = (typeof BOOT_MECHANISM_NAMES)[number]
 
 /** Whether an unknown value names a boot mechanism; the settings file's `auto` is not one. */
 export function isBootMechanismName(value: unknown): value is BootMechanism {
