@@ -91,6 +91,9 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     defaultEntryId: 'dsh',
     settings,
     createLadder: () => ladder,
+    // The launcher preflight spawns the real CLI (~500 ms to load its graph), which is what
+    // made every test in this file cost ~600 ms. Stubbed the same way as `service.test.ts`.
+    preflight: async () => null,
     // Pinned so account resolution never depends on who runs the suite.
     env: options.env ?? {},
     uid: options.uid === undefined ? null : options.uid,
