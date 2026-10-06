@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { editDistance, suggestName } from '../src/util/suggest.js'
 import { AGENT_TOOL_NAMES, BOOT_MECHANISM_NAMES, isBootMechanismName, isOnPortConflict, ON_PORT_CONFLICT_POLICIES, RPC_ENDPOINT_NAMES } from '../src/shared/contracts.js'
+import { panelPortConflictPolicies } from './helpers/panel-schema.js'
 
 /**
  * The sets that must stay in step with their type.
@@ -48,6 +49,20 @@ describe('the lists that back a type', () => {
    * The validator and the refusal must read the **same** constant, or a message can name a value
    * the validator rejects. Both are asserted against the list itself, not a copy of it.
    */
+  /**
+   * The list is a **copy** of the panel's own schema, and removing `warn` from it produced **0**
+   * type errors — measured — because nothing behaves differently per policy, so no `Record` can
+   * catch it. The consequence is real: `isOnPortConflict('warn')` then returns false for a policy
+   * the panel parses, and the settings and snapshot readers replace it with the default, losing
+   * the person's choice on the next write.
+   *
+   * So the guard reads the **pinned panel's** published schema, which is the authority on what it
+   * accepts — the same technique `panelEntryFields` uses, and one no fixture can weaken.
+   */
+  it('matches the policies the pinned panel itself enumerates', () => {
+    expect([...ON_PORT_CONFLICT_POLICIES]).toEqual(panelPortConflictPolicies())
+  })
+
   it('validates every policy it would offer, and offers every policy it validates', () => {
     // One list read twice: the validator's answer and the refusal's "use one of …" text must not
     // disagree, or a message can name a value that is then rejected.

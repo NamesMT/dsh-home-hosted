@@ -40,6 +40,32 @@ export function panelEntryFields(): string[] {
 }
 
 /**
+ * The port-conflict policies the pinned panel's own schema enumerates.
+ *
+ * `ON_PORT_CONFLICT_POLICIES` is a **copy** of this list, and the panel's schema is the authority
+ * on what it accepts. A member missing from our copy is not cosmetic: `isOnPortConflict` then
+ * returns false for a policy the panel parses, and the settings and snapshot readers silently
+ * replace it with the default — the person's choice is lost on the next write.
+ *
+ * This is the guard a `Record<OnPortConflict, …>` would give, without inventing a per-policy
+ * behaviour that does not exist: measured, removing `warn` from the list produced **0** type
+ * errors, because nothing behaves differently per policy.
+ */
+export function panelPortConflictPolicies(): string[] {
+  const map = JSON.parse(fs.readFileSync(panelSchemaMapPath(), 'utf8')) as { sourcesContent: string[] }
+  const source = map.sourcesContent.find(text => text?.includes('onPortConflictSchema = type.enumerated'))
+  if (source === undefined)
+    throw new Error(`the pinned panel's policy enum was not found in ${panelSchemaMapPath()}`)
+  const at = source.indexOf('onPortConflictSchema = type.enumerated')
+  const line = source.slice(at, source.indexOf('\n', at))
+  const policies = [...line.matchAll(/'([a-z]+)'/g)].map(match => match[1]!)
+  // A regex that matched nothing would make the caller's assertion vacuous.
+  if (policies.length < 5)
+    throw new Error(`expected the panel's port-conflict policies, found ${policies.length}`)
+  return policies
+}
+
+/**
  * A `new Set([...])` literal from the pinned panel's own source, as data.
  *
  * The plugin **copies** the panel's merge-key sets, and a missing member is not a
