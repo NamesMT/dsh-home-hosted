@@ -113,9 +113,11 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
 - **Naming the artifact is not naming where its output went.** A boot-run panel writes somewhere
   other than the panel's console (`<home>/.hh/.logs/home-hosted.log`, what `panel_logs` reads):
   `launchd` is told to write `<logDir>/<label>.out.log` and `.err.log`, and `systemd` sets no
-  `StandardOutput=`, so its output is in the **journal**. `launchdLogPaths` is one computation shared
-  by the plist builder and the status line, so the plist and the message cannot name different files;
-  the journal hint has one form per scope, both run against a real unit.
+  `StandardOutput=`, so its output is in the **journal** and the status line names the command to
+  read it: `journalctl --user -u <unit>` for the user scope, `journalctl -u <unit>` for the system
+  one — two forms because they are two different journals. `launchdLogPaths` is one computation
+  shared by the plist builder and the status line, so the plist and the message cannot name
+  different files.
 - **`xdg-autostart` and the Windows mechanisms have no output to name**, deliberately: a `.desktop`
   entry with `Terminal=false` has its output discarded by the session, and a Run value or scheduled
   task captures none. Saying nothing is the honest answer there.
@@ -161,6 +163,21 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
 - **A hint that can be wrong is worse than no hint.** Every such hint is gated on the entry actually
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
+
+## Oracles
+
+- **A hand-written model of someone else's parser is evidence, not equivalence — and nothing
+  re-checks it.** The `.desktop` round-trip test reads a value through a local `keyFileRead` that
+  imitates GLib's escapeset, so the test *looks* like it verifies GLib fidelity and does not. It was
+  spot-checked once, outside the suite, by compiling a real `g_key_file_get_string` reader and
+  comparing the two across eleven values (a lone trailing backslash, `a\"b`, non-ASCII): zero
+  mismatches, so the model was faithful **as of that check**. It cannot be a committed test — it needs
+  a C compiler and GLib, which CI does not have. Re-run the comparison if the model or the escapeset
+  changes, and never cite the spot-check as a standing guarantee.
+- **Prefer the real thing as the oracle when you can.** Windows quoting is round-tripped against
+  **real** `CreateProcess`/`cmd.exe` output and the systemd/plist/`.cmd` control-character width
+  against real `systemd-analyze verify`, `cmd.exe` and an XML parser. An expected string written by
+  hand only pins what its author believed.
 
 ## Generated scripts
 
