@@ -72,8 +72,10 @@ manager, or restart the harness you are running in to "check" something.
   or an upgrade silently disables it.
 - A panel is a state root: the plugin drives exactly one, discovery names the others, and a call naming
   another asks the user first, then reaches it by editing that panel's config file, running the CLI
-  against its state root, or minting a token and using its API — the three ways `FOREIGN_MECHANISMS`
-  lists per endpoint, least invasive first.
+  against its state root, or minting a token and using its API. Those are **three mechanisms**, and
+  `FOREIGN_MECHANISMS` lists **which apply per endpoint**, least invasive first — two for each
+  `servers.*` endpoint (`file`+`api` for the config ones, `cli`+`api` for lifecycle) and one for
+  `ui.manage` (`cli`). An endpoint that names none cannot be aimed at another panel at all.
 - Desktop (`ctx.get('profileContext')?.name === 'desktop'`) starts its own reserved profile, so the
   harness entry is refused there (`DESKTOP_ENTRY_UNSUPPORTED`) and the page shows it web-only; every
   other server entry is managed exactly as on web.
@@ -147,10 +149,13 @@ manager, or restart the harness you are running in to "check" something.
   which is why upstream's `?tail=` was left alone.
 - **Two copies of one algorithm inside separate generated scripts are real duplication;
   two copies in normal modules are not always.** `launcher.ts` builds two self-contained
-  scripts (a test asserts no relative imports), and of the eight helpers they share only
-  the version comparator's body was byte-identical — so it is now one interpolated
-  fragment, with output verified byte-identical. The other seven genuinely differ and
-  must not be merged. Extract a shared helper only where the copies can diverge.
+  scripts (a test asserts no relative imports). They once shared **eight** helpers of which
+  exactly one — the version comparator — had a byte-identical body, so that one became a
+  single interpolated fragment (`COMPARE_VERSIONS_SOURCE`) with both generated outputs
+  verified byte-identical. After that hoist they share **seven**, and **none** is
+  byte-identical: every remaining one differs on purpose and must not be merged. Extract a
+  shared helper only where the copies can diverge — and re-count after such a change,
+  because the number in this sentence is exactly the kind of claim that goes stale.
 
 - **A component can be driven, not only reasoned about.** `happy-dom` is a devDependency
   and a `// @vitest-environment happy-dom` comment on one file is the whole setup; with

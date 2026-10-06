@@ -13,20 +13,30 @@ globally. An operator's `homeHostedCommand` always wins — that is an instructi
 
 The range is stated twice and both must agree: `dependencies['home-hosted']` in `package.json` and
 `EXPECTED_RANGE` in `resolve.ts` (what the page offers to install, and warns about when a global copy
-is older). Bumping one alone makes the page recommend a range the plugin is not built against. A bump
+is older). Bumping one alone makes the page recommend a range the plugin is not built against.
+`test/resolve` now **enforces** that agreement — it was a rule the docs stated and nothing checked,
+so setting the manifest to `^0.7.99` while the constant stayed `^0.7.3` failed nothing until the
+guard existed. The same file asserts `MIN_SUPPORTED_VERSION` lies inside the advertised range, since a
+floor above it would advertise a copy the plugin then refuses. A bump
 is therefore those two plus the version-coupled tests — *unless* the release moved something this
 plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/settings`, or a CLI
 subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them; neither
 did 0.7.3 (DNS-01 through the panel's own DNS accounts, and a Namecheap API provider); and neither
 did 0.7.4 through 0.7.17.
 
-Re-checked again after 0.7.17, when several releases' worth of work had landed on `src/api/logs.ts`,
-`src/providers/log-tail.ts`, `src/services/proxy.ts` and `src/helpers/daemon-log.ts`. **None of it
-reaches this plugin**, and the check is by *use*, not by filename: the plugin never calls the panel's
-`/api/logs`, never declares `logHistoryQuerySchema`, and never reads `providers/log-tail`. It reads
-the console **file** itself (`.hh/.logs/home-hosted.log`, plus `.1`), so the only thing that could
-move under it is that path and the 5 MB/`.1` rotation — both unchanged (`daemon-log.ts`'s edits were a
-refactor plus window widening, and `paths.ts`'s `daemonLogPath` is byte-identical).
+Re-checked after 0.7.17 — twice, because 35 commits landed unreleased on top of it and the second
+pass found surfaces the first had not looked at. Work has since gone into `src/api/logs.ts`,
+`src/providers/log-tail.ts`, `src/services/proxy.ts`, `src/helpers/daemon-log.ts`, and **four
+commits to `src/cli/logs.ts`** (`4d9cccc` `logs --lines` semantics, `04af855` `--follow --json`,
+`09eb6da` and `979cbdb` an unreadable log's wording). **None of it reaches this plugin**, and the
+check is by *use*, not by filename: the plugin never calls the `logs` command at all, never calls the
+panel's `/api/logs`, never declares `logHistoryQuerySchema`, and never reads `providers/log-tail`.
+
+What it *does* depend on is the console **file** — `.hh/.logs/home-hosted.log`, plus `.1` — and the
+5 MB rotation, so those are the things that could move under it. Verified unchanged across that
+range: `paths.ts`'s `daemonLogPath` is byte-identical, and none of the four `logs` commits touched
+`paths.ts` or `daemon-log.ts`'s `LOG_ROTATE_BYTES`. (Its own `parseLines` guard — `/^[+-]?\d+$/` plus
+`Number.isSafeInteger` — is the same rule this plugin's `panel_logs` tool applies, so the two agree.)
 
 An earlier version of this paragraph said `src/shared/contracts.ts` "was not touched at all" between
 0.7.3 and 0.7.17. That is no longer true, and the wording was the weak part: `a7700ab` (unreleased

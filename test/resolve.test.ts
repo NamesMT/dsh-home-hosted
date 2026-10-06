@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   binEntryFromManifest,
   compareVersions,
+  EXPECTED_RANGE,
+  MIN_SUPPORTED_VERSION,
   parseVersion,
   pinnedManifestPath,
   resolveCli,
 } from '../src/home-hosted/resolve.js'
+import { fileURLToPath } from 'node:url'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
 
@@ -205,5 +208,29 @@ describe('CLI preference', () => {
     })
     expect(resolution.status.source).toBe('path')
     expect(resolution.status.dependency).toBeNull()
+  })
+})
+
+/**
+ * `docs/PANEL.md` states that the supported range "is stated twice and both must agree:
+ * `dependencies['home-hosted']` in `package.json` and `EXPECTED_RANGE` in `resolve.ts`"
+ * — and that bumping one alone makes the page recommend a range the plugin is not built
+ * against. That was **unenforced**: setting the manifest to `^0.7.99` while
+ * `EXPECTED_RANGE` stayed `^0.7.3` failed nothing. This makes the documented rule a
+ * checked one, reading the manifest as data rather than restating the string.
+ */
+describe('the pinned range is stated in two places and they agree', () => {
+  const manifestPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
+
+  it('matches the range the plugin advertises', () => {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { dependencies?: Record<string, string> }
+    expect(manifest.dependencies?.['home-hosted'], 'package.json must pin home-hosted').toBe(EXPECTED_RANGE)
+  })
+
+  it('keeps the oldest supported release inside that range', () => {
+    // `MIN_SUPPORTED_VERSION` is the floor the plugin relies on, so it has to be a
+    // version the range actually admits — a floor *above* the range would advertise a
+    // copy the plugin then refuses.
+    expect(compareVersions(MIN_SUPPORTED_VERSION, EXPECTED_RANGE.replace(/^[^0-9]*/, ''))).toBeLessThanOrEqual(0)
   })
 })
