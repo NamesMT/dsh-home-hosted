@@ -6,6 +6,7 @@
  * through a shell profile.
  */
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 
 export interface RunOptions {
   cwd?: string
@@ -73,13 +74,25 @@ export async function run(command: string, args: string[] = [], options: RunOpti
       child.kill('SIGKILL')
     }, timeoutMs)
 
+    /**
+     * Decoded through a `StringDecoder`, not `chunk.toString('utf8')` per chunk.
+     *
+     * A pipe's chunks split on its own boundaries, not on character ones, so a multi-byte
+     * character straddling two chunks decoded as two replacement characters — measured with a
+     * child that writes one byte into a three-byte character and flushes: **three U+FFFD** and
+     * the character gone. That corrupts the output `unknownCommand` and every error message
+     * read, which is why this is not cosmetic. A `StringDecoder` holds an incomplete sequence
+     * until the bytes that finish it arrive.
+     */
+    const outDecoder = new StringDecoder('utf8')
+    const errDecoder = new StringDecoder('utf8')
     child.stdout?.on('data', (chunk: Buffer) => {
       if (stdout.length < maxBytes)
-        stdout += chunk.toString('utf8').slice(0, maxBytes - stdout.length)
+        stdout = (stdout + outDecoder.write(chunk)).slice(0, maxBytes)
     })
     child.stderr?.on('data', (chunk: Buffer) => {
       if (stderr.length < maxBytes)
-        stderr += chunk.toString('utf8').slice(0, maxBytes - stderr.length)
+        stderr = (stderr + errDecoder.write(chunk)).slice(0, maxBytes)
     })
 
     child.on('error', (error) => {
@@ -87,6 +100,10 @@ export async function run(command: string, args: string[] = [], options: RunOpti
       finish({ error: error.message })
     })
     child.on('close', (code, signal) => {
+      // Any bytes the decoder is still holding are an incomplete sequence at EOF; flushing
+      // emits them rather than dropping them silently.
+      stdout = (stdout + outDecoder.end()).slice(0, maxBytes)
+      stderr = (stderr + errDecoder.end()).slice(0, maxBytes)
       clearTimeout(timer)
       finish({ code, signal })
     })
