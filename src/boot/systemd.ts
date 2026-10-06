@@ -166,7 +166,6 @@ interface UnitProbe {
   unitFileState: string
   activeState: string
   result: string
-  nRestarts: string
   enabled: boolean
   installed: boolean
   reachable: boolean
@@ -193,7 +192,6 @@ async function readUnit(ctx: BootProviderContext, unit: string, scope: Scope): P
     unitFileState,
     activeState: props.ActiveState ?? '',
     result,
-    nRestarts: props.NRestarts ?? '',
     enabled,
     installed,
     reachable: show.error === undefined || show.error === null,

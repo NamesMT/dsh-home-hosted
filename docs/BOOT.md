@@ -200,6 +200,13 @@ LaunchAgent loads at login, not at boot", "this needs root here, so the plugin s
 shows the sudo commands"). Those sentences come from `BootCandidate.reason`, which the host already
 computed for every mechanism, available or not.
 
+Because `auto` is not a mechanism but "let the host decide", the page also names what that decision
+would be: `BootStatus.recommended` is the host's own `recommend()` answer, and `install()` falls through
+to it when nothing is installed (`pickOf(mechanism ?? before.mechanism ?? before.recommended)`). So
+"Automatic" says which mechanism the next install would use, instead of leaving a person to install it
+and read the result. The sentence is only shown while nothing is installed under that mechanism, and it
+is absent — never "undefined" — when an older panel does not send the field.
+
 The `Details` block describes the mechanism that is actually **installed**, which is a different one
 while a switch is pending, so both it and the picker read one shared lookup rather than each formatting
 the name their own way.

@@ -37,8 +37,29 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
   // different one while a switch is pending, and previously unnamed there entirely.
   const reasonFor = (mechanism: string): string | null =>
     candidates.find(candidate => candidate.mechanism === mechanism)?.reason ?? null
-  const mechanismNote = autostart.mechanism === 'auto'
+  /**
+   * `auto` is not a mechanism, it is "let the host decide" — and the host decides with
+   * `recommend()`, whose answer it already sends as `BootStatus.recommended` and which
+   * `install()` resolves to when nothing is installed (`pickOf(mechanism ?? before.mechanism
+   * ?? before.recommended)`). So the page can name the mechanism Automatic will install
+   * instead of leaving a person to install it and read the result. It is only the *next*
+   * install this predicts, which is why the wording stays a prediction.
+   */
+  // `!== boot.mechanism` also covers an older payload that omits the key entirely: a
+  // response field is optional and read defensively here (the page is bundled separately
+  // from the host, so a new page can meet a panel that never sent `recommended`). Reading
+  // it as a plain string is what produced the literal "would use undefined" when that
+  // field was absent, which is why the check is on the value being a non-empty string.
+  const autoTarget = typeof boot.recommended === 'string'
+    && boot.recommended.length > 0
+    && boot.recommended !== boot.mechanism
+    ? boot.recommended
+    : null
+  const autoNote = autoTarget === null
     ? t('bootMechanismAutoHint')
+    : `${t('bootMechanismAutoHint')} ${t('bootMechanismAutoPicks', { mechanism: autoTarget })}`
+  const mechanismNote = autostart.mechanism === 'auto'
+    ? autoNote
     : reasonFor(autostart.mechanism)
   const installedNote = boot.mechanism === null ? null : reasonFor(boot.mechanism)
   const installed = boot.mechanism !== null

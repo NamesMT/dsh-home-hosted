@@ -94,6 +94,25 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A choice the host can already resolve should not be left to the reader to guess.**
+  `autostart.mechanism: 'auto'` is not a mechanism, it is "let the host decide", and the host
+  decides with `recommend()` — whose answer it already sends as `BootStatus.recommended` and
+  which `install()` falls through to (`pickOf(mechanism ?? before.mechanism ??
+  before.recommended)`). The page showed the mechanism *installed* but never the one
+  Automatic *would* install. It names it now, while nothing is installed under it, so a
+  person is not left to install and read the result.
+- **Read a new response field as a value, not as a key.** The `recommended` sentence read
+  the field into a template and rendered the literal `"would use undefined"` against a
+  panel that omits it — which is a real case, because the page is bundled separately from
+  the host. Check `typeof value === 'string' && length > 0` and fall back to the plain
+  hint; the same guard covers an explicit `null`.
+- **A parsed-but-unread field is worth deleting.** `systemd.ts`'s `UnitProbe.nRestarts` was
+  assigned from `systemctl show` and never read by anything (the `detail` string interpolates
+  `props.NRestarts` directly, so removing it changes nothing). It is gone. Note the
+  distinction from a *field shown unparsed*: `NRestarts=7` and `Result=oom-kill` do reach a
+  person through `boot.detail`, so the vocabulary is visible even where the parsed copy was
+  unused.
+
 - **`isRecord` is one shared predicate now, and it was eight private definitions in eight
   files** (seven byte-identical, plus one that accepted an array).
   `src/shared/contracts.ts` exports the plain-object narrowing every untyped boundary uses;

@@ -109,6 +109,61 @@ describe('the mechanism a person picked explains itself', () => {
     expect(text).toContain('systemd is not the init system here')
   })
 
+  /**
+   * `auto` is not a mechanism, it is "let the host decide" — and the host decides with
+   * `recommend()`, whose answer travels as `BootStatus.recommended` and which `install()`
+   * resolves to when nothing is installed. So the page can name what Automatic would
+   * install, rather than leaving a person to install it and read the result.
+   */
+  it('names the mechanism Automatic would install', () => {
+    const next = withCandidates('auto')
+    next.boot.recommended = 'systemd-system'
+    // Nothing installed: this is the state where `install()` falls through to the
+    // recommendation, which is exactly what the sentence predicts.
+    next.boot.mechanism = null
+    next.boot.state = 'not-installed'
+    const text = mount(next).textContent ?? ''
+    expect(text).toContain('The next install would use systemd-system')
+  })
+
+  it('does not promise a mechanism that is already installed', () => {
+    // Nothing to predict once the recommendation *is* what runs: saying it would
+    // install what is already there is noise, and the switch warning covers the rest.
+    const next = withCandidates('auto')
+    next.boot.recommended = 'systemd-system'
+    next.boot.mechanism = 'systemd-system'
+    const text = mount(next).textContent ?? ''
+    expect(text).not.toContain('The next install would use')
+  })
+
+  /**
+   * The page is bundled separately from the host, so a new page can meet a panel that
+   * never sent `recommended` — the repo's rule for response fields. Reading it into a
+   * sentence produced the literal string "would use undefined", so the check is on the
+   * value rather than on the key being present.
+   */
+  it('says nothing rather than "undefined" when the field is absent', () => {
+    for (const missing of [undefined, null, '']) {
+      const next = withCandidates('auto')
+      next.boot.mechanism = null
+      next.boot.state = 'not-installed'
+      next.boot.recommended = missing as never
+      const text = mount(next).textContent ?? ''
+      expect(text).not.toContain('undefined')
+      expect(text).not.toContain('The next install would use')
+      // The plain hint is still there, so the picker is never left unexplained.
+      expect(text).toContain('what this machine can actually use')
+    }
+  })
+
+  it('keeps the plain hint when the host recommended nothing', () => {
+    const next = withCandidates('auto')
+    next.boot.recommended = null
+    const text = mount(next).textContent ?? ''
+    expect(text).toContain('what this machine can actually use')
+    expect(text).not.toContain('The next install would use')
+  })
+
   it('explains `auto` too, which has no candidate behind it', () => {
     const text = mount(withCandidates('auto')).textContent ?? ''
     expect(text).toContain('what this machine can actually use')
