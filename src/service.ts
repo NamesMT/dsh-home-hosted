@@ -135,6 +135,15 @@ export interface HomeHostedServiceOptions {
   settings: SettingsStore
   /** Test seam: run the home-hosted CLI without spawning it. */
   execCli?: (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
+  /**
+   * Test seam: the version the generated launcher answers, without running it.
+   *
+   * `preflightLauncher` spawns the real CLI, which loads the whole panel graph (~500 ms)
+   * just to print a version — so a test that stubs `execCli` still paid for it, once per
+   * `status()`. The preflight asks a real question (does the launcher the boot entry runs
+   * actually work?), so production keeps running it; tests answer it directly.
+   */
+  preflight?: (stateDir: string) => Promise<string | null>
   /** Test seam: supply the boot ladder instead of probing the real OS. */
   createLadder?: () => BootLadderLike
   /** Test seam: hand the panel to an autostart entry without spawning a helper. */
@@ -519,7 +528,7 @@ export class HomeHostedService extends Service {
         pluginRoot: pluginRoot(),
         minVersion: MIN_SUPPORTED_VERSION,
       }).path
-      launcherVersion = await preflightLauncher(this.options.stateDir)
+      launcherVersion = await (this.options.preflight ?? preflightLauncher)(this.options.stateDir)
     }
     this.cliCache = { prefer, resolution, launcher, launcherVersion, until: Date.now() + 60_000 }
     return this.cliCache

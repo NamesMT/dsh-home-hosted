@@ -93,6 +93,8 @@ async function harness(options: {
   projectDir?: string
   /** The dsh surface this process runs in; defaults to `web`. */
   surface?: 'web' | 'desktop'
+  /** Replaces the launcher preflight, which otherwise spawns the real CLI. */
+  preflight?: (stateDir: string) => Promise<string | null>
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -133,6 +135,10 @@ async function harness(options: {
     homeDir: scratch.path,
     settings,
     createLadder: () => options.ladder ?? ladder,
+    // Stubbed, exactly as `execCli` is: the real preflight spawns the CLI and loads the
+    // whole panel graph to print a version. `launcherVersion: null` is the honest default
+    // here — no launcher was run — and the warning path has its own test.
+    preflight: options.preflight ?? (async () => null),
     spawnActivation: options.spawnActivation ?? (() => ({ ok: true, detail: 'handed over' })),
     resolveDsh: options.resolveDsh,
     projectDir: options.projectDir,
@@ -156,6 +162,30 @@ async function withPanel(harnessOptions: { acceptAnyToken?: boolean } = {}): Pro
   panels.push(panel)
   return panel
 }
+
+/**
+ * The launcher preflight, which spawns the real CLI — that loads the whole panel graph
+ * (~500 ms) to print a version — so it is stubbed for the suite and asserted here.
+ *
+ * The cost was paid on every `status()`, because a fresh service per test always misses the
+ * 60 s cache; the page polls `status()` every 5 s and hits the same cache, so production
+ * pays it once a minute. Measured: `test/service.test.ts` 26.4 s -> 4.1 s.
+ */
+describe('the launcher preflight', () => {
+  it('reports the version the launcher answered, and nothing when it could not answer', async () => {
+    // `cli` is optional in the DTO (an older panel may not carry it), so assert it is there
+    // before reading through it.
+    const answered = await harness({ preflight: async () => '0.7.3' })
+    expect((await answered.service.status()).cli?.launcherVersion).toBe('0.7.3')
+
+    // `null` is what the page turns into "the launcher did not answer" — the case a person
+    // whose boot entry is broken needs to see.
+    const refused = await harness({ preflight: async () => null })
+    const status = await refused.service.status()
+    expect(status.cli?.launcherVersion).toBeNull()
+    expect(status.cli?.launcherPath).not.toBeNull()
+  })
+})
 
 describe('home-hosted service', () => {
   it('reports a stopped panel and a missing entry without pretending otherwise', async () => {
