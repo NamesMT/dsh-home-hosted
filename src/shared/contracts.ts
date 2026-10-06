@@ -19,34 +19,44 @@ export interface RpcError {
 
 export type Envelope<T> = { ok: true, value: T } | { ok: false, error: RpcError }
 
-/** Endpoints the browser and the agent tools both speak. */
-export type RpcEndpoint =
-  | 'status'
-  | 'servers.list'
-  | 'workspaces.list'
-  | 'panel.migrate'
-  | 'servers.get'
-  | 'servers.create'
-  | 'servers.update'
-  | 'servers.delete'
-  | 'servers.start'
-  | 'servers.stop'
-  | 'servers.restart'
-  | 'servers.freePort'
-  | 'entries.apply'
-  | 'entries.remove'
-  | 'entries.restore'
-  | 'boot.install'
-  | 'boot.uninstall'
-  | 'boot.verify'
-  | 'panel.start'
-  | 'panel.stop'
-  | 'panel.takeover'
-  | 'panel.reclaimToken'
-  | 'panel.console'
-  | 'cli.installGlobal'
-  | 'ui.manage'
-  | 'settings.update'
+/**
+ * Endpoints the browser and the agent tools both speak.
+ *
+ * The list is the source and the type is derived from it, for the reason the mechanism list
+ * records: `readonly RpcEndpoint[]` would force every *entry* to be valid without requiring that
+ * every member is present, so adding a member could leave the list behind and refuse a live
+ * endpoint. One consumer reads it: the refusal that names what would be accepted.
+ */
+export const RPC_ENDPOINT_NAMES = [
+  'status',
+  'servers.list',
+  'workspaces.list',
+  'panel.migrate',
+  'servers.get',
+  'servers.create',
+  'servers.update',
+  'servers.delete',
+  'servers.start',
+  'servers.stop',
+  'servers.restart',
+  'servers.freePort',
+  'entries.apply',
+  'entries.remove',
+  'entries.restore',
+  'boot.install',
+  'boot.uninstall',
+  'boot.verify',
+  'panel.start',
+  'panel.stop',
+  'panel.takeover',
+  'panel.reclaimToken',
+  'panel.console',
+  'cli.installGlobal',
+  'ui.manage',
+  'settings.update',
+] as const
+
+export type RpcEndpoint = (typeof RPC_ENDPOINT_NAMES)[number]
 
 /** A settings write sends only the changed subtree; the host merges group by group. */
 /** The workspace every panel has, and the one this plugin manages. */

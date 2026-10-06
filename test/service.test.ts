@@ -804,6 +804,12 @@ describe('home-hosted service', () => {
   it('rejects an unknown endpoint and an invalid entry id', async () => {
     const { service } = await harness()
     await expect(service.call('nope' as never, {})).rejects.toMatchObject({ code: 'UNKNOWN_ENDPOINT' })
+    // And a near miss names the endpoint probably meant, so a reader does not have to consult
+    // the source. `nope` is far from everything, so it stays silent — a wrong hint would be
+    // worse than none.
+    await expect(service.call('servers.lst' as never, {}))
+      .rejects.toThrow(/unknown endpoint "servers\.lst"; did you mean "servers\.list"\?/)
+    await expect(service.call('nope' as never, {})).rejects.toThrow(/^unknown endpoint "nope"$/)
     await expect(service.call('entries.apply', { intents: [{ id: 'BAD ID', autostart: true }] })).rejects.toMatchObject({ code: 'INVALID_ID' })
   })
 

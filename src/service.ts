@@ -12,7 +12,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import type { BootInstallResult, BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
-import { BOOT_MECHANISM_NAMES, FOREIGN_MECHANISMS, isBootMechanismName, isOnPortConflict, isRecord, isWorkspaceId, ON_PORT_CONFLICT_POLICIES } from './shared/contracts.js'
+import { BOOT_MECHANISM_NAMES, FOREIGN_MECHANISMS, isBootMechanismName, isOnPortConflict, isRecord, isWorkspaceId, ON_PORT_CONFLICT_POLICIES, RPC_ENDPOINT_NAMES } from './shared/contracts.js'
 import type { BootActivation, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
@@ -39,6 +39,7 @@ import type { SettingsStore } from './settings.js'
 import { bootUnitName, dshHome } from './util/paths.js'
 import type { RunResult } from './util/exec.js'
 import { run } from './util/exec.js'
+import { suggestName } from './util/suggest.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
 
 const ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
@@ -1834,6 +1835,8 @@ export class HomeHostedService extends Service {
 
   async call(endpoint: RpcEndpoint, payload: unknown): Promise<unknown> {
     const input = (payload ?? {}) as Record<string, unknown>
+    const suggestion = suggestName(String(endpoint), RPC_ENDPOINT_NAMES)
+    const meant = suggestion === null ? '' : `; did you mean "${suggestion}"?`
     // A target names a panel; an endpoint with no way to reach another one must
     // refuse it rather than quietly act somewhere else.
     if (typeof input.home === 'string' && input.home.trim().length > 0 && FOREIGN_MECHANISMS[endpoint] === undefined) {
@@ -2046,7 +2049,10 @@ export class HomeHostedService extends Service {
         return await this.installGlobalCli()
 
       default:
-        throw new HomeHostedError(`unknown endpoint "${String(endpoint)}"`, 'UNKNOWN_ENDPOINT')
+        // The valid names are in hand, so the refusal can name the one probably meant. It stays
+        // silent when nothing is close — a wrong hint sends a reader somewhere that cannot be
+        // what they wanted, which is worse than making them consult the list.
+        throw new HomeHostedError(`unknown endpoint "${String(endpoint)}"${meant}`, 'UNKNOWN_ENDPOINT')
     }
   }
 }
