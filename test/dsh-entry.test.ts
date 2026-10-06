@@ -445,4 +445,33 @@ describe('repairing an entry that boots a clone directly', () => {
     expect(needsLauncherRepair({ command: '/opt/bin/dsh', args: ['web'] })).toBe(true)
     expect(needsLauncherRepair({})).toBe(false)
   })
+
+  /**
+   * "A bare name PATH decides" means a different thing on each platform, and the two branches
+   * of `isBareCommand` used to apply **opposite** case rules — `stored === 'dsh'`
+   * case-sensitive, the `.cmd`/`.exe` one `/i` — so each platform had one branch using the
+   * other's rule. On Windows `where.exe` resolves `DSH` to `dsh`, so the case-sensitive branch
+   * was a **false negative**: the row was never repaired and kept booting whatever it had.
+   *
+   * Both directions: the Windows answer is fixed, and the POSIX answers are exactly what they
+   * were, including `DSH.CMD` — a Windows shim name stays bare there, since it is still a name
+   * PATH might answer for and narrowing it would trade a false negative for a false positive.
+   */
+  it('applies each platform\'s case rule, changing nothing on POSIX', () => {
+    const posix = { command: 'dsh', args: ['web'] }
+    // Windows: case does not distinguish these.
+    for (const command of ['dsh', 'DSH', 'Dsh', 'dsh.cmd', 'DSH.CMD', 'dsh.EXE'])
+      expect(needsLauncherRepair({ ...posix, command }, 'win32'), command).toBe(true)
+    // POSIX: only the exact plain name, and the shim names as written.
+    expect(needsLauncherRepair({ ...posix, command: 'dsh' }, 'linux')).toBe(true)
+    expect(needsLauncherRepair({ ...posix, command: 'dsh.cmd' }, 'linux')).toBe(true)
+    expect(needsLauncherRepair({ ...posix, command: 'DSH.CMD' }, 'linux')).toBe(true)
+    expect(needsLauncherRepair({ ...posix, command: 'DSH' }, 'linux')).toBe(false)
+    expect(needsLauncherRepair({ ...posix, command: 'Dsh' }, 'linux')).toBe(false)
+    // Neither platform treats an unrelated name or a path as bare.
+    for (const platform of ['linux', 'win32'] as const) {
+      expect(needsLauncherRepair({ ...posix, command: 'hh' }, platform), platform).toBe(false)
+      expect(needsLauncherRepair({ command: '/opt/bin/dsh', args: [] }, platform)).toBe(true)
+    }
+  })
 })

@@ -377,11 +377,29 @@ export function pinnedScriptFor(launch: DshLaunch | null, projectDir?: string | 
   return entry
 }
 
-/** Whether a stored command is a bare name PATH decides, not a path we know. */
-function isBareCommand(stored: string): boolean {
-  return !/[/\\]/.test(stored) && (stored === 'dsh' || /^dsh\.(?:cmd|exe)$/i.test(stored))
+/**
+ * Whether a stored command is a bare name PATH decides, not a path we know.
+ *
+ * The two branches here used to apply **opposite case rules** — `stored === 'dsh'`
+ * case-sensitive and the `.cmd`/`.exe` one `/i` — so each platform had one branch using the
+ * other's rule. `.cmd` and `.exe` are Windows shim names and stay case-insensitive everywhere,
+ * which is what the `/i` was for; the **plain** name is the one that has to follow the platform,
+ * because `which` on POSIX and `where.exe` on Windows disagree about it: on Windows `DSH` is the
+ * same command and the row went unrepaired, a false negative.
+ *
+ * A wrong answer is not cosmetic — `needsLauncherRepair` uses it to decide whether to resolve a
+ * row at all, and `launcherRepair` uses it to decide which arguments are dropped.
+ */
+function isBareCommand(stored: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (/[/\\]/.test(stored))
+    return false
+  const lower = stored.toLowerCase()
+  const shim = lower === 'dsh.cmd' || lower === 'dsh.exe'
+  return shim || (platform === 'win32' ? lower === 'dsh' : stored === 'dsh')
 }
 
+
+/** The shim names a row may carry as a bare command. */
 /**
  * Whether an entry *could* need that repair, without resolving anything.
  *
@@ -391,13 +409,13 @@ function isBareCommand(stored: string): boolean {
  * and a full comparison in `launcherRepair`, which is what decides whether
  * anything is actually rewritten.
  */
-export function needsLauncherRepair(config: { command?: string, args?: string[] }): boolean {
+export function needsLauncherRepair(config: { command?: string, args?: string[] }, platform: NodeJS.Platform = process.platform): boolean {
   const program = config.command
   if (typeof program !== 'string' || program.length === 0)
     return false
   if (path.isAbsolute(program))
     return true
-  if (isBareCommand(program))
+  if (isBareCommand(program, platform))
     return true
   return (config.args ?? []).some(arg => path.isAbsolute(arg))
 }
@@ -409,6 +427,8 @@ export interface LauncherRepairOptions {
    * rather than respected as somebody's choice.
    */
   ownedCommand?: boolean
+  /** Which platform's PATH is being asked; the same one `needsLauncherRepair` used. */
+  platform?: NodeJS.Platform
 }
 
 /**
@@ -434,7 +454,7 @@ export function launcherRepair(
   // Two different questions: what the row should run (`targetBare`), and where
   // the old command kept its script (only a non-bare command inlined one).
   const targetBare = pinned === 'dsh'
-  const storedBare = isBareCommand(entryScript(config) ?? '')
+  const storedBare = isBareCommand(entryScript(config) ?? '', options.platform ?? process.platform)
   const stored = entryScript(config)
   if (stored === null)
     return null
