@@ -164,6 +164,27 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## Control flow that branches on text
+
+- **A branch on a message is a branch on wording.** `stopNoteFor` checked
+  `envelope.error.code === 'client'` to tell "the stop is still in progress" from "the stop was
+  refused". `rpc()` catches its own fetch rejection and returns `failure('network', …)` — it
+  never throws — so **a dropped transport never produces `client`**: the branch was unreachable
+  and a person stopping the panel saw *"The panel did not stop: Failed to fetch"*, the exact
+  false claim the function's comment says it exists to avoid. `client` comes only from
+  `page.tsx`'s `run()` catch. The check names the codes with meaning now (`network`, `no-fetch`,
+  `client`) rather than the one we guessed. **The test passed `failed('client', …)`** — a code
+  `rpc` cannot emit — so code and test agreed on a fiction; it drives the real codes now.
+- **A substring match on a CLI's refusal is matched by position.** `unknownCommand` gates the
+  stop+start degradation, and an unanchored `unknown command:` also fired on a genuine failure
+  that *quotes an entry id* (`no server "unknown command: x" exists` — the id arrives
+  unvalidated as `String(input.id)`). A false positive there runs stop+start on an entry that
+  was never the problem. The three real shapes are anchored where they stand, including the
+  `error ` prefix `fail()` adds.
+- **Keep a marker of control-flow meaning out of the wire shape.** The codes above stay in the
+  `Envelope`, which is what they are for; when a marker is only for internal branching, a
+  symbol or a set keeps it from reaching a client that would render it.
+
 ## A validator that decides by texture
 
 The signature: a check on the **shape** of a value that has a canonical form with many
