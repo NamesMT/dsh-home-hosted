@@ -19,6 +19,7 @@ import {
   ServersSection,
   updatePayload,
 } from '../../src/client/section-servers.js'
+import { scopedSelection } from '../../src/client/section-servers.js'
 import { WorkspacesSection } from '../../src/client/section-workspaces.js'
 import type { HomeHostedStatus, ManagedEntryStatus, ServerEntryView, WorkspaceSummary } from '../../src/shared/contracts.js'
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js'
@@ -180,6 +181,40 @@ describe('the servers section follows the viewed workspace', () => {
     }))
     expect(markup).toContain('PANEL_UNAVAILABLE')
     expect(markup).toContain('no panel is running')
+  })
+})
+
+/**
+ * The section is **not remounted** when the viewed workspace changes — the page
+ * re-renders it with a new `workspace` prop and no `key` — so its own state outlives
+ * the context that gave it meaning. A server id is only unique *inside* a workspace
+ * (the invariant `busyKey` already encodes for the in-flight key), so a selection made
+ * in workspace A used to stay live in B: with a same-named entry there the editor
+ * re-bound to it, and saving wrote A's values over B's.
+ *
+ * The fix is at the **state**, not the display: each selection carries the workspace it
+ * was made in, so a foreign one is inert rather than merely hidden.
+ */
+describe('a contextual selection goes inert when the workspace changes', () => {
+  it('reads a selection made in another workspace as nothing', () => {
+    const madeInA = { workspace: 'a', value: 'web' }
+    expect(scopedSelection('a', madeInA)).toBe('web')
+    expect(scopedSelection('b', madeInA)).toBeNull()
+  })
+
+  it('treats "nothing selected" as nothing, in every workspace', () => {
+    expect(scopedSelection('a', null)).toBeNull()
+    expect(scopedSelection('b', null)).toBeNull()
+  })
+
+  /**
+   * The state carries the context, so a future reader cannot pick up a foreign value:
+   * clearing a separate flag would leave the stale value itself reachable.
+   */
+  it('keeps the context on the value, so no reader can see a foreign one', () => {
+    const selection = { workspace: 'a', value: 'web' }
+    expect(selection).toHaveProperty('workspace', 'a')
+    expect(scopedSelection('b', selection)).toBeNull()
   })
 })
 

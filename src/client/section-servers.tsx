@@ -36,6 +36,31 @@ function busyKey(workspace: string, action: string, id: string): string {
   return `${action}:${workspace}/${id}`
 }
 
+/** A contextual selection: the workspace it was made in, and what it names. */
+export interface ScopedSelection<T> {
+  workspace: string
+  value: T
+}
+
+/**
+ * Read a contextual selection, or `null` when the context has moved on.
+ *
+ * This section is **not remounted** when the viewed workspace changes, so its own
+ * state outlives the context that gave it meaning — and a server id is only unique
+ * *inside* a workspace, the same invariant `busyKey` above encodes for the in-flight
+ * key. Without this, picking a server in workspace A and switching to B left the
+ * editor, the delete confirmation and the free-port note describing A's server: with
+ * a same-named entry in B they re-bound to it, and a save would have written A's
+ * values over B's (`patchFromDraft` returns a full patch of the stale draft).
+ *
+ * Stamping each selection with its workspace makes a stale one **inert** rather than
+ * merely cleared: the value itself carries which context it belongs to, so no future
+ * reader — a copy button, a title attribute, a test — can observe a foreign value.
+ */
+export function scopedSelection<T>(workspace: string, selection: ScopedSelection<T> | null): T | null {
+  return selection !== null && selection.workspace === workspace ? selection.value : null
+}
+
 /** The three lifecycle buttons, identical in both styles. */
 function ServerActions({ t, workspace, server, run, busy, offline, onEdit, onDelete, onFreePort }: {
   t: ServersSectionProps['t']
@@ -109,10 +134,18 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
       : [],
   )
   const [creating, setCreating] = useState(false)
-  const [editing, setEditing] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  const [freeing, setFreeing] = useState<string | null>(null)
-  const [freeNote, setFreeNote] = useState<string | null>(null)
+  // Each of these names a server in *this* workspace, so each carries the workspace it
+  // was made in — see `scopedSelection`.
+  const [editing, setEditing] = useState<ScopedSelection<string> | null>(null)
+  const [deleting, setDeleting] = useState<ScopedSelection<string> | null>(null)
+  const [freeing, setFreeing] = useState<ScopedSelection<string> | null>(null)
+  const [freeNote, setFreeNote] = useState<ScopedSelection<string> | null>(null)
+
+  // Inert in any other workspace: the workspace switch is a re-render, not a remount.
+  const editingId = scopedSelection(workspace, editing)
+  const deletingId = scopedSelection(workspace, deleting)
+  const freeingId = scopedSelection(workspace, freeing)
+  const freeNoteText = scopedSelection(workspace, freeNote)
 
   const openCreate = (): void => {
     setCreating(true)
@@ -123,7 +156,7 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
 
   const openEdit = (id: string): void => {
     setCreating(false)
-    setEditing(id)
+    setEditing({ workspace, value: id })
     setDeleting(null)
     setFreeing(null)
   }
@@ -161,23 +194,24 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
     const envelope = await run(busyKey(workspace, 'servers.freePort', server.id), () =>
       rpc('servers.freePort', lifecyclePayload(workspace, server.id)))
     if (!envelope.ok) {
-      setFreeNote(t('serversPortRefused', { message: envelope.error.message }))
+      setFreeNote({ workspace, value: t('serversPortRefused', { message: envelope.error.message }) })
       return
     }
     const value = envelope.value as FreePortResult | null
     const port = value?.port ?? server.config.port ?? EMPTY
     if (value?.free === true) {
-      setFreeNote(t('serversPortFreed', { port }))
+      setFreeNote({ workspace, value: t('serversPortFreed', { port }) })
       return
     }
-    setFreeNote(
-      value?.skipped !== undefined && value.skipped.length > 0
+    setFreeNote({
+      workspace,
+      value: value?.skipped !== undefined && value.skipped.length > 0
         ? t('serversPortSkipped')
         : t('serversPortHeld', { port }),
-    )
+    })
   }
 
-  const freeTarget = freeing === null ? null : servers.find(server => server.id === freeing) ?? null
+  const freeTarget = freeingId === null ? null : servers.find(server => server.id === freeingId) ?? null
 
   return (
     <Section
@@ -252,7 +286,7 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
             </Note>
           )}
 
-      {freeNote === null ? null : <Hint>{freeNote}</Hint>}
+      {freeNoteText === null ? null : <Hint>{freeNoteText}</Hint>}
 
       {servers.length === 0
         ? <Hint>{t('serversEmpty')}</Hint>
@@ -261,7 +295,7 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
               {servers.map((server) => {
                 const running = server.status === 'running'
                 const config = server.config
-                const editor = editing === server.id
+                const editor = editingId === server.id
                   ? (
                       <EntryEditor
                         key={`edit:${server.id}`}
@@ -276,7 +310,7 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
                       />
                     )
                   : null
-                const confirmation = deleting === server.id
+                const confirmation = deletingId === server.id
                   ? (
                       <Note tone="warn" title={t('serversDeleteTitle', { id: server.id })}>
                         <p>{t('serversDeleteBody', { workspace })}</p>
@@ -302,8 +336,8 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
                     busy={busy}
                     offline={offline}
                     onEdit={() => openEdit(server.id)}
-                    onDelete={() => { setDeleting(server.id); setEditing(null); setCreating(false) }}
-                    onFreePort={() => { setFreeing(server.id); setEditing(null); setCreating(false) }}
+                    onDelete={() => { setDeleting({ workspace, value: server.id }); setEditing(null); setCreating(false) }}
+                    onFreePort={() => { setFreeing({ workspace, value: server.id }); setEditing(null); setCreating(false) }}
                   />
                 )
 

@@ -11,6 +11,13 @@ settings, secrets, logs and nanny state under `.hh/<workspace>/`, while the list
 vitals, backups, UI and `run.json` stay at `.hh/`. A server id is therefore only unique *inside* a
 workspace, and every call has to say which one it means.
 
+The same rule reaches the page. The servers section is not remounted when the viewed workspace
+changes, so anything it holds about a server has to carry the workspace it was made in — otherwise an
+editor or a confirmation opened on workspace A's `web` stays live under workspace B and re-binds to
+*B's* `web`. The displayed list is replaced on switch, so the ids simply stop matching; the plugin's
+own in-flight keys (`busyKey`) already included the workspace, and the section's local selections now
+do too.
+
 The plugin manages exactly one workspace — **the panel's `default`**, fixed — because its intent (the
 `dsh` entry, snapshots, reconcile) is a promise about one entry in one place. Making that a setting
 bought nothing but a way to write into the wrong workspace, so it is a constant. The page and the agent

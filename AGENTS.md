@@ -92,6 +92,22 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **UI state that outlives the context that gave it meaning.** `ServersSection` is not
+  remounted when the viewed workspace changes (no `key` on it), so its own state
+  survives — and `editing`/`deleting`/`freeing`/`freeNote` were keyed by bare server
+  id, which the repo's own rule says is **only unique inside a workspace**. Picking a
+  server in workspace A and switching to B left the editor, the delete confirmation and
+  the free-port note describing A's server; with a same-named entry in B they re-bound
+  to it, and a save wrote A's values over B's. Fixed at the **state**, not the display:
+  each selection is stamped with the workspace it was made in (`scopedSelection`), so a
+  foreign one is inert and no future reader can observe it. Clearing a separate flag
+  would have left the stale value itself reachable — prefer the state fix over hiding
+  the symptom, and do not keep both. `busyKey` already encoded this same invariant for
+  in-flight keys; the local state was the part that missed it.
+- **The codebase's own pattern for this is `visibleBootAttempt`**: a fresh attempt is
+  shown only while its `state` and `mechanism` still match the live ones. Copy that
+  shape for any new contextual value rather than adding a "clear it on change" effect.
+
 - **`Number.parseInt` takes a *prefix*, so a partly numeric argument becomes a number
   nobody asked for.** `1e3` → 1, `12abc` → 12, and `0x10` → **0**, which is the "whole
   log" sentinel in the console reader — a bounded request silently became an unbounded
