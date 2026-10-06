@@ -160,6 +160,49 @@ describe('systemd --user', () => {
     }
   })
 
+  /**
+   * Where a boot-run panel's output actually goes.
+   *
+   * The unit sets no `StandardOutput=`, so systemd's default applies and the output lands
+   * in the **journal** — not the panel's own console (`<home>/.hh/.logs/home-hosted.log`,
+   * what `panel_logs` reads). Naming only the unit file left someone whose entry failed with
+   * a plist path and no way to reach the evidence. Verified here against this machine's own
+   * `home-hosted.service`, which both forms read.
+   *
+   * Gated on the unit being installed: pointing at a journal for a unit that was never
+   * installed sends someone to a command that finds nothing.
+   */
+  it('names the journal command once the unit is installed, and not before', async () => {
+    const runnerFor = (enabled: boolean) => fakeRun((command, args) => {
+      // `show` answers the properties; `is-enabled` exits 4 for a unit that is not there.
+      if (command === 'systemctl' && args.includes('show'))
+        return { code: 0, stdout: enabled ? 'UnitFileState=enabled\nActiveState=active\nResult=success\nNRestarts=0\n' : '' }
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return enabled ? { code: 0, stdout: 'enabled\n' } : { code: 4, stderr: 'Unit home-hosted.service could not be found.' }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=yes\n' }
+      return { code: 0, stdout: '' }
+    })
+
+    // ABSENT: its own home, because the shared one holds a unit file from an earlier
+    // install test — and a hint tested against a directory that is not really empty is
+    // how the absent case fails for the wrong reason.
+    const empty = tempHome()
+    try {
+      const absent = await createSystemdUserProvider(ctxFor({ home: empty, run: runnerFor(false).run })).status(spec())
+      expect(absent.state).toBe('not-installed')
+      expect(absent.detail).not.toContain('journalctl')
+    }
+    finally {
+      cleanup(empty)
+    }
+
+    // PRESENT: the user-scope form, with the unit name the hint must name.
+    const present = await createSystemdUserProvider(ctxFor({ home, run: runnerFor(true).run })).status(spec())
+    expect(present.detail).toContain('journalctl --user -u home-hosted.service')
+    expect(present.unitPath).toBeTruthy()
+  })
+
   it('installs, reloads and enables, then re-reads the state', async () => {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-enabled'))

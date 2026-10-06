@@ -191,6 +191,25 @@ fallback gets a command that works.
 Enabling and switching differ only in the retirement: a switch already has an entry keeping the panel
 alive, so its plan carries the old mechanism's removal.
 
+## Where the entry's own output goes
+
+A boot-run panel's output does **not** go to the panel's own console
+(`<home>/.hh/.logs/home-hosted.log`, which `panel_logs` reads and `docs/PANEL.md` describes).
+Each mechanism sends it somewhere different, and the status line now names where:
+
+| mechanism | where the output goes |
+| --- | --- |
+| `systemd-user` / `systemd-system` | the journal — the unit sets no `StandardOutput=`, so the detail names `journalctl --user -u <unit>` or `journalctl -u <unit>` |
+| `launchd-agent` / `launchd-daemon` | `<logDir>/<label>.out.log` and `<label>.err.log`, the two paths the generated plist carries |
+| `xdg-autostart` | nowhere persistent: a `.desktop` entry with `Terminal=false` has its output discarded by the session |
+| `windows-run` / `windows-task` | nowhere persistent either |
+
+So the hint appears only where a file or a query actually exists — and only once the entry is
+installed, because naming a log for an entry that was never written sends someone to a
+command that finds nothing. The launchd paths come from one computation
+(`launchdLogPaths`), shared with the plist builder, so the plist and the status line cannot
+name different files.
+
 ## What counts as "failing"
 
 A unit's state comes from `systemctl show -p Result`. The value is compared against systemd's own

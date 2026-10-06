@@ -94,6 +94,25 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **Naming the artifact is not naming where its output went, and the two files are
+  different.** A boot-run panel writes to a *different* place from the panel's own console
+  (`<home>/.hh/.logs/home-hosted.log`, which `panel_logs` reads): `launchd` is told to write
+  `<logDir>/<label>.out.log` and `.err.log` — and nothing reported those, so a person whose
+  macOS entry failed had a plist path and no way to reach the evidence. `systemd` sets no
+  `StandardOutput=`, so its output is in the **journal** and the detail now names
+  `journalctl --user -u <unit>` (both scope forms were run against this machine's own
+  `home-hosted.service`). `launchdLogPaths` is one computation shared by the plist builder
+  and the status line, so the plist and the message cannot name different files.
+- **A hint that can be wrong is worse than no hint.** All of these are gated on the entry
+  actually being installed: an absent unit means no journal was written and no plist exists,
+  so naming a path there sends someone to a file that is not there. Pinned in both states,
+  and the absent state needs **its own home** — asserted against a shared directory holding a
+  unit file from an earlier test makes the absent case pass or fail for the wrong reason.
+- **`xdg-autostart` and the Windows mechanisms have no output to name**, deliberately: a
+  `.desktop` entry with `Terminal=false` has its output discarded by the session, and a Run
+  value or scheduled task captures none either. Saying nothing is the honest answer there, not
+  a gap to fill.
+
 - **A rule that matches a tool's text must be tested against the tool's real text, and
   against the stream it actually reads.** Six rules here classify by reading output, and all
   six are sound — but for a reason two of them do not show. The `Register-ScheduledTask`

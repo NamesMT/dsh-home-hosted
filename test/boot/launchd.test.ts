@@ -170,6 +170,42 @@ describe('launchd agent', () => {
     expect(status.unitPath).toBe(plistPath)
   })
 
+  /**
+   * A boot-run panel's output does **not** go to the panel's own console
+   * (`<home>/.hh/.logs/home-hosted.log`, what `panel_logs` reads). launchd is told to write
+   * it to `<logDir>/<label>.out.log` and `.err.log` instead, so a person whose entry failed
+   * had a plist path and no way to find the evidence. Both files are named now — and only
+   * once the plist exists, because naming a pattern for logs never written sends someone
+   * looking for a file that is not there.
+   */
+  it('names the two log files launchd was told to write, and only once installed', async () => {
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[1] === 'gui/1000')
+        return { code: 0 }
+      return { code: 113 }
+    })
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+
+    // ABSENT: no plist, so launchd was never told where to write. Nothing is promised —
+    // this is the direction that would send someone hunting a file that does not exist.
+    const absent = await provider.status(agentSpec)
+    expect(absent.state).toBe('not-installed')
+    expect(absent.detail).not.toContain('.out.log')
+    expect(absent.detail).not.toContain('.err.log')
+
+    // PRESENT: the plist is there and the paths are named.
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true })
+    fs.writeFileSync(plistPath, launchdPlist(agentSpec))
+    const present = await provider.status(agentSpec)
+    expect(present.state).toBe('enabled-running')
+    expect(present.detail).toContain(path.join(logDir, `${LABEL}.out.log`))
+    expect(present.detail).toContain(path.join(logDir, `${LABEL}.err.log`))
+    // And they are the ones the plist itself carries, from one computation.
+    const plist = fs.readFileSync(plistPath, 'utf8')
+    expect(plist).toContain(`<string>${path.join(logDir, `${LABEL}.out.log`)}</string>`)
+    expect(plist).toContain(`<string>${path.join(logDir, `${LABEL}.err.log`)}</string>`)
+  })
+
   it('tolerates bootout exit 3 and removes the plist', async () => {
     fs.mkdirSync(path.dirname(plistPath), { recursive: true })
     fs.writeFileSync(plistPath, launchdPlist(agentSpec))

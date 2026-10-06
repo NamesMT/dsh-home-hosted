@@ -59,6 +59,22 @@ export function launchdLabel(spec: BootSpec): string {
   return `${LAUNCHD_LABEL_PREFIX}${assertUnitName(spec.unitName)}`
 }
 
+/**
+ * Where launchd is told to put this job's output: `<logDir>/<label>.out.log` and `.err.log`.
+ *
+ * One computation, because two readers need it: the plist builder writes these into
+ * `StandardOutPath`/`StandardErrorPath`, and the status line names them so a person whose
+ * boot entry failed has somewhere to look. They are **not** the panel's own console
+ * (`<home>/.hh/.logs/home-hosted.log`, what `panel_logs` reads) — a boot-run panel's output
+ * goes here instead, which is exactly the file nobody could name.
+ */
+export function launchdLogPaths(spec: BootSpec, label = launchdLabel(spec)): { out: string, err: string } {
+  return {
+    out: path.posix.join(spec.logDir, `${label}.out.log`),
+    err: path.posix.join(spec.logDir, `${label}.err.log`),
+  }
+}
+
 /** The full property list. The marker rides in an XML comment, which launchd ignores. */
 export interface LaunchdPlistOptions {
   /** Set for a LaunchDaemon: launchd would otherwise run the panel as root. */
@@ -72,8 +88,7 @@ export function launchdPlist(spec: BootSpec, options: LaunchdPlistOptions = {}):
   // also has to be a name launchd can resolve — so it is validated, not escaped.
   const named = options.userName?.trim()
   const userName = named === undefined || named.length === 0 ? undefined : assertUserName(named)
-  const out = path.posix.join(spec.logDir, `${label}.out.log`)
-  const err = path.posix.join(spec.logDir, `${label}.err.log`)
+  const { out, err } = launchdLogPaths(spec, label)
   const envKeys = Object.keys(spec.env)
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -228,8 +243,13 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         const domain = await domainOf()
         if (!own.owned)
           return { state: 'not-installed', unitPath: file, detail: `no plist at ${file}`, commands: [] }
-        if (domain === null)
-          return { state: 'enabled-running', unitPath: file, detail: `${file} is present; launchd has no reachable domain for uid ${uidOf(ctx) ?? '?'}, so it loads at the next login`, commands: [] }
+        // The two `enabled-running` paths below are reached only with `own.owned` true,
+        // i.e. the plist is there and launchd was told where to write; the paths are named
+        // only from that point on.
+        if (domain === null) {
+          const { out, err } = launchdLogPaths(spec, label)
+          return { state: 'enabled-running', unitPath: file, detail: `${file} is present; launchd has no reachable domain for uid ${uidOf(ctx) ?? '?'}, so it loads at the next login; its output goes to ${out} and ${err}`, commands: [] }
+        }
         const probe = await ctx.run('launchctl', ['print', `${domain}/${label}`])
         const loaded = codeOf(probe) === 0
         // `enabled-running` even when launchd has not loaded it yet: `RunAtLoad`
@@ -237,10 +257,12 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
         // line carries the distinction. The state only labels the page —
         // `isInstalledState` accepts it either way, so a handover is unaffected.
         const state: BootState = bootState(true, true, false)
+        const { out, err } = launchdLogPaths(spec, label)
         return {
           state,
           unitPath: file,
-          detail: `${file} is present; ${loaded ? `loaded in ${domain}` : `not loaded right now (RunAtLoad loads it at the next login)`}`,
+          detail: `${file} is present; ${loaded ? `loaded in ${domain}` : `not loaded right now (RunAtLoad loads it at the next login)`}`
+            + `; its output goes to ${out} and ${err}`,
           commands: [],
         }
       }

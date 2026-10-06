@@ -43,6 +43,21 @@ const FAILED_RESULTS = new Set(['failed', 'exit-code', 'signal', 'timeout', 'cor
 
 type Scope = 'user' | 'system'
 
+/**
+ * Where a boot-run panel's output goes, as a command a person can run.
+ *
+ * The unit sets no `StandardOutput=`, so systemd's default applies and the output lands in
+ * the **journal** — not the panel's own console (`<home>/.hh/.logs/home-hosted.log`, what
+ * `panel_logs` reads). Naming only the unit file left someone whose entry failed with a path
+ * to the plist and no way to reach the evidence, so the scope names the command. Both forms
+ * were run here against this machine's own `home-hosted.service`.
+ */
+function journalHint(unit: string, scope: Scope): string {
+  return scope === 'user'
+    ? `its output is in the journal: \`journalctl --user -u ${unit}\``
+    : `its output is in the journal: \`journalctl -u ${unit}\``
+}
+
 function validate(spec: BootSpec): void {
   assertUnitName(spec.unitName)
   assertMarker(spec.marker)
@@ -270,6 +285,9 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
         if (!linger && user)
           commands.push(shellCommand('sudo', ['loginctl', 'enable-linger', user]))
         const detail = `${probe.detail}; ${linger ? 'linger is on (boot-capable)' : 'linger is off (login-scoped)'}`
+          // Only once the unit is there: pointing at a journal for a unit that was never
+          // installed sends someone to an empty log and a command that finds nothing.
+          + (installed ? `; ${journalHint(unit, 'user')}` : '')
         return { state, unitPath: file, detail, commands }
       }
       catch (error) {
@@ -507,7 +525,8 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
         return {
           state,
           unitPath: file,
-          detail: `${probe.detail}${privileged ? '' : '; needs root to change'}${accountNote(own, ctx)}`,
+          detail: `${probe.detail}${privileged ? '' : '; needs root to change'}${accountNote(own, ctx)}`
+            + (installed ? `; ${journalHint(unit, 'system')}` : ''),
           commands,
         }
       }
