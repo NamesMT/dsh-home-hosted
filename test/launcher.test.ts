@@ -274,6 +274,39 @@ function pinnedHarness(): { state: string, dshHome: string, clone: string, globa
   }
 }
 
+/**
+ * `src/util/exec.ts` states a security property in its header: "Every call is an argv array
+ * with no shell, so a path or a value can never become a command." That rests on the
+ * `shell: false` passed to `spawn`, which is the runtime's behaviour, not this code's — and
+ * nothing asserted it with a value that would exploit a shell.
+ *
+ * Driven through the real seam with a metacharacter argument, and the payload is a file
+ * write the test then checks for: if the shell were involved, `/bin/sh -c` would run
+ * `touch` and the file would exist.
+ */
+describe('the no-shell guarantee in the process seam', () => {
+  it('passes a shell metacharacter through as literal argv', async () => {
+    const dir = tempDir()
+    try {
+      const proof = path.join(dir.path, 'PWNED')
+      const result = await run('/bin/echo', [`a; touch ${proof} ; b`])
+      // The text arrived verbatim, as one argument...
+      expect(result.stdout).toContain(`a; touch ${proof} ; b`)
+      // ...and nothing ran it.
+      expect(fs.existsSync(proof)).toBe(false)
+    }
+    finally {
+      dir.cleanup()
+    }
+  })
+
+  it('does not expand a command substitution or a glob the shell would', async () => {
+    const result = await run('/bin/echo', ['$(id)', '`id`', '*'])
+    expect(result.stdout.trim()).toBe('$(id) `id` *')
+    expect(result.stdout).not.toMatch(/uid=/)
+  })
+})
+
 describe('dsh launcher', () => {
   it('writes an executable script and records the entry it resolved', () => {
     const h = dshHarness()
