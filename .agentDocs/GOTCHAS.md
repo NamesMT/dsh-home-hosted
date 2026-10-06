@@ -164,6 +164,31 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## Guard strength, not guard presence
+
+A list can be "covered" and still let a member vanish. **Measure by removing one member and reading
+the error count and the files**, because the answer depends on *which* member:
+
+| list | errors per member removed | source |
+| --- | --- | --- |
+| `AGENT_TOOL_NAMES` | 4–30 | every one has production errors (3–7) |
+| `RPC_ENDPOINT_NAMES` | 1–24 | every one has production errors (1–7) |
+| `BOOT_MECHANISM_NAMES` | 3–42 | every one has production errors (3–5) |
+| `ON_PORT_CONFLICT_POLICIES` | `block` 6, `warn` **0**, `follow` 10, `reclaim` 2, `kill` 9 | `warn` has none |
+
+- **A count is not a property of the list — it is a property of the member.** Two people reported
+  "9" and "2" for the same list and both were right: `kill` and `reclaim`.
+- **Zero is the one that matters**, not a low number. `warn` had *no* guard in either direction, and
+  nothing catches it because **no behaviour differs per policy** — so a `Record<OnPortConflict, …>`
+  would be invented rather than honest.
+- **The panel's own published schema is the authority for a copied enum.** `panelPortConflictPolicies()`
+  reads `onPortConflictSchema = type.enumerated(…)` from the pinned dependency's sourcemap, the same
+  technique `panelEntryFields` uses, and throws if the extraction finds too few entries so a failed
+  regex cannot make the assertion vacuous.
+- **A stub's `Record<string, unknown>` makes every literal there invisible.** The three
+  `onPortConflict: 'warn'` uses in `service.test.ts` look like coverage and catch nothing, because
+  `StubServerRecord.config` is untyped. A guard of test literals in an untyped fixture is no guard.
+
 ## A list that must stay in step with a type
 
 The pattern: **the list is the source and the type is derived** (`type X = (typeof LIST)[number]`).
