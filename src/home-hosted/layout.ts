@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { DEFAULT_WORKSPACE, isRecord } from '../shared/contracts.js'
+import { DEFAULT_WORKSPACE, isRecord, isWorkspaceId } from '../shared/contracts.js'
 
 export { DEFAULT_WORKSPACE }
 
@@ -36,7 +36,18 @@ export function runFile(home: string): string {
   return path.join(hhDir(home), 'run.json')
 }
 
+/**
+ * One workspace's directory under the state root.
+ *
+ * The id is asserted here because this is the **single** place it becomes a path segment, and
+ * that is what makes the two entry points agree: `callWorkspace` validates an id arriving over
+ * the RPC, while a foreign panel's id arrives from a `workspaces.json` read off disk. Guarding
+ * only the first left the second able to name `../../etc`. The panel's own schema is
+ * `^[a-z0-9][a-z0-9_-]*$`, so nothing legitimate is refused.
+ */
 export function workspaceDir(home: string, workspace: string): string {
+  if (!isWorkspaceId(workspace))
+    throw new Error(`workspace id ${JSON.stringify(workspace)} must match ^[a-z0-9][a-z0-9_-]*$`)
   return path.join(hhDir(home), workspace)
 }
 
@@ -90,6 +101,12 @@ export function readWorkspaces(home: string): WorkspacesRead {
   for (const entry of list) {
     if (!isRecord(entry) || typeof entry.id !== 'string' || entry.id.length === 0)
       return { workspaces: [], error: `${path.relative(home, file)} has an entry without an id` }
+    // An id becomes a **path segment** (`workspaceDir` joins it under `.hh/`), so it has to be
+    // the shape the panel itself writes — a registry is a file on disk, and one edited by hand
+    // or written by something else could otherwise name `../../etc` and send a later write
+    // outside the state root.
+    if (!isWorkspaceId(entry.id))
+      return { workspaces: [], error: `${path.relative(home, file)} has an id that is not a valid workspace id (${JSON.stringify(entry.id)})` }
     workspaces.push({ id: entry.id, label: typeof entry.label === 'string' && entry.label.length > 0 ? entry.label : entry.id })
   }
   return { workspaces, error: null }

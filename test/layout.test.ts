@@ -62,6 +62,53 @@ describe('the workspace registry', () => {
     expect(readWorkspaces(home())).toEqual({ workspaces: [], error: null })
   })
 
+  /**
+   * A registry id becomes a **path segment** — `workspaceDir` joins it under `.hh/` — and
+   * `readWorkspaces` accepted any non-empty string. `defaultWorkspace` then returned it, so a
+   * `workspaces.json` naming `../../etc` sent `serversFile` outside the state root, and the
+   * foreign-panel write path (`createForeign`/`updateForeign`/`deleteForeign`) writes through
+   * exactly that. The panel's own schema is `^[a-z0-9][a-z0-9_-]*$` (the same
+   * `WORKSPACE_ID_PATTERN` this repo uses), so a registry carrying anything else is not one
+   * the panel would ever have written.
+   */
+  /**
+   * The single point where a workspace id becomes a path. Guarding the *entry points* alone
+   * leaves a gap whenever a new one appears — a foreign panel's id comes from a file on disk,
+   * not from `callWorkspace` — so the builder refuses too, and both agree.
+   */
+  it('refuses to turn an invalid workspace id into a path at all', () => {
+    const root = home()
+    for (const id of ['..', '../x', 'a/b', 'UPPER', '', 'a b']) {
+      expect(() => workspaceDir(root, id), `${JSON.stringify(id)} must be refused`).toThrow(/must match/)
+      expect(() => serversFile(root, id)).toThrow(/must match/)
+    }
+    for (const id of ['default', 'my-ws_2'])
+      expect(workspaceDir(root, id)).toBe(path.join(root, '.hh', id))
+  })
+
+  it('refuses a registry id that could escape the state root', () => {
+    for (const id of ['../../../../tmp/escaped', '..', '.', 'a/../b', 'a/b', 'UPPER', '-lead', 'a b', 'a.b']) {
+      const root = makeHhHome(home(), { workspaces: [{ id, label: id }] })
+      const read = readWorkspaces(root)
+      // `error` is `string | null`, and a bug that lets the id through yields `null` — so
+      // assert the shape first, or a failure prints "expected object, got object".
+      expect(typeof read.error, `${JSON.stringify(id)} must be refused`).toBe('string')
+      expect(read.error).toMatch(/not a valid workspace id/)
+      expect(read.workspaces).toEqual([])
+      // And nothing downstream can name a path outside the root.
+      expect(defaultWorkspace(root)).toBe(DEFAULT_WORKSPACE)
+      expect(serversFile(root, defaultWorkspace(root)).startsWith(path.join(root, '.hh'))).toBe(true)
+    }
+  })
+
+  it('still accepts every id shape the panel itself writes', () => {
+    for (const id of ['default', 'a', 'my-ws', 'my_ws', 'ws2', 'a1-b2_c3']) {
+      const root = makeHhHome(home(), { workspaces: [{ id, label: id }] })
+      expect(readWorkspaces(root), `${JSON.stringify(id)} must be accepted`).toEqual({ workspaces: [{ id, label: id }], error: null })
+      expect(defaultWorkspace(root)).toBe(id)
+    }
+  })
+
   it('reads an empty list as not-started-yet', () => {
     const root = makeHhHome(home(), { workspaces: [] })
     expect(readWorkspaces(root)).toEqual({ workspaces: [], error: null })
