@@ -164,6 +164,27 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A documented reason with no test
+
+Delete the structure in your head — does any test fail? A comment that explains *why* something
+exists is a claim, and the claim is usually about a **count** or an **order**, which an
+outcome-only test cannot see.
+
+- **A cache's window is a count.** `cli()` was covered by nothing — not its 60 s deadline, not
+  its `prefer` key, not its invalidation — so all three were comments. `writtenAt` in the
+  launcher record moves on each recomputation, which is what makes the count observable;
+  `INSTANCES_CACHE_MS` needed a real disk change (a declared root removed) for the same reason.
+  A `>=` assertion passes on the broken code, so assert the stamp **moved** and print the record.
+- **Do not sleep for a window.** `vi.setSystemTime` moves the clock; a real 60 s wait would cost
+  the suite 12x for the same assertion. Restore real timers in `afterEach`, or the *next* test
+  runs in a frozen `Date.now()` — which cost one debugging round here.
+- **An invalidation needs its own seam.** The one promise that could not be pinned at all was
+  `installGlobalCli`'s `cliCache = null`, because `installGlobal` spawns a package manager;
+  without a seam the person installs the `global` copy and the page keeps saying it is missing.
+- **Say when a neighbouring claim IS pinned.** Checking `ENTRY_RECOVERY_INTERVAL_MS` and
+  `commandRepairAt` found both already covered by real counts, so no change there was the result
+  rather than an omission.
+
 ## A comparison narrower than its own comment
 
 The tell is a comment that makes a **checkable promise** — "never", "always", "only", "must
