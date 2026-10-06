@@ -164,6 +164,25 @@ suite still carries POSIX assumptions, so port it before adding a Windows leg.
   being installed: an absent unit means no journal was written and no plist exists, so naming a path
   there sends someone to a file that is not there.
 
+## A doc read in one context, shipped in another
+
+- **A link from a shipped file to a non-shipped one resolves in the repo and 404s for every user.**
+  Compare `package.json#files` against the link's target, and derive the shipped set from the
+  manifest rather than restating it. Here the published `.md` set is 7 files (README + 6 docs) and
+  `AGENTS.md`/`.agentDocs/**` are deliberately outside it — verified with `npm pack --dry-run`
+  (whose file list goes to **stderr**, not stdout).
+- **A checker must be able to fail, and its rule must be right.** A guard that prints breakage and
+  exits 0 guards nothing: inject a break and read the **exit code**, not the output. The other half
+  is worse — a wrong anchor rule reports *working* links as broken. GitHub removes an emoji
+  **without its space**, so `## 🛠 CLI` anchors as `#-cli`, and trimming the hyphen made the first
+  version flag nine working links. The rule is now pinned against headings paired with the anchor a
+  known-working link uses, so the expectation comes from a working link rather than the function
+  under test.
+- **Measure whether a change is warranted.** Before writing anything: all 22 relative links in the
+  shipped docs stay inside the shipped set, every README anchor resolves, no doc quotes a message
+  this session reworded, and no generated artifact bakes in a version. The guard is the change; the
+  docs needed no correction.
+
 ## A documented reason with no test
 
 Delete the structure in your head — does any test fail? A comment that explains *why* something
