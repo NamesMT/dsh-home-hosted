@@ -8,6 +8,8 @@ import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { panelConsolePath } from '../src/home-hosted/panel-console.js'
+import { EXPECTED_RANGE } from '../src/home-hosted/resolve.js'
+import { readLauncherRecord } from '../src/home-hosted/launcher.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
@@ -54,6 +56,9 @@ const panels: StubPanel[] = []
 const savedServerId = process.env.HHOSTED_SERVER_ID
 
 afterEach(async () => {
+  // A test that moved the clock for the cache window restores it here, so a later test is not
+  // running in a frozen `Date.now()`.
+  vi.useRealTimers()
   while (panels.length > 0)
     await panels.pop()!.stop()
   scratch?.cleanup()
@@ -95,6 +100,8 @@ async function harness(options: {
   surface?: 'web' | 'desktop'
   /** Replaces the launcher preflight, which otherwise spawns the real CLI. */
   preflight?: (stateDir: string) => Promise<string | null>
+  /** Replaces the global install, which otherwise spawns a package manager. */
+  installGlobal?: (range: string) => Promise<{ ok: boolean, detail: string, output: string }>
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -139,6 +146,7 @@ async function harness(options: {
     // whole panel graph to print a version. `launcherVersion: null` is the honest default
     // here — no launcher was run — and the warning path has its own test.
     preflight: options.preflight ?? (async () => null),
+    installGlobal: options.installGlobal,
     spawnActivation: options.spawnActivation ?? (() => ({ ok: true, detail: 'handed over' })),
     resolveDsh: options.resolveDsh,
     projectDir: options.projectDir,
@@ -171,6 +179,88 @@ async function withPanel(harnessOptions: { acceptAnyToken?: boolean } = {}): Pro
  * 60 s cache; the page polls `status()` every 5 s and hits the same cache, so production
  * pays it once a minute. Measured: `test/service.test.ts` 26.4 s -> 4.1 s.
  */
+/**
+ * The `cli()` cache, whose window is a **promise about a count** — and was asserted nowhere.
+ *
+ * `writtenAt` in the launcher record is rewritten on every recomputation, so counting distinct
+ * values counts how often `cli()` actually resolved. A test that only checked the *result* is
+ * valid would pass with the cache removed entirely.
+ */
+describe('the cli cache', () => {
+  /** Distinct `writtenAt` values are recomputations; a cache hit writes nothing new. */
+  const stamps = (state: string): number[] => {
+    const record = readLauncherRecord(state)
+    return record === null ? [] : [record.writtenAt]
+  }
+
+  it('resolves once for repeated reads, and stops reusing it once the window passes', async () => {
+    const { service, state } = await harness()
+    // The first read resolves and writes the record.
+    await service.status()
+    const first = readLauncherRecord(state)
+    expect(first, 'the first read must resolve and record').not.toBeNull()
+
+    // Within the window: no new write, so the recorded stamp is unchanged.
+    await service.status()
+    await service.status()
+    expect(readLauncherRecord(state)).toEqual(first)
+
+    // Past the window: a new write, so the stamp moves. The clock is moved, not slept on —
+    // a real 60 s wait would make this file 12x slower for the same assertion.
+    vi.setSystemTime(Date.now() + 60_001)
+    await service.status()
+    const later = readLauncherRecord(state)
+    expect(later).not.toBeNull()
+    expect(later!.writtenAt, 'the window must expire, or a reinstall is never seen').toBeGreaterThan(first!.writtenAt)
+  })
+
+  it('drops the cache when a global install lands, so the new copy is seen at once', async () => {
+    const installs: string[] = []
+    const { service, state } = await harness({
+      installGlobal: async (range) => {
+        installs.push(range)
+        return { ok: true, detail: 'installed', output: '' }
+      },
+    })
+    await service.status()
+    const first = readLauncherRecord(state)
+    expect(first, 'the first read must resolve and record').not.toBeNull()
+
+    await service.installGlobalCli()
+    expect(installs, 'the seam must be the one that ran').toEqual([EXPECTED_RANGE])
+
+    // Within the 60 s window, so only the explicit drop can make this move. Without it the
+    // person installs the `global` copy and the page keeps reporting the old answer.
+    await service.status()
+    const after = readLauncherRecord(state)
+    expect(after, 'the read after installing must also record').not.toBeNull()
+    expect(
+      after!.writtenAt,
+      `installing globally must drop the cache; got the same record twice: ${JSON.stringify(after)}`,
+    ).toBeGreaterThan(first!.writtenAt)
+  })
+
+  it('re-resolves when the preference changes, because the cache is keyed on it', async () => {
+    const { service, state, settings } = await harness()
+    await service.status()
+    const first = readLauncherRecord(state)
+    expect(first, 'the first read must resolve and record').not.toBeNull()
+
+    // A `>=` assertion would pass even when the cache wrongly serves the old answer, so this
+    // asserts the stamp **moved**. Checked while writing it, by printing both records: a
+    // `prefer` change alone does not change which entry resolves in this fixture, which is why
+    // the timestamp is the evidence and the entry path is not.
+    settings.update({ cli: { prefer: 'global' } })
+    await service.status()
+    const after = readLauncherRecord(state)
+    expect(after, 'the second read must also record').not.toBeNull()
+    expect(
+      after!.writtenAt,
+      `a preference change must invalidate the cache; got the same record twice: ${JSON.stringify(after)}`,
+    ).toBeGreaterThan(first!.writtenAt)
+  })
+})
+
 describe('the launcher preflight', () => {
   it('reports the version the launcher answered, and nothing when it could not answer', async () => {
     // `cli` is optional in the DTO (an older panel may not carry it), so assert it is there

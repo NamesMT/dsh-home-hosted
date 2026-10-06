@@ -158,6 +158,8 @@ export interface HomeHostedServiceOptions {
    * actually work?), so production keeps running it; tests answer it directly.
    */
   preflight?: (stateDir: string) => Promise<string | null>
+  /** Test seam: install the pinned CLI globally without spawning a package manager. */
+  installGlobal?: (range: string) => Promise<{ ok: boolean, detail: string, output: string }>
   /** Test seam: supply the boot ladder instead of probing the real OS. */
   createLadder?: () => BootLadderLike
   /** Test seam: hand the panel to an autostart entry without spawning a helper. */
@@ -1555,9 +1557,16 @@ export class HomeHostedService extends Service {
     return spawnTakeover(deps, runtime.pid)
   }
 
-  /** Install the pinned range globally, so the `global` preference has a copy to run. */
+  /**
+   * Install the pinned range globally, so the `global` preference has a copy to run.
+   *
+   * The cache is **dropped** rather than left to expire: it holds the answer for the current
+   * `prefer`, and a `global` install immediately followed by a status read would otherwise
+   * serve a cached "not found" for up to a minute — the person installs the thing and the page
+   * still says it is missing.
+   */
   async installGlobalCli(): Promise<PanelControlResult & { output?: string }> {
-    const result = await installGlobal(EXPECTED_RANGE)
+    const result = await (this.options.installGlobal ?? installGlobal)(EXPECTED_RANGE)
     this.cliCache = null
     return { ok: result.ok, detail: result.detail, output: result.output }
   }
