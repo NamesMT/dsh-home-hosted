@@ -94,6 +94,39 @@ manager, or restart the harness you are running in to "check" something.
 
 ## Gotchas
 
+- **A rule that matches a tool's text must be tested against the tool's real text, and
+  against the stream it actually reads.** Six rules here classify by reading output, and all
+  six are sound — but for a reason two of them do not show. The `Register-ScheduledTask`
+  probe greps `stdout` for the verb, and PowerShell's *absent-cmdlet* error **quotes that
+  verb** (`The term 'Register-ScheduledTask' is not recognized...`) — a false positive that
+  would send the install down the PowerShell path on a Windows without the ScheduledTasks
+  module. It cannot happen because that error goes to **stderr** and `src/util/exec.ts`
+  keeps the streams in separate fields. Pinned in `test/boot/windows` against strings
+  captured from `powershell.exe`, not invented ones; the same test asserts the trap, so
+  nobody "improves" the rule by scanning both streams. `isElevated` reads `True\r\n` and
+  is fine because it trims and anchors.
+- **`FAILED_RESULTS` decides whether a unit reads as failing, and only one of its eight
+  members had coverage.** `oom-kill` is the value an operator most needs read correctly —
+  it is what a container limit or the OOM killer produces — and a unit that died that way
+  reading as merely "disabled" is how someone stops looking. Every member is now asserted,
+  plus the negative direction (`success`, and an empty value, must not read as a failure).
+  Breaking the set either way fails: dropping `oom-kill` and broadening to "any Result" both
+  fail with the specific value named.
+- **The user-bus rule matches a prefix, which is why the real longer string still works.**
+  `systemctl --user` prints
+  `Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and
+  $XDG_RUNTIME_DIR not defined (...)`, while the tests fake the shorter
+  `Failed to connect to user scope bus`. The rule is an `includes`, so both match — but the
+  fakes are where a guessed string would have hidden, so the real one is recorded here. It is
+  also **untranslated in all 53 systemd catalogs on this machine**, checked by reading the
+  `.mo` files, so the English match is not locale-fragile.
+- **The cgroup container-detection branch is neither testable nor the branch that works.**
+  It calls `readText` on the literal `/proc/1/cgroup` with no injection seam, so a test would
+  read the host's real cgroup. Measured instead: a **real Docker container reports `0::/`**,
+  which matches none of its four substrings — `/.dockerenv` fires first and is what actually
+  recognises Docker. The injectable `container=` env branch is tested in both directions in
+  `test/boot/ladder`.
+
 - **A choice the host can already resolve should not be left to the reader to guess.**
   `autostart.mechanism: 'auto'` is not a mechanism, it is "let the host decide", and the host
   decides with `recommend()` — whose answer it already sends as `BootStatus.recommended` and

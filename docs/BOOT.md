@@ -191,6 +191,14 @@ fallback gets a command that works.
 Enabling and switching differ only in the retirement: a switch already has an entry keeping the panel
 alive, so its plan carries the old mechanism's removal.
 
+## What counts as "failing"
+
+A unit's state comes from `systemctl show -p Result`. The value is compared against systemd's own
+failure enum — `failed`, `exit-code`, `signal`, `timeout`, `core-dump`, `watchdog`,
+`start-limit-hit`, `oom-kill` — and anything else, `success` included, is not a failure. `oom-kill`
+is the one worth reading correctly: it is what a container limit or the OOM killer produces, and a
+unit that died that way reading as merely "disabled" is how someone stops looking for it.
+
 ## The page says what a mechanism name means
 
 The picker's values are the identifiers the setting stores — `systemd-system`, `systemd-user`,

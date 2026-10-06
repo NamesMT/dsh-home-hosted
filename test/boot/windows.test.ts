@@ -234,6 +234,21 @@ describe('windows scheduled task', () => {
   function taskRunner(options: TaskMockOptions = {}) {
     const { cmdlet = true, elevated = true, startWith = null, deleteExit = 0 } = options
     let xml = startWith
+    /**
+     * The fixtures below are the **real** shapes, captured from `powershell.exe` on a
+     * Windows host, not invented ones — a guessed string is exactly where a rule that
+     * matches output hides.
+     *
+     * Two details matter and neither is obvious:
+     *
+     * - the present-cmdlet table goes to **stdout** and says `Function`, not `Cmdlet`;
+     * - the absent-cmdlet error *quotes the name being asked for*
+     *   (`The term 'Register-ScheduledTask' is not recognized...`) and goes to **stderr**.
+     *
+     * So the rule would read an absent cmdlet as present *if* the streams were merged or
+     * if it scanned stderr. `src/util/exec.ts` keeps them separate and the rule reads
+     * `stdout` only, which is why it is sound. `windowsTextRules` below pins both facts.
+     */
     const handler: FakeHandler = (command, args) => {
       if (command === 'powershell.exe') {
         const script = args[2] ?? ''
@@ -363,5 +378,43 @@ describe('windows scheduled task', () => {
     expect(result.ok).toBe(true)
     expect(result.changed).toBe(false)
     expect(result.detail).toMatch(/already gone/)
+  })
+})
+
+/**
+ * The two rules that classify by reading PowerShell's **stdout**, against the real
+ * strings.
+ *
+ * Both are sound, and for a reason that is invisible from the rule itself: the text that
+ * would produce a false positive goes to **stderr**. PowerShell reports an absent cmdlet
+ * as `The term 'Register-ScheduledTask' is not recognized...` — which quotes the very name
+ * the rule greps for — but it writes that to stderr, and `src/util/exec.ts` keeps stdout
+ * and stderr in separate fields. A rule that scanned both, or a seam that merged them,
+ * would report a missing cmdlet as available and send the install down the PowerShell path
+ * on a Windows without the ScheduledTasks module.
+ *
+ * Captured from `powershell.exe` on a Windows host, not invented:
+ *   present -> stdout is a table whose Name column holds the verb;
+ *   absent  -> stdout is EMPTY, and stderr holds the quoted-name error.
+ */
+describe('the text rules that read powershell stdout', () => {
+  const presentStdout = '\r\nCommandType     Name                                               Version    Source                                   \r\n-----------     ----                                               -------    ------                                   \r\nFunction        Register-ScheduledTask                             1.0.0.0    ScheduledTasks                           \r\n\r\n\r\n'
+  const absentStdout = ''
+  const absentStderr = 'Get-Command : The term \'Register-ScheduledTask\' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.\r\nAt line:1 char:1\r\n+ Get-Command Register-ScheduledTask\r\n'
+
+  it('finds the cmdlet in the real table and not in the real error', () => {
+    expect(/Register-ScheduledTask/.test(presentStdout)).toBe(true)
+    expect(/Register-ScheduledTask/.test(absentStdout)).toBe(false)
+    // And the trap, asserted so nobody "improves" the rule by scanning both streams:
+    expect(/Register-ScheduledTask/.test(absentStderr)).toBe(true)
+  })
+
+  it('reads the real elevation answer, which arrives CRLF-terminated', () => {
+    // `True\r\n` is what powershell.exe prints; `trim()` plus the `i` flag handle it,
+    // and the rule is anchored so `Trueish` or `NotTrue` would not pass.
+    expect(/^true$/im.test('True\r\n'.trim())).toBe(true)
+    expect(/^true$/im.test('False\r\n'.trim())).toBe(false)
+    expect(/^true$/im.test('NotTrue\r\n'.trim())).toBe(false)
+    expect(/^true$/im.test('Trueish\r\n'.trim())).toBe(false)
   })
 })

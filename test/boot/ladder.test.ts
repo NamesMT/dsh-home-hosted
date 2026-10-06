@@ -129,6 +129,44 @@ describe('ladder selection', () => {
     expect(status.unitPath).toBe('/etc/systemd/system/home-hosted.service')
   })
 
+  /**
+   * Container detection through the `container=` environment marker — the branch that IS
+   * part of the `ctx` seam, and the one a runtime without a marker file relies on.
+   *
+   * The cgroup branch cannot be driven from a test at all: it calls `readText` from
+   * `util/fsx` on the literal path `/proc/1/cgroup`, and neither the path nor the reader is
+   * injectable, so a test would read this machine's real cgroup. That is worth knowing —
+   * the branch is reachable only on a host whose cgroup v1 path happens to mention one of
+   * four substrings, against the real reading a Docker container reports (`0::/`).
+   *
+   * Both directions here: the marker makes a container, and its absence does not.
+   */
+  it('reads the container environment marker, and only when it is set', async () => {
+    const withEnv = (container?: string) => createBootLadder({
+      platform: 'linux',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', UID: '1000', ...(container === undefined ? {} : { container }) },
+      uid: 1000,
+      run: fakeRun(() => ({ code: 4 })).run,
+      sudo: async () => false,
+      // No marker files: the env branch is the one under test.
+      exists: () => false,
+    })
+
+    for (const marker of ['docker', 'podman', '  lxc  ', 'kubepods']) {
+      const status = await withEnv(marker).status(spec())
+      expect(status.recommended, `container=${marker} should read as a container`).toBe('container')
+      expect(status.detail).toMatch(/restart policy/)
+    }
+
+    // Absent, and the whitespace-only value that must not count as a container.
+    for (const marker of [undefined, '', '   ']) {
+      const status = await withEnv(marker).status(spec())
+      expect(status.recommended, `container=${JSON.stringify(marker)} is not a container`).not.toBe('container')
+    }
+  })
+
   it('refuses to install inside a container and points at the restart policy', async () => {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-system-running'))

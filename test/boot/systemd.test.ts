@@ -121,6 +121,45 @@ describe('systemd --user', () => {
     expect(status.commands).toEqual([])
   })
 
+  /**
+   * Every member of the failure set, not just the one that happened to be tested.
+   *
+   * Only `Result=exit-code` had coverage, so seven of the eight values were pinned by
+   * nothing — and `oom-kill` is the one an operator most needs read correctly, because it
+   * is what a container limit or the OOM killer produces. A unit that died that way must
+   * not read as merely "disabled", or the person stops looking.
+   *
+   * The values are systemd's own `Result=` enum. `success` and an unrecognised value are
+   * the negative direction: neither is a failure, and a wrong positive here would send
+   * someone to investigate a unit that is fine.
+   */
+  it('reads every Result that means a failure, and no others', async () => {
+    const failing = ['exit-code', 'signal', 'timeout', 'core-dump', 'watchdog', 'start-limit-hit', 'oom-kill', 'failed']
+    for (const result of failing) {
+      const runner = fakeRun((command) => {
+        if (command === 'systemctl')
+          return { code: 0, stdout: `UnitFileState=enabled\nActiveState=failed\nResult=${result}\nNRestarts=1\n` }
+        if (command === 'loginctl')
+          return { code: 0, stdout: 'Linger=yes\n' }
+        return { code: 0, stdout: 'enabled\n' }
+      })
+      const status = await createSystemdUserProvider(ctxFor({ home, run: runner.run })).status(spec())
+      expect(status.state, `Result=${result} is a failure`).toBe('enabled-failing')
+    }
+
+    for (const result of ['success', '']) {
+      const runner = fakeRun((command) => {
+        if (command === 'systemctl')
+          return { code: 0, stdout: `UnitFileState=enabled\nActiveState=active\nResult=${result}\nNRestarts=0\n` }
+        if (command === 'loginctl')
+          return { code: 0, stdout: 'Linger=yes\n' }
+        return { code: 0, stdout: 'enabled\n' }
+      })
+      const status = await createSystemdUserProvider(ctxFor({ home, run: runner.run })).status(spec())
+      expect(status.state, `Result=${JSON.stringify(result)} is not a failure`).toBe('enabled-running')
+    }
+  })
+
   it('installs, reloads and enables, then re-reads the state', async () => {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-enabled'))
