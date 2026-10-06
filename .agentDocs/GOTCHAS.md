@@ -174,7 +174,9 @@ Take the literal example the comment gives and run it.
   is "a name PATH decides", and PATH decides case differently per platform: `which` on POSIX is
   case-sensitive, `where.exe` on Windows is not. `stored === 'dsh'` was case-sensitive while the
   `.cmd`/`.exe` branch was `/i`, so each platform had one branch using the other's rule — and on
-  Windows `DSH` is the same command, so the row was never repaired. **Narrow the condition, do
+  Windows `DSH` is the same command, so the row was never repaired. **Measured** with the real
+  tool: `where.exe CMD.EXE`, `where.exe cmd.exe` and `where.exe Cmd.Exe` all answer
+  `C:\Windows\System32\cmd.exe`. **Narrow the condition, do
   not delete the fallback**: `.cmd`/`.exe` stay case-insensitive on both platforms because they
   are Windows shim names and each is still a name PATH might answer for. A first attempt that
   made the whole comparison platform-aware turned POSIX `DSH.CMD` true→false, trading one
