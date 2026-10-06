@@ -104,7 +104,16 @@ function readWhole(file: string): ReadResult {
   }
 }
 
-/** One backward read's size. Grows only when a request needs more lines than it held. */
+/**
+ * One backward read's size, fixed.
+ *
+ * The comment here used to say it "grows only when a request needs more lines than it held",
+ * which was never true of this constant — it is a `const`, assigned once, and read only inside
+ * the loop's `Math.max`. What grows is the **loop**: it keeps taking another block backwards
+ * until it has `limit + 1` separators or reaches byte 0, so a request for more lines than one
+ * block holds still succeeds. Measured: a 3-line request over an 8 MB, three-newline console
+ * returns 3 lines, having read back to the start.
+ */
 const TAIL_BLOCK_BYTES = 64 * 1024
 
 /** Line separators in one block, counted in place rather than by splitting it. */

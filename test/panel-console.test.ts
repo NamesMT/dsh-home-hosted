@@ -75,6 +75,23 @@ describe('the panel console', () => {
     expect(readPanelConsole(root, { lines: 0 }).lines.join('\n')).toContain('日')
   })
 
+  /**
+   * The **loop** grows, not the block — and the comment on `TAIL_BLOCK_BYTES` claimed the
+   * opposite ("grows only when a request needs more lines than it held"), which was never true
+   * of a `const`. Pinned by reading a request that one block cannot satisfy: a file with far
+   * more bytes than blocks and almost no separators, where the loop must walk back to byte 0.
+   */
+  it('reads further back than one block when a request needs more lines than it holds', () => {
+    const root = home()
+    const block = 64 * 1024
+    // Eight blocks of bytes, with its separators at the end: they cannot be reached without
+    // reading well past the first block, which is what makes this pin the *loop*'s growth.
+    writeConsole(root, `${'x'.repeat(block * 8)}\nshort-a\nshort-b\n`)
+    expect(readPanelConsole(root, { lines: 2 }).lines).toEqual(['short-a', 'short-b'])
+    // The long first line is reachable too, so the bound dropped nothing.
+    expect(readPanelConsole(root, { lines: 3 }).lines[0]).toHaveLength(block * 8)
+  })
+
   it('reads across a rotation, oldest first', () => {
     // One rotation is all the panel keeps (`rotateLog`), and the interesting part of a
     // crash is usually the end of the file that just rotated away.
