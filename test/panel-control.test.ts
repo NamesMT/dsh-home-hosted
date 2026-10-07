@@ -107,10 +107,9 @@ describe('panel control', () => {
     expect(source).toContain(`"${path.join(d.stateDir, 'bin', 'panel-takeover.log')}"`)
     expect(source).not.toMatch(/from '\.\.?\//)
     expect(source).toContain('up')
-    // Stop the panel the supported way first, then escalate.
+    // Stop the panel the supported way, through the CLI's own `down`.
     expect(source).toContain('DOWN_ARGS')
     expect(source).toContain('"down"')
-    expect(source.indexOf('SIGTERM')).toBeLessThan(source.indexOf('SIGKILL'))
   })
 
   it('writes the helper executable', () => {
@@ -209,14 +208,36 @@ describe('the activation helper', () => {
     expect(source.indexOf('for (const step of STEPS)')).toBeLessThan(source.indexOf('for (const step of RETIRE)'))
   })
 
-  it('stops the panel itself before any start step, and names the pid to wait on', () => {
+  it('stops the panel itself before any start step, and names the pid it must not signal', () => {
     const source = buildActivationSource(plan)
     // The stop always precedes the start: home-hosted refuses a second panel
     // while run.json names a live pid.
     expect(source.indexOf('stopping the answering panel')).toBeLessThan(source.indexOf('for (const step of STEPS)'))
     expect(source).toContain(JSON.stringify(plan.stop))
     expect(source).toContain('const OLD_PID = 4242')
-    expect(source.indexOf('SIGTERM')).toBeLessThan(source.indexOf('SIGKILL'))
+  })
+
+  /**
+   * Neither generated helper may signal the recorded pid, and this is the guard for that.
+   *
+   * A pid is not an identity: the OS recycles pids, so the number in `run.json` may belong to an
+   * unrelated process, and these helpers have no birth time to tell them apart. They used to
+   * escalate SIGTERM→SIGKILL on "the pid answers" — **measured** by running the generated
+   * activation script against a live `sleep` that had "inherited" the pid: it sent both signals to
+   * a process that was never the panel. home-hosted's own `down` is the one component allowed to
+   * signal, because it can prove identity from `startedAt`; since 0.7.20 it refuses to signal a
+   * recycled pid for exactly this reason, so re-deriving the escalation here was a second, weaker
+   * copy of that decision.
+   */
+  it('never signals the recorded pid, leaving every signal to the CLI\'s down', () => {
+    const { deps: d } = deps()
+    for (const source of [buildActivationSource(plan), buildTakeoverSource(d, 4242)]) {
+      // A signal would need a literal; the prose may still name them, so assert on the code.
+      expect(source).not.toMatch(/['"]SIG(?:TERM|KILL)['"]/)
+      // The existence probe is the only `process.kill` left, and it never signals.
+      expect(source.match(/process\.kill\(/g)).toHaveLength(1)
+      expect(source).toContain('process.kill(pid, 0)')
+    }
   })
 
   it('is written executable', () => {
