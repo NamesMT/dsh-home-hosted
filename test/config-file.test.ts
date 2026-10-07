@@ -213,6 +213,44 @@ describe('config file fallback', () => {
     expect((cleared.control?.auth as Record<string, unknown>)).toEqual({ enabled: true })
   })
 
+  /**
+   * A top-level `null` **removes** the key, exactly as a nested one does.
+   *
+   * Measured against a real 0.7.19 panel: `PATCH {port:null}` deletes `port` from the file, and
+   * the panel's own `applyPatch` gained the top-level branch in 0.7.18 (`fix(patch): an explicit
+   * null cleared a key inside a group but not at the top level`). This side wrote the literal
+   * `null` through instead, so the two paths disagreed — and the panel *refused to boot* the
+   * result (`servers[0] ("smoke"): cwd must be a string (was null)`). Every top-level key is
+   * therefore cleared, `port` and `bootstrap` included: their schema admits `null`, but the
+   * panel's patch deletes the key rather than storing it, and absent reads as "none" either way.
+   */
+  it('removes a top-level key an explicit null clears, rather than writing null', () => {
+    const dir = home()
+    writeJsonFile(serversFile(dir, 'default'), {
+      servers: [{ id: 'a', command: 'x', cwd: '/work', port: 1234, bootstrap: { command: 'setup' } }],
+    })
+    const raw = readConfig(dir).raw!
+
+    const cleared = findEntry(patchEntry(raw, 'a', { cwd: null, port: null, bootstrap: null } as never), 'a')
+    expect(cleared).not.toHaveProperty('cwd')
+    expect(cleared).not.toHaveProperty('port')
+    expect(cleared).not.toHaveProperty('bootstrap')
+    // The rest of the entry is untouched.
+    expect(cleared).toMatchObject({ id: 'a', command: 'x' })
+  })
+
+  /**
+   * The refusal is one shared rule, so the answering API and this fallback file cannot disagree
+   * about a nested group either. `src/service.ts` reads the same `nullGroupRefusal`.
+   */
+  it('refuses a null control group, the same way it refuses a null entry group', () => {
+    const raw = { control: { port: 4000, auth: { enabled: true }, tls: { enabled: false } } }
+    expect(() => patchControl(raw, { auth: null })).toThrow(/auth must be an object \(was null\)/)
+    expect(() => patchControl(raw, { tls: null })).toThrow(/tls must be an object \(was null\)/)
+    // The top-level non-group keys are still cleared by a null, not refused.
+    expect(patchControl(raw, { port: null }).control).toEqual({ auth: { enabled: true }, tls: { enabled: false } })
+  })
+
   it('stamps meta on every write without dropping the schema the file carries', () => {
     const dir = home()
     writeConfig(dir, {

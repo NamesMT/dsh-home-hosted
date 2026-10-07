@@ -659,6 +659,37 @@ describe('panel targeting', () => {
     expect(h.calls[0]).toEqual({ endpoint: 'servers.update', payload: { id: 'web', patch: { port: null }, workspace: 'default' } })
   })
 
+  /**
+   * The reachability boundary that makes the `applyPatch` drift in 0.7.18 latent rather than live.
+   *
+   * A top-level `null` in a patch means "delete this key" to the panel, and this plugin's file
+   * fallback now agrees. But only a field whose schema is `… | null` may carry one, and the tool's
+   * own parameter types enforce that before the payload is ever built: measured against the real
+   * 0.7.19 schema, `port` and `bootstrap` are the only two entry fields that accept `null` at all.
+   * So this asserts the boundary, not a behaviour — if a field's type widens to allow `null`, or
+   * `ENTRY_FIELDS` gains a nullable one, this fails and the `applyPatchFields` rule must be
+   * re-checked against the panel before that field can reach a config file.
+   */
+  it('lets only the two panel-nullable fields carry a null through the tool layer', async () => {
+    const nullable: string[] = []
+    const refused: string[] = []
+    // `id` is the entry's key, not a patchable field: `PATCH_PARAM` omits it, so a patch carrying
+    // one is accepted by the tool and stripped before the call. Excluded rather than expected.
+    for (const field of panelEntryFields().filter(name => name !== 'id')) {
+      const h = harness({ allow: ['servers_edit'], sandbox: 'danger-full-access' })
+      try {
+        await h.execute(0, { action: 'update', id: 'web', patch: { [field]: null } }, { agent: 'a' })
+        nullable.push(field)
+      }
+      catch {
+        refused.push(field)
+      }
+    }
+    // The panel's own schema says these two are `… | null`; everything else is rejected outright.
+    expect(nullable.sort()).toEqual(['bootstrap', 'port'])
+    expect(refused.length).toBeGreaterThan(15)
+  })
+
   it('does not repair the managed token for a failure on another panel', async () => {
     const refused = new PanelError('authentication required', 'AUTH_REQUIRED', 401)
     const h = harness({
