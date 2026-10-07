@@ -108,7 +108,7 @@ nobody reads is worse than a long file.
   enforced, and a literal `t('…')` key that does not exist is a test failure).
 - **A refused mutation is `ok: false` inside a successful envelope**: read the payload, not just
   `envelope.ok`, and surface it.
-- **Only `home-hosted@^0.7.3` is supported**, and a capability needing a newer 0.7.x *degrades* rather
+- **Only `home-hosted@^0.7.19` is supported**, and a capability needing a newer 0.7.x *degrades* rather
   than raising the floor — see [COMPATIBILITY](.agentDocs/COMPATIBILITY.md).
 - **The panel console is a first-class diagnostic** (`panel.console`): read from disk, so it needs no
   session, no token and no answering panel, and matches `home-hosted logs` line for line.

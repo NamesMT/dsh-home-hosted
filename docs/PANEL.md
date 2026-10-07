@@ -14,41 +14,37 @@ globally. An operator's `homeHostedCommand` always wins — that is an instructi
 The range is stated twice and both must agree: `dependencies['home-hosted']` in `package.json` and
 `EXPECTED_RANGE` in `resolve.ts` (what the page offers to install, and warns about when a global copy
 is older). Bumping one alone makes the page recommend a range the plugin is not built against.
-`test/resolve` now **enforces** that agreement — it was a rule the docs stated and nothing checked,
-so setting the manifest to `^0.7.99` while the constant stayed `^0.7.3` failed nothing until the
-guard existed. The same file asserts `MIN_SUPPORTED_VERSION` lies inside the advertised range, since a
-floor above it would advertise a copy the plugin then refuses. A bump
-is therefore those two plus the version-coupled tests — *unless* the release moved something this
-plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/settings`, or a CLI
-subcommand. 0.7.2 (the panel's reverse proxy, all under `.hh/.proxy/`) moved none of them; neither
-did 0.7.3 (DNS-01 through the panel's own DNS accounts, and a Namecheap API provider); and neither
-did 0.7.4 through 0.7.17.
+`test/resolve` **enforces** that agreement — it was a rule the docs stated and nothing checked, so
+setting the manifest to `^0.7.99` while the constant stayed put failed nothing until the guard
+existed. The same file asserts `MIN_SUPPORTED_VERSION` lies inside the advertised range, since a floor
+above it would advertise a copy the plugin then refuses.
 
-Re-checked after 0.7.17 — twice, because 35 commits landed unreleased on top of it and the second
-pass found surfaces the first had not looked at. Work has since gone into `src/api/logs.ts`,
-`src/providers/log-tail.ts`, `src/services/proxy.ts`, `src/helpers/daemon-log.ts`, and **four
-commits to `src/cli/logs.ts`** (`4d9cccc` `logs --lines` semantics, `04af855` `--follow --json`,
-`09eb6da` and `979cbdb` an unreadable log's wording). **None of it reaches this plugin**, and the
-check is by *use*, not by filename: the plugin never calls the `logs` command at all, never calls the
-panel's `/api/logs`, never declares `logHistoryQuerySchema`, and never reads `providers/log-tail`.
+A bump is therefore those two plus the version-coupled tests — *unless* the release moved something
+this plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/settings`, or a CLI
+subcommand. Check that by **use**, not by filename: a file appearing in a diff cannot show that a
+change reaches us, and the two disagree as soon as a comment lands in a schema file.
 
-What it *does* depend on is the console **file** — `.hh/.logs/home-hosted.log`, plus `.1` — and the
-5 MB rotation, so those are the things that could move under it. Verified unchanged across that
-range: `paths.ts`'s `daemonLogPath` is byte-identical, and none of the four `logs` commits touched
-`paths.ts` or `daemon-log.ts`'s `LOG_ROTATE_BYTES`. (Its own `parseLines` guard — `/^[+-]?\d+$/` plus
-`Number.isSafeInteger` — is the same rule this plugin's `panel_logs` tool applies, so the two agree.)
+**0.7.18 and 0.7.19 did move one, and no filename showed it.** Upstream `applyPatch` now deletes a
+top-level key set to `null` (`1f58a5d`), where it used to write it through; `serverSchema.label` also
+began to admit `null` (`45d689e`). This plugin keeps its own copy of that function for the file
+fallback, and the copies had drifted — the nested branch deleted, the top-level branch wrote the
+`null` — so a top-level `null` that the panel deletes would have been stored, producing a config it
+refuses to boot (`servers[0] ("smoke"): cwd must be a string (was null)`). One `applyPatchFields` now
+serves both paths, and the refusal a `null` group gets is one rule `src/service.ts` reads too.
 
-An earlier version of this paragraph said `src/shared/contracts.ts` "was not touched at all" between
-0.7.3 and 0.7.17. That is no longer true, and the wording was the weak part: `a7700ab` (unreleased
-when this was written) added a **comment** to `logHistoryQuerySchema` and widened the `stream`
-filter's read window, and `81cd870` added the proxy-exposure guard to `src/api/settings.ts`. Neither
-is a surface this plugin names — the guard lives inside that route's own handler, which cannot reach
-a plugin that writes `control` to disk rather than PATCHing the endpoint — so the pin is unaffected.
-What matters is that no change **reaches us**, which filenames alone cannot show.
+No shipped caller could reach the harmful case, and saying so is part of the finding: the agent tool
+layer validates `patch` against the panel's own field types, so only `port` and `bootstrap` can carry
+a `null` at all — exactly the two whose schema is `… | null` — while the page emits `port` alone. The
+drift was real but latent; it is fixed because a copy of the panel's function is a fork of its
+semantics, and the next field to allow `null` would have made it reachable.
 
-So the pin stays at `^0.7.3`, and a capability that needs a *newer* 0.7.x degrades rather than
-raising the floor — a local panel older than the capability is a real scenario. `logs` (0.7.12) is a
-file read either way, and `restart <id>` (0.7.13) falls back to the stop/start pair it replaced.
+Verified against a real 0.7.19 panel and its own CLI: `PATCH {port:null}` deletes the key; only `port`
+and `bootstrap` have a schema that admits `null`; `_hh` is still exactly four routes; and every route,
+subcommand and flag this plugin drives is unchanged. The console **file** — `.hh/.logs/home-hosted.log`
+plus its `.1`, and the 5 MB rotation — is unchanged too, and this plugin's reader still matches
+`home-hosted logs` line for line. A capability that needs a *newer* 0.7.x degrades rather than raising
+the floor: `logs` (0.7.12) is a file read either way, and `restart <id>` (0.7.13) falls back to the
+stop/start pair it replaced.
 
 That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
 and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it

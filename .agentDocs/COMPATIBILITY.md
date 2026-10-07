@@ -10,7 +10,7 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one alone makes
 it recommend a range the plugin is not built against.
 
-The pin is `^0.7.3`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
+The pin is `^0.7.19`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
 
 **A capability that needs a newer 0.7.x degrades; it never raises the floor.** A `^0.7.3` range already
 admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable without
@@ -27,6 +27,17 @@ plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/setting
 subcommand. Check by **use**, not by filename: `docs/PANEL.md` records which upstream surfaces were
 checked and why none reaches this plugin. Filenames alone cannot show that a change reaches us — they
 disagree as soon as a comment lands in a schema file.
+
+**0.7.4 → 0.7.19 moved one thing that does reach us**, and no filename showed it. Upstream `applyPatch`
+began deleting a top-level key set to `null` (`1f58a5d`, 0.7.18), and `serverSchema.label` began to admit
+`null` (`45d689e`). This plugin keeps its own copy of that function for the file fallback, so the two
+had to be made to agree again — one `applyPatchFields` with the top-level branch, plus one
+`nullGroupRefusal` read by `src/service.ts` **and** `patchEntry`/`patchControl`, so a null group is
+refused identically whichever path would carry it. No shipped caller reached the harmful case — the
+tool layer's own field types admit a `null` only for `port`/`bootstrap`, the two the panel's schema
+accepts, and the page emits `port` alone — but the drift was real and the next field to allow `null`
+would have exposed it. Measured against a real 0.7.19 panel: `PATCH {port:null}` deletes the key, and
+only `port` and `bootstrap` have a schema admitting `null`.
 
 ## Settings files
 
@@ -61,7 +72,7 @@ be answering. So:
 `onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and an older panel
 handed either key can refuse to *boot* from the config. The plugin used to consult the answering
 panel's version and refuse or drop them (`KILL_UNSUPPORTED`). **That is gone on purpose**: it pins
-`^0.7.3` and autostarts its own copy, so a panel older than those keys is only reachable by
+`^0.7.19` and autostarts its own copy, so a panel older than those keys is only reachable by
 deliberately preferring an old global install, and this is pre-1.0. Supporting older panels again
 means restoring that check from history, not re-deriving it.
 

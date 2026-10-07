@@ -621,20 +621,32 @@ cannot answer a question about the transport.
 
 ## Versions and dependencies
 
-- **Only the `home-hosted` this plugin pins is supported** (`^0.7.3`): the state layout is `.hh`, and
+- **Only the `home-hosted` this plugin pins is supported** (`^0.7.19`): the state layout is `.hh`, and
   the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
   can refuse to boot. See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.3` already
+- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.19` already
   admits every 0.7.x, so a feature added in 0.7.12/0.7.13 is reachable without moving the pin — and a
   *local* panel older than it is a real scenario. The newer path is tried first and an
   unknown-command refusal falls back to what that panel can do (`lifecycleForeign`). Detect the
   refusal from the CLI's own text and know all of its shapes: a pre-0.7.13 panel answers a 404
   through the daemon, while a 0.7.12 CLI rejects the positional with `Unexpected argument` — the one
   a 404-only check misses.
+- **A copy of the panel's own function is a fork of its semantics, so a bump can silently split
+  them.** This plugin keeps `applyPatchFields`/`mergeGroup` because the file fallback must mean what
+  the API means. Upstream fixed a top-level `null` to *delete* the key in 0.7.18; the copy kept
+  writing it, and the panel then refused to boot the file (`cwd must be a string (was null)`). The
+  drift was invisible by filename — it lived in a function body, not in a path or a schema — so grep
+  the pinned release's `src/config/patch.ts` for the shape, not just its export names. The same class
+  is why the null-group refusal is one `nullGroupRefusal` read by `src/service.ts` **and**
+  `patchEntry`/`patchControl`: a second copy of a rule is a second place for it to disagree.
 - **"Untouched since X, checked by filename" is not a claim that survives.** Verify a compatibility
   claim by what a change *reaches*, not by whether a file appears in a log — the two disagree as soon
   as a comment lands in a schema file. `docs/PANEL.md` says which surfaces were checked and why none
   reaches this plugin.
+- **Measure a schema question against the real panel, not against `--print-config`.** `up
+  --print-config` does **not** validate the servers file at all — measured: `id: "BAD"` and an
+  unknown key both "boot" there, so a probe built on it reports every case as safe. The instrument
+  that answers is the panel's own `/api/workspaces` `configError`, or a PATCH status.
 - **pnpm 12 enforces a minimum release age**, so `pnpm-workspace.yaml` pins it to `0` — CI and a
   fresh checkout must agree.
 
