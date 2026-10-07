@@ -219,37 +219,66 @@ function mergeGroup(target: Record<string, unknown>, patch: Record<string, unkno
 }
 
 /**
+ * The refusal a patch that sets one of `mergeKeys` to `null` gets, or null when it is safe.
+ *
+ * One rule, both write paths: the panel's patch schema declares these groups `.optional()`
+ * but not nullable, so its API answers 400. Writing the `null` through instead produced a
+ * config the panel then *refused to boot from* (`servers[0] ("a"): restart must be an object
+ * (was null)`) — a file this plugin wrote, that this plugin's own panel cannot start on.
+ * `src/service.ts` refuses with `INVALID_PATCH` before choosing a path, so the answering API
+ * and the fallback file give the same answer; both read the message from here.
+ */
+export function nullGroupRefusal(patch: Record<string, unknown>, mergeKeys: Set<string>): string | null {
+  for (const key of mergeKeys) {
+    if (patch[key] === null)
+      return `${key} must be an object (was null): the panel refuses to boot a config that carries it`
+  }
+  return null
+}
+
+/**
+ * Apply one patch onto a target, the way the panel's own `applyPatch` does.
+ *
+ * `undefined` is "not mentioned" and is skipped. `null` **removes** the key — at the top level
+ * as well as inside a group, which is what the panel has meant since 0.7.18 (`fix(patch): an
+ * explicit null cleared a key inside a group but not at the top level`) and what its API does
+ * (`PATCH {port:null}` deletes `port` from the file). The nested branch here always deleted;
+ * the top-level one wrote the `null` through, so one function meant two things and the panel
+ * refused to boot the result — for `cwd` through `patchEntry`, and for `auth`/`tls` through
+ * `patchControl`. `mergeKeys` names the groups that merge recursively instead of replacing.
+ */
+function applyPatchFields(target: Record<string, unknown>, patch: Record<string, unknown>, mergeKeys: Set<string>): Record<string, unknown> {
+  const next = { ...target }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined)
+      continue
+    if (mergeKeys.has(key) && isRecord(value) && isRecord(next[key])) {
+      next[key] = mergeGroup(next[key], value)
+      continue
+    }
+    if (value === null) {
+      delete next[key]
+      continue
+    }
+    next[key] = value
+  }
+  return next
+}
+
+/**
  * Apply one entry patch, merging the nested groups the panel merges.
  *
  * Only the keys `patch` names are touched; everything else in the entry — and
  * every other entry in the file — is preserved.
- *
- * An explicit `null` for one of the three groups is **refused**, not written.
- * The panel's patch schema declares them `.optional()` but not nullable, so the
- * API answers 400; writing it here instead produced a config the panel then
- * refused to boot from (`servers[0] ("a"): restart must be an object (was null)`)
- * — a file this plugin wrote, that this plugin's own panel cannot start on. A
- * `null` nested *inside* a group is fine: that is how an optional key is cleared.
  */
 export function patchEntry(raw: RawConfig, id: string, patch: ServerEntryPatch): RawConfig {
-  for (const key of SERVER_MERGE_KEYS) {
-    if ((patch as Record<string, unknown>)[key] === null)
-      throw new ConfigPatchError(`${key} must be an object (was null): the panel refuses to boot a config that carries it`)
-  }
-  const servers = (raw.servers ?? []).map((entry) => {
-    if (entry.id !== id)
-      return entry
-    const merged: ServerEntry = { ...entry }
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === undefined)
-        continue
-      if (SERVER_MERGE_KEYS.has(key) && isRecord(value) && isRecord(merged[key]))
-        (merged as Record<string, unknown>)[key] = mergeGroup(merged[key] as Record<string, unknown>, value)
-      else
-        (merged as Record<string, unknown>)[key] = value
-    }
-    return merged
-  })
+  const refusal = nullGroupRefusal(patch as Record<string, unknown>, SERVER_MERGE_KEYS)
+  if (refusal !== null)
+    throw new ConfigPatchError(refusal)
+  const servers = (raw.servers ?? []).map(entry =>
+    entry.id === id
+      ? applyPatchFields(entry as Record<string, unknown>, patch as Record<string, unknown>, SERVER_MERGE_KEYS) as ServerEntry
+      : entry)
   return { ...raw, servers }
 }
 
@@ -257,19 +286,14 @@ export function patchEntry(raw: RawConfig, id: string, patch: ServerEntryPatch):
  * Patch a settings file's `control` block, as a pure value.
  *
  * `auth` and `tls` merge the way the panel's `CONTROL_MERGE_KEYS` says, so a
- * patch naming one of them does not reset its siblings.
+ * patch naming one of them does not reset its siblings — and a `null` for either
+ * is refused by the same rule the entry path applies.
  */
 export function patchControl(raw: GlobalSettings, patch: Record<string, unknown>): GlobalSettings {
-  const control = { ...(raw.control ?? {}) }
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined)
-      continue
-    if (CONTROL_MERGE_KEYS.has(key) && isRecord(value) && isRecord(control[key]))
-      control[key] = mergeGroup(control[key] as Record<string, unknown>, value)
-    else
-      control[key] = value
-  }
-  return { ...raw, control }
+  const refusal = nullGroupRefusal(patch, CONTROL_MERGE_KEYS)
+  if (refusal !== null)
+    throw new ConfigPatchError(refusal)
+  return { ...raw, control: applyPatchFields(raw.control ?? {}, patch, CONTROL_MERGE_KEYS) }
 }
 
 export function removeEntry(raw: RawConfig, id: string): RawConfig {

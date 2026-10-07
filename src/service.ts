@@ -18,7 +18,7 @@ import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
 import { accountOf } from './boot/index.js'
 import type { AccountInput, PasswdEntry } from './boot/index.js'
-import { findEntry, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, upsertEntry, writeConfig } from './home-hosted/config-file.js'
+import { findEntry, nullGroupRefusal, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, SERVER_MERGE_KEYS, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
 import type { RawConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
@@ -1903,11 +1903,10 @@ export class HomeHostedService extends Service {
         // Refused before either path runs, so an API that answers and a file that
         // does not give the same answer: the panel's patch schema declares
         // `restart`/`health`/`stop` optional but not nullable, so a `null` group is
-        // a 400 there and an unbootable config here.
-        for (const key of ['restart', 'health', 'stop']) {
-          if ((patch as Record<string, unknown>)[key] === null)
-            throw new HomeHostedError(`${key} must be an object (was null)`, 'INVALID_PATCH')
-        }
+        // a 400 there and an unbootable config here. Both paths apply the same rule.
+        const refusal = nullGroupRefusal(patch as Record<string, unknown>, SERVER_MERGE_KEYS)
+        if (refusal !== null)
+          throw new HomeHostedError(refusal, 'INVALID_PATCH')
         const workspace = this.callWorkspace(input, target.home, target.foreign)
         if (!target.foreign)
           return await (await this.requireClient()).updateServer(id, patch, workspace)
