@@ -1,6 +1,6 @@
 {
   "name": "dsh-home-hosted",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "DeepSeek Harness (dsh) plugin: prompt your home servers into existence through home-hosted — Gitea, Jellyfin, anything — and manage the panel, the entries and boot autostart from dsh.",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,27 @@
 # Changelog
 
 
+## v0.7.6
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.5...v0.7.6)
+
+### 🩹 Fixes
+
+- **deps:** Bump home-hosted to ^0.7.20 ([895c6ad](https://github.com/NamesMT/dsh-home-hosted/commit/895c6ad))
+- **panel-control:** Never signal a pid the helpers cannot prove is the panel ([765f5c3](https://github.com/NamesMT/dsh-home-hosted/commit/765f5c3))
+
+### 📖 Documentation
+
+- Record the 0.7.20 re-check and the pid-is-not-an-identity trap ([7fc0071](https://github.com/NamesMT/dsh-home-hosted/commit/7fc0071))
+
+### ✅ Tests
+
+- **panel-control:** Pin that neither helper carries a signal ([dd7ea5b](https://github.com/NamesMT/dsh-home-hosted/commit/dd7ea5b))
+
+### ❤️ Contributors
+
+- NamesMT
+
 ## v0.7.5
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.4...v0.7.5)
