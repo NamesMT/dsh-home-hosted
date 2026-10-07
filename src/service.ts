@@ -633,7 +633,10 @@ export class HomeHostedService extends Service {
     const runtime = this.runtime()
     const stored = readStoredToken(this.options.stateDir)
     const enrolledOnDisk = apiTokenEnrolled(this.options.home)
-    const reachable = runtime !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url))
+    // The panel is judged by whether it *answers*, never by whether its pid exists: the OS
+    // recycles pids, so a live one is not an identity (home-hosted 0.7.20 fixes the same class).
+    // A dead pid is only ever a fallback for something too wedged to answer, and the page
+    // reports that separately as `reachable: false` with the token state measured below.
     const answered = runtime !== null && await probePanel(runtime.url)
 
     // The token state is measured, not assumed: when the panel answers, the
@@ -922,6 +925,15 @@ export class HomeHostedService extends Service {
     writeConfig(this.options.home, upsertEntry(raw, entry), this.writtenBy(), workspace)
   }
 
+  /**
+   * Is a panel up and watching this workspace's config?
+   *
+   * Deliberately still `pid alive OR answering`, unlike the status read: this only chooses between
+   * one write and two, and a live pid errs toward the *cautious* two-step write (add disabled, then
+   * flip autostart) for a panel too wedged to answer — whose watcher may still fire and would start
+   * a new autostart entry at once. A recycled pid therefore costs a redundant second write, which is
+   * the harmless direction; the harmful one was signalling it, which no helper here does any more.
+   */
   private async panelRunning(): Promise<boolean> {
     const runtime = this.runtime()
     return runtime !== null && (pidAlive(runtime.pid) || await probePanel(runtime.url))

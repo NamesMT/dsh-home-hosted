@@ -200,18 +200,27 @@ log('stopping the answering panel: ' + STOP.join(' '))
 const stopped = spawnSync(STOP[0], STOP.slice(1), { stdio: 'ignore', timeout: 90000 })
 log('down exited ' + String(stopped.status ?? stopped.error))
 
-if (alive(OLD_PID)) {
-  log('the panel is still alive; sending SIGTERM')
-  try { process.kill(OLD_PID, 'SIGTERM') } catch {}
+/**
+ * Never signal OLD_PID from here.
+ *
+ * The CLI's own 'down' is the only thing that may stop the panel, and it already escalates
+ * (SIGTERM, then SIGKILL) for a panel it can prove is alive. A pid is not an identity: the OS
+ * recycles pids, so the number in run.json may belong to an unrelated process, and this helper
+ * has no birth time to tell them apart. Signalling on "the pid answers" is how a takeover
+ * SIGTERMs a stranger — measured, before this guard existed.
+ *
+ * 'down' succeeds on both real cases, so there is usually nothing to wait for: it returns once
+ * the panel exited, and since home-hosted 0.7.20 the start below succeeds even when the recorded
+ * pid was recycled (its 'up' overwrites a record it cannot prove is live), where earlier releases
+ * refused with "already running". The wait is kept for a 'down' that did not report success, and
+ * it never signals.
+ */
+if (stopped.status !== 0 && alive(OLD_PID)) {
+  log('down did not report success and the recorded pid is still alive; waiting, and NOT signalling it — it may not be the panel any more')
   for (let i = 0; i < 40 && alive(OLD_PID); i += 1)
     await sleep(250)
-}
-
-if (alive(OLD_PID)) {
-  log('still alive; sending SIGKILL')
-  try { process.kill(OLD_PID, 'SIGKILL') } catch {}
-  for (let i = 0; i < 20 && alive(OLD_PID); i += 1)
-    await sleep(250)
+  if (alive(OLD_PID))
+    log('the recorded pid is still alive after waiting; the start below may be refused')
 }
 
 for (const step of STEPS) {
@@ -270,22 +279,22 @@ log('stopping the answering panel: ' + PROGRAM + ' ' + DOWN_ARGS.join(' '))
 const down = spawnSync(PROGRAM, DOWN_ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
 log('down exited ' + String(down.status))
 
-for (let i = 0; i < 40 && alive(OLD_PID); i += 1)
+/**
+ * Never signal OLD_PID from here — see the same guard in the activation helper.
+ *
+ * 'down' is the only thing that may stop the panel, and it escalates for a panel it can prove is
+ * alive. This helper has no birth time, so "the pid answers" cannot tell the panel from a stranger
+ * that inherited the number; signalling on it SIGTERMs an unrelated process.
+ *
+ * A takeover of a live panel ends with the panel stopped either way: 'down' stops it, and it
+ * escalates itself when the panel ignores SIGTERM. A pid that is still alive after a successful
+ * 'down' is therefore not the panel, and the start below must not race it.
+ */
+for (let i = 0; i < 40 && down.status !== 0 && alive(OLD_PID); i += 1)
   await sleep(250)
 
-if (alive(OLD_PID)) {
-  log('still alive; sending SIGTERM')
-  try { process.kill(OLD_PID, 'SIGTERM') } catch {}
-  for (let i = 0; i < 40 && alive(OLD_PID); i += 1)
-    await sleep(250)
-}
-
-if (alive(OLD_PID)) {
-  log('still alive; sending SIGKILL')
-  try { process.kill(OLD_PID, 'SIGKILL') } catch {}
-  for (let i = 0; i < 20 && alive(OLD_PID); i += 1)
-    await sleep(250)
-}
+if (down.status !== 0 && alive(OLD_PID))
+  log('down did not report success and the recorded pid is still alive; NOT signalling it — it may not be the panel any more')
 
 log('starting ' + PROGRAM + ' ' + ARGS.join(' '))
 const result = spawnSync(PROGRAM, ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
