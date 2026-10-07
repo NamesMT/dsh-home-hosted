@@ -621,16 +621,26 @@ cannot answer a question about the transport.
 
 ## Versions and dependencies
 
-- **Only the `home-hosted` this plugin pins is supported** (`^0.7.19`): the state layout is `.hh`, and
+- **Only the `home-hosted` this plugin pins is supported** (`^0.7.20`): the state layout is `.hh`, and
   the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
   can refuse to boot. See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.19` already
+- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.20` already
   admits every 0.7.x, so a feature added in 0.7.12/0.7.13 is reachable without moving the pin — and a
   *local* panel older than it is a real scenario. The newer path is tried first and an
   unknown-command refusal falls back to what that panel can do (`lifecycleForeign`). Detect the
   refusal from the CLI's own text and know all of its shapes: a pre-0.7.13 panel answers a 404
   through the daemon, while a 0.7.12 CLI rejects the positional with `Unexpected argument` — the one
   a 404-only check misses.
+- **A pid is not an identity, and the plugin must never signal on one.** Pids are recycled and a
+  zombie answers signal 0, so "the pid exists" cannot tell the panel from a stranger. Both generated
+  helpers (`buildActivationSource`, `buildTakeoverSource`) used to escalate SIGTERM→SIGKILL on that
+  predicate — **measured** by running the generated script against a live `sleep` holding the recorded
+  pid: it delivered a real `SIGTERM` to a process that was never the panel. The CLI's own `down` is the
+  only component allowed to signal, because it alone can prove identity from `run.json`'s `startedAt`
+  (home-hosted 0.7.20 added exactly that, and refuses to signal a recycled pid). A generated helper
+  gets no birth time, so it waits and logs instead. Prove this class by **signal delivery** — a marker
+  file written from the stranger's own `SIGTERM` handler — never by "is it still alive": a signalled
+  process can linger as a zombie and pass that check.
 - **A copy of the panel's own function is a fork of its semantics, so a bump can silently split
   them.** This plugin keeps `applyPatchFields`/`mergeGroup` because the file fallback must mean what
   the API means. Upstream fixed a top-level `null` to *delete* the key in 0.7.18; the copy kept
@@ -638,7 +648,8 @@ cannot answer a question about the transport.
   drift was invisible by filename — it lived in a function body, not in a path or a schema — so grep
   the pinned release's `src/config/patch.ts` for the shape, not just its export names. The same class
   is why the null-group refusal is one `nullGroupRefusal` read by `src/service.ts` **and**
-  `patchEntry`/`patchControl`: a second copy of a rule is a second place for it to disagree.
+  `patchEntry`/`patchControl`: a second copy of a rule is a second place for it to disagree. The
+  pid-liveness predicate above was re-derived here the same way — a third copy is what to look for.
 - **"Untouched since X, checked by filename" is not a claim that survives.** Verify a compatibility
   claim by what a change *reaches*, not by whether a file appears in a log — the two disagree as soon
   as a comment lands in a schema file. `docs/PANEL.md` says which surfaces were checked and why none

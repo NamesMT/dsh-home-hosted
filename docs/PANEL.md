@@ -38,7 +38,16 @@ a `null` at all — exactly the two whose schema is `… | null` — while the p
 drift was real but latent; it is fixed because a copy of the panel's function is a fork of its
 semantics, and the next field to allow `null` would have made it reachable.
 
-Verified against a real 0.7.19 panel and its own CLI: `PATCH {port:null}` deletes the key; only `port`
+**0.7.20 is one fix, and it found a live bug here.** It teaches that a pid is not an identity: the OS
+recycles pids and a zombie still answers signal 0, so the panel's `up`/`status`/`down` now decide with
+the pid *plus* `run.json`'s `startedAt`, and `down` refuses to signal a pid it cannot prove is the
+panel. This plugin's two generated hand-over helpers had re-derived the weak predicate and escalated
+`SIGTERM`→`SIGKILL` on "the pid answers" — **measured** by running the generated script against a live
+`sleep` holding the recorded pid, and watching the stranger's own `SIGTERM` handler fire. A takeover
+could therefore kill an unrelated process. Both helpers now leave every signal to the CLI's own `down`,
+which is the only component that can prove identity; what they kept is a wait, never a signal.
+
+Verified against a real 0.7.20 panel and its own CLI: `PATCH {port:null}` deletes the key; only `port`
 and `bootstrap` have a schema that admits `null`; `_hh` is still exactly four routes; and every route,
 subcommand and flag this plugin drives is unchanged. The console **file** — `.hh/.logs/home-hosted.log`
 plus its `.1`, and the 5 MB rotation — is unchanged too, and this plugin's reader still matches

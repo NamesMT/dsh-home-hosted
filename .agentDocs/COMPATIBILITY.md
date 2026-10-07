@@ -10,7 +10,7 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one alone makes
 it recommend a range the plugin is not built against.
 
-The pin is `^0.7.19`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
+The pin is `^0.7.20`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
 
 **A capability that needs a newer 0.7.x degrades; it never raises the floor.** A `^0.7.3` range already
 admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable without
@@ -38,6 +38,18 @@ tool layer's own field types admit a `null` only for `port`/`bootstrap`, the two
 accepts, and the page emits `port` alone — but the drift was real and the next field to allow `null`
 would have exposed it. Measured against a real 0.7.19 panel: `PATCH {port:null}` deletes the key, and
 only `port` and `bootstrap` have a schema admitting `null`.
+
+**0.7.20 did not move a named surface either, and it still found a real defect here.** Its one fix
+teaches that **a pid is not an identity**: the OS recycles pids and a zombie still answers signal 0, so
+home-hosted's `up`/`status`/`down` now decide with `runtimeLiveness(pid, startedAt)` and `down` refuses
+to signal a pid it cannot prove is the panel. This plugin's two generated helpers had re-derived the
+weak predicate — they escalated `SIGTERM`→`SIGKILL` on "the pid answers". **Measured**: run against a
+live `sleep` that "inherited" the recorded pid, the activation helper delivered a real `SIGTERM` to a
+process that was never the panel. Both helpers now leave every signal to the CLI's own `down`, which is
+the only component that can prove identity; `test/panel-control` pins that by asserting no signal
+literal survives in either generated script. The same predicate was re-derived a third time in
+`panelStatus`, whose `reachable` local was dead — it now reads `answered`, so nothing there claims
+liveness from a pid.
 
 ## Settings files
 
@@ -72,7 +84,7 @@ be answering. So:
 `onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and an older panel
 handed either key can refuse to *boot* from the config. The plugin used to consult the answering
 panel's version and refuse or drop them (`KILL_UNSUPPORTED`). **That is gone on purpose**: it pins
-`^0.7.19` and autostarts its own copy, so a panel older than those keys is only reachable by
+`^0.7.20` and autostarts its own copy, so a panel older than those keys is only reachable by
 deliberately preferring an old global install, and this is pre-1.0. Supporting older panels again
 means restoring that check from history, not re-deriving it.
 
