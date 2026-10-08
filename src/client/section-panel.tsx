@@ -41,12 +41,6 @@ export function reclaimNote(envelope: Envelope<unknown>, t: TranslateFn): string
 }
 
 /**
- * The note a stop attempt leaves behind.
- *
- * A dropped transport is not a failure: stopping the panel this session runs
- * under kills the connection, and claiming "did not stop" there would be false.
- */
-/**
  * The code a *dropped transport* carries, as a value rather than a message.
  *
  * `rpc()` catches its own fetch failure and returns `failure('network', …)` — it never throws —
@@ -55,9 +49,14 @@ export function reclaimNote(envelope: Envelope<unknown>, t: TranslateFn): string
  * produces (when the *call* throws rather than returning an envelope) and which `rpc` never can:
  * the branch was unreachable on the real path, so stopping the panel showed
  * **"The panel did not stop: Failed to fetch"** — the false claim this function exists to avoid.
+ *
+ * A dropped transport is not a failure, so it reads as "stopping" rather than "did not stop".
+ * A persistent entry survives `down` and the panel usually answers, but a non-persistent entry,
+ * or a panel that is already wedged, still loses the connection — hence the defensive branch.
  */
 const DROPPED_TRANSPORT = new Set(['network', 'no-fetch', 'client'])
 
+/** The note a stop attempt leaves behind. */
 export function stopNoteFor(envelope: Envelope<unknown>, t: TranslateFn): string {
   if (!envelope.ok)
     return DROPPED_TRANSPORT.has(envelope.error.code) ? t('panelStopping') : t('panelStopFailed', { message: envelope.error.message })

@@ -65,8 +65,9 @@ export function BootSection({ t, status, run, updateSettings, busy, uiStyle }: S
   const installed = boot.mechanism !== null
 
   // Enabling an entry that does not start anything proves nothing, so the host
-  // hands the running panel to it; the page says so before the button is pressed,
-  // because that stop takes this session's connection with it.
+  // hands the running panel to it; the page says so before the button is pressed.
+  // The panel stops, but a persistent entry (what this plugin writes) keeps this
+  // session alive, so the page keeps working and re-reads the panel afterwards.
   const handover = status.panel.reachable && !switching && !installed
   const switchWarning = status.panel.reachable && switching
 
