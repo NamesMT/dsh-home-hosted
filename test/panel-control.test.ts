@@ -123,7 +123,11 @@ describe('panel control', () => {
     const { deps: d, log } = deps()
     const result = spawnTakeover(d, null)
     expect(result.ok).toBe(true)
-    expect(result.detail).toContain('disconnect')
+    // Not "the page disconnects": a managed entry is `persistent: true`, and
+    // home-hosted's `down` leaves a persistent entry running — measured, a
+    // persistent HTTP entry still answered after the panel was down. The page
+    // only waits for the new panel to answer.
+    expect(result.detail).not.toContain('disconnect')
 
     // The helper stops the old panel first, then starts the CLI; poll for the
     // last line rather than for the file, which exists after the first write.

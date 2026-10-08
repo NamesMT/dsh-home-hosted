@@ -126,11 +126,16 @@ describe('the stop-panel button', () => {
     expect(panelMarkup(status(false))).not.toContain(en.panelStop)
   })
 
-  it('asks before stopping, naming what stops with it', () => {
+  it('asks before stopping, naming what stops with it — non-persistent entries only', () => {
     // The dialog only appears after the button, so the static markup proves the
     // button is offered and its warning text exists for the confirm step.
-    expect(en.panelStopBody).toContain('every server it supervises')
-    expect(en.panelStopBody).toContain('this session included')
+    expect(en.panelStopBody).toContain('non-persistent')
+    expect(en.panelStopBody).toContain('Persistent entries keep running')
+    // The claim this replaced — "this session included, so the page disconnects" —
+    // was false for a managed entry: `defaultIntent` writes `persistent: true`, and
+    // home-hosted's `down`/`stop-all` deliberately leave a persistent entry alone.
+    // Measured: a persistent HTTP entry still answered 200 after the panel was down.
+    expect(en.panelStopBody).not.toContain('this session included')
   })
 })
 
