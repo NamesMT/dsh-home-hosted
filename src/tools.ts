@@ -259,7 +259,7 @@ const TOOL_SPECS: Record<AgentToolName, ToolSpec> = {
     },
   },
   autostart_manage: {
-    description: 'Install or remove the OS entry that starts home-hosted at boot or login. Installing stops the panel (and every server it supervises, which can include this session) and starts it again through that entry.',
+    description: 'Install or remove the OS entry that starts home-hosted at boot or login. Installing stops the panel (and the non-persistent servers it supervises, which can include this session) and starts it again through that entry.',
     parameters: {
       instance: INSTANCE_PARAM,
       action: { type: 'string', required: true, description: 'install or uninstall' },

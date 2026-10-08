@@ -1415,7 +1415,7 @@ export class HomeHostedService extends Service {
 
     const retire = activation.retired.length > 0 ? `; retiring ${activation.retired.join(', ')}` : ''
     return {
-      detail: `handing the panel to ${mechanism ?? 'the entry'} now; this page disconnects and comes back when it answers${retire}`,
+      detail: `handing the panel to ${mechanism ?? 'the entry'} now; the page shows the panel again when it answers${retire}`,
       commands: [],
       stateDir: deps.stateDir,
       display: [...activation.display, ...activation.retireDisplay],
@@ -1512,12 +1512,13 @@ export class HomeHostedService extends Service {
   }
 
   /**
-   * Stop the panel the plugin drives, and every server it supervises with it.
+   * Stop the panel the plugin drives, and the non-persistent servers it supervises.
    *
    * Deliberately not a replacement for the takeover guard: stopping is safe to
-   * lose (an `autostart` entry comes back), while replacing is not. If this
-   * process is one of those servers the answer may never arrive, so the page
-   * treats a dropped call as "the panel is stopping" rather than a failure.
+   * lose (an `autostart` entry comes back), while replacing is not. A persistent
+   * entry survives the panel, so this usually answers normally; if this process
+   * *is* a non-persistent one of those servers the answer may never arrive, and
+   * the page treats a dropped call as "the panel is stopping" rather than a failure.
    */
   async stopPanelNow(): Promise<PanelControlResult> {
     const { resolution } = await this.cli()
@@ -1537,9 +1538,11 @@ export class HomeHostedService extends Service {
   /**
    * Replace an answering panel with the preferred copy.
    *
-   * That stops the servers the old panel supervises — this process included — so
-   * the work is handed to a detached helper and the guard demands that this
-   * session is an adopted, autostarting entry the new panel will bring back.
+   * The stop takes the panel down, and only an `autostart` entry brings one back —
+   * so the guard demands one, and the work goes to a detached helper that survives
+   * this process if it happens to be a non-persistent entry itself. A persistent
+   * entry (what this plugin writes) is left running by `down`, so the session and
+   * the page normally survive the swap.
    */
   async takeoverPanel(force = false): Promise<PanelControlResult> {
     const { resolution } = await this.cli()
@@ -1560,7 +1563,7 @@ export class HomeHostedService extends Service {
       const live = id === null ? null : (await this.liveEntries()).get(id) ?? null
       if (id === null || live === null || live.config.autostart !== true) {
         throw new HomeHostedError(
-          'replacing the panel stops every server it supervises, including this session, and nothing would start it again: '
+          'replacing the panel stops the servers it supervises, and a non-persistent entry among them — this session, if it is one — would not come back on its own: '
           + 'adopt this entry with autostart first, or pass force',
           'TAKEOVER_UNSAFE',
         )

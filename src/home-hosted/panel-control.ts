@@ -69,10 +69,11 @@ export async function startPanel(deps: PanelControlDeps): Promise<PanelControlRe
 /**
  * Stop the panel through its own CLI.
  *
- * The panel is the parent of every server it supervises, so this stops those
- * too — including the dsh this plugin may be running in. That is the point of
- * the button, not a hazard to hide: the caller's UI says so. An entry with
- * `autostart` is started again on the next panel start; it is not restarted here.
+ * The panel supervises servers, and `down` stops those that are not `persistent`.
+ * A persistent entry runs under its own nanny, so it survives the panel — and the
+ * entry this plugin writes is persistent, so the dsh serving this page is normally
+ * not among the stopped. An entry with `autostart` is started again on the next
+ * panel start; it is not restarted here.
  */
 export async function stopPanel(deps: PanelControlDeps): Promise<PanelControlResult> {
   const result = await runCli(deps, 'down')
@@ -337,7 +338,7 @@ export function spawnActivation(stateDir: string, plan: ActivationPlan, spawnChi
   child.unref()
   return {
     ok: true,
-    detail: `starting the panel through its autostart entry now; this page disconnects and comes back when it answers`,
+    detail: `starting the panel through its autostart entry now; the page shows it again when it answers`,
   }
 }
 
@@ -367,7 +368,7 @@ export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, spa
   child.unref()
   return {
     ok: true,
-    detail: 'replacing the panel now; this page will disconnect and come back under the preferred copy',
+    detail: 'replacing the panel now; the page shows the panel again under the preferred copy once it answers',
   }
 }
 
