@@ -130,7 +130,8 @@ entry's own successor, and it still refuses to touch the panel or any process th
 This process may itself be the entry being managed (`HHOSTED_SERVER_ID`).
 
 - Deleting that entry is refused: it would stop the session doing the deleting.
-- Starting/restarting it is allowed — that is the "reclaim now" case — but the UI says the page will
+- Starting/restarting it is allowed — that is the "reclaim now" case — and it does end this session:
+  an explicit stop tears the entry down even when it is `persistent`. The UI says the page will
   disconnect, and the agent tools need approval first.
 
 ## A managed entry that was deleted

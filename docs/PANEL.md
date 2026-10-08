@@ -93,9 +93,11 @@ over. `authNotice` turns it off; `{url}` is read per 401.
 that is the whole out-of-the-box path when nothing is running.
 
 `panel.takeover` replaces an answering panel with the preferred copy. Stopping the old panel also stops
-every server it supervises, this dsh included, so a detached helper does the work and the guard refuses
-unless this session is an adopted entry with `autostart: true` (something must bring it back). The
-response says the page will disconnect; the helper logs to `bin/panel-takeover.log`.
+the non-persistent servers it supervises — this dsh only if it is one, which an entry this plugin
+manages is not: it is written `persistent: true`, so it survives the panel and the session stays up.
+The guard still refuses unless this session is an adopted entry with `autostart: true`, because a
+non-persistent entry would have nothing to bring it back. A detached helper does the work and logs to
+`bin/panel-takeover.log`.
 
 `panel.start`, `panel.takeover` and `cli.installGlobal` answer a *successful* envelope whose payload
 can still carry `ok: false` — the page reads the payload's `detail`/`output` rather than trusting

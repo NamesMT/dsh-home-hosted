@@ -641,6 +641,15 @@ cannot answer a question about the transport.
   gets no birth time, so it waits and logs instead. Prove this class by **signal delivery** — a marker
   file written from the stranger's own `SIGTERM` handler — never by "is it still alive": a signalled
   process can linger as a zombie and pass that check.
+- **Copy that claims a consequence stays wrong when the flag behind it changes.** The stop/takeover
+  dialogs and the takeover guard were written 2026-09-26 saying "every server it supervises — this
+  session included, so the page disconnects"; `persistent: true` landed on the managed entry the
+  *next* day, and nothing revisited the text. home-hosted's `down`/`stop-all` deliberately leave a
+  persistent entry running and report it, so the claim had been false ever since. **Measured**: a
+  persistent HTTP entry still answered `200` after the panel was down, and a non-persistent sibling
+  was gone. Two different claims hide here and only one is wrong — stopping the *panel* spares a
+  persistent entry (the page survives), while an explicit stop or restart of the *entry* tears it
+  down and does end the session. Check which one a sentence is about before "fixing" it.
 - **A copy of the panel's own function is a fork of its semantics, so a bump can silently split
   them.** This plugin keeps `applyPatchFields`/`mergeGroup` because the file fallback must mean what
   the API means. Upstream fixed a top-level `null` to *delete* the key in 0.7.18; the copy kept
