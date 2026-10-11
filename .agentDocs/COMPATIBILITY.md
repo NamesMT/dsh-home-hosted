@@ -10,15 +10,13 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one alone makes
 it recommend a range the plugin is not built against.
 
-The pin is `^0.8.0`. `MIN_SUPPORTED_VERSION` is `0.8.0` too: 0.8.0 dropped the pre-workspace state
-relocation and now *refuses* a 0.6.x root, so a 0.7.x panel is not a lesser-supported copy — it is one
-this plugin cannot drive. The floor used to sit at `0.7.0` with capabilities degrading, which is why
-`lifecycleForeign` once fell back to a stop-then-start pair for a panel without `restart <id>`; every
-supported release has that command, so the fallback was dead weight and is gone.
+The pin is `^0.8.0`. `MIN_SUPPORTED_VERSION` is `0.8.0` too: 0.8.0 *refuses* a pre-workspace state root
+instead of relocating it, so a 0.7.x panel is not a lesser-supported copy — it is one this plugin
+cannot drive. That is why nothing degrades any more: the floor and the pin are the same release.
 
 An old state root is upgraded by running the **latest 0.7.x once**, before installing 0.8 — its first
-run performs the move. That instruction lives in the release notes and in the refusal text, not in the
-code, so the plugin carries no migrator of its own.
+run performs the move. That instruction lives in the release notes and the refusal text, so the plugin
+carries no migrator of its own.
 
 ### Re-checking a bump
 
@@ -96,10 +94,9 @@ be answering. So:
 ## What an older panel can no longer be
 
 `onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13), the nullable-`label` patch
-(0.7.21): every one of those arrived before the floor, so nothing needs a version check to stay safe.
-The plugin used to consult the answering panel's version and refuse or drop keys (`KILL_UNSUPPORTED`),
-and later to retry a `restart` as a stop-then-start pair; both are gone, because both existed only for
-panels this release refuses anyway.
+(0.7.21): all predate the floor, so none needs a version check. The plugin used to consult the
+answering panel's version and refuse or drop keys (`KILL_UNSUPPORTED`), and later to retry a `restart`
+as a stop-then-start pair; both are gone, because both existed only for panels this release refuses.
 
 `writeConfig` keeps the panel's `meta` and never invents `meta.schema`: an absent schema reads as the
 panel's current one, while a stale stamp stops the panel booting.

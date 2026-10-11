@@ -622,16 +622,14 @@ cannot answer a question about the transport.
 ## Versions and dependencies
 
 - **Only the `home-hosted` this plugin pins is supported** (`^0.8.0`), and the floor is that release:
-  the state layout is `.hh`, and 0.8 refuses a pre-workspace root rather than relocating it. An old
-  root is upgraded by running the latest 0.7.x once *before* installing 0.8 — said in the release
-  notes and in the refusal, never in code. See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **A guard written for a version that is now below the floor is dead weight, not insurance.** The
-  floor sat at `0.7.0` for a long time, so this plugin grew a stop-then-start fallback for a panel
-  without `restart <id>` and a detector for three shapes of "unknown command" refusal; none of that
-  could ever run again once every supported release had the command. When the floor moves, delete what
-  it made unreachable — and delete the tests that pinned it, rather than leaving them to fail at the
-  next bump. The same reasoning removed `panel.migrate`: 0.8's own `migrate` no longer relocates, so a
-  button calling it could only ever fail.
+  the layout is `.hh`, and 0.8 refuses a pre-workspace root rather than relocating it. An old root is
+  upgraded by running the latest 0.7.x once *before* installing 0.8 — in the release notes and the
+  refusal text, never in code. See [COMPATIBILITY.md](COMPATIBILITY.md).
+- **A guard for a version now below the floor is dead weight, not insurance.** The floor sat at
+  `0.7.0` for a long time, so this plugin grew a stop-then-start fallback for a panel without
+  `restart <id>` plus a detector for three refusal shapes; all of it was unreachable once every
+  supported release had the command. When the floor moves, delete what it made unreachable — and the
+  tests pinning it. Same reasoning removed `panel.migrate`: 0.8's `migrate` no longer relocates.
 - **A pid is not an identity, and the plugin must never signal on one.** Pids are recycled and a
   zombie answers signal 0, so "the pid exists" cannot tell the panel from a stranger. Both generated
   helpers (`buildActivationSource`, `buildTakeoverSource`) used to escalate SIGTERM→SIGKILL on that
@@ -679,18 +677,13 @@ cannot answer a question about the transport.
   that answers is the panel's own `/api/workspaces` `configError`, or a PATCH status.
 - **pnpm 12 enforces a minimum release age**, so `pnpm-workspace.yaml` pins it to `0` — CI and a
   fresh checkout must agree.
-- **A `settings.section` registration cannot choose its own nav icon.** The shell picks glyphs from a
-  closed list of section ids and falls back to its own gear for everything else; the slot projects
-  only `id` / `order` / `label`, and its owner props carry nothing but `close`. Confirmed by reading
-  the installed `dsh-client-ui-settings-general` (and its newest alpha, unchanged): `navIcon(id)`
-  tests `account`, `models`, `agent-presets`, `plugins`, `archived-sessions`, then returns
-  `IconSettingsOutlineMedium`. So every third-party section wears the gear — ours did, and the fix is
-  `settings-nav-icon.ts`, which marks its own row and masks in the house. Two rules in that module are
-  load-bearing and were both **measured**: the label match is exact, not a substring (breaking it to
-  `.includes` passed every other test, and would decorate a neighbour such as "Home Hosted Advanced"),
-  and an empty label matches nothing (a locale that has not resolved would otherwise claim the whole
-  nav). Match on the row's text, never on the shell's hashed CSS-module class — that hash changes with
-  every harness build.
+- **A `settings.section` registration cannot choose its own nav icon.** The shell resolves glyphs
+  from a closed list of section ids and falls back to its own gear; the slot projects only
+  `id`/`order`/`label`, and its owner props carry only `close`. Confirmed against the installed
+  `dsh-client-ui-settings-general` *and* its newest alpha, which are unchanged. So `settings-nav-icon.ts`
+  marks our own row and masks the house in. Match on the row's **text**, never the shell's hashed
+  CSS-module class, and exactly, not as a substring — `.includes` passed every other test and would
+  decorate a neighbour. An unresolved (empty) label must match nothing, or it claims the whole nav.
 
 ## How to test
 
