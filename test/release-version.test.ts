@@ -1,22 +1,16 @@
 /**
- * The release gate, which decides whether a version may be dispatched.
+ * The release gate: the last check before a tag, a GitHub release and an npm publish. It drives
+ * the real script as a child process and reads its **exit code**, because every decision it makes
+ * is an exit code.
  *
- * It is the last check before an irreversible action — a tag, a GitHub release and an npm
- * publish — and it had **no coverage at all**. This drives the real script as a child process
- * and reads its **exit code**, because every decision it makes is an exit code; asserting on
- * its output would pass while the code stayed 0.
+ * Every case runs in a scratch repo, because the gate reads two inputs — `package.json` *and* the
+ * pending commits in git history. An earlier version of this file rewrote only the manifest, so
+ * its expectations silently depended on the checkout: it passed on CI's shallow clone (no history,
+ * no pending breaking commit) and failed on the release workflow's `fetch-depth: 0` clone, where
+ * this repo's own `!` commits were pending and the gate refused every patch.
  *
- * **Every case runs in a scratch repo, because the gate reads two inputs, not one.** It compares
- * the requested version against `package.json` *and* the pending commits against
- * `git log <tag>..HEAD`. The first version of this file rewrote the real `package.json` and left
- * git alone, so its expectations silently depended on the checkout's history: it passed on CI's
- * shallow clone — no history, so no pending breaking commit seen — and failed on the release
- * workflow's `fetch-depth: 0` clone, where this repo's own `!` commits were pending. A test whose
- * result depends on the repo it runs in is not a test. Each case now gets a repo with the tag and
- * the commits it needs, which also gives the breaking-channel rule the coverage it never had.
- *
- * The version expectations are not hand-written. Each case was checked with `semver.valid()`
- * from the real library, and the two deliberate deviations are named below with their reason.
+ * The version expectations were checked against the real `semver` library, and the two deliberate
+ * deviations are named below with their reason.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -50,15 +44,14 @@ interface GateRepo {
 
 /** A scratch repo holding the real gate script, at `current`, with nothing pending. */
 function repo(current = '0.7.7'): GateRepo {
-  // A test may want more than one fixture; the previous one is cleaned here rather than leaking
-  // until `afterEach`, which only knows about the last.
+  // A test may build more than one fixture, so drop the previous rather than leak it.
   scratch?.cleanup()
   scratch = tempDir()
   const dir = scratch.path
   const gateScript = path.join(dir, 'scripts', 'check-release-version.mjs')
   fs.mkdirSync(path.dirname(gateScript), { recursive: true })
   fs.copyFileSync(script, gateScript)
-  // The script resolves its root from its own path, so `require('<dir>/package.json')` is this.
+  // The script resolves its root from its own path, so its `package.json` is this one.
   const writeVersion = (version: string): void =>
     writeJsonFile(path.join(dir, 'package.json'), { name: 'release-gate-fixture', version })
 
@@ -72,8 +65,7 @@ function repo(current = '0.7.7'): GateRepo {
   return {
     atCurrent: (version) => {
       writeVersion(version)
-      // Exactly one tag, so `describe` cannot pick the stale one — a tag left behind would make
-      // the fixture's own history part of the range the gate inspects.
+      // One tag only: a stale one left behind would join the range the gate inspects.
       git(dir, ['tag', '-d', tag])
       tag = `v${version}`
       git(dir, ['tag', tag])
@@ -82,8 +74,8 @@ function repo(current = '0.7.7'): GateRepo {
       git(dir, ['commit', '-q', '--allow-empty', '-m', subject, ...(body === undefined ? [] : ['-m', body])])
     },
     gate: (version) => {
-      // `spawnSync`, not `execFileSync`: a **successful** run still writes its warning to stderr,
-      // and the throw-on-nonzero shape only hands back that stderr on failure.
+      // `spawnSync`, not `execFileSync`: a successful run still writes its warning to stderr,
+      // and the throwing shape only hands back stderr on failure.
       const result = spawnSync('node', [gateScript, version], { cwd: dir, encoding: 'utf8' })
       return { code: result.status ?? -1, stderr: result.stderr ?? '' }
     },
@@ -177,10 +169,8 @@ describe('the release gate refuses a version that is not greater', () => {
 })
 
 /**
- * Below 1.0 the **minor** is the breaking channel. This is the rule that decides whether the
- * channel matches the commits, and it was the one thing here that had no coverage until a real
- * release hit it: with pending `!` commits, the gate refuses every patch — and only a full-history
- * checkout can see them, which is why the shallow CI clone never reproduced it.
+ * Below 1.0 the **minor** is the breaking channel. This rule had no coverage at all until a real
+ * release was refused by it.
  */
 describe('the release gate keeps the channel and the commits in agreement', () => {
   it('refuses a patch while a breaking commit is pending, and takes the minor instead', () => {

@@ -30,9 +30,8 @@ export interface RunResult {
 /**
  * Everything a failed run has to say, as one message — or null when it said nothing.
  *
- * `error` comes first because a command that never started has no stderr, and its spawn
- * failure is the only thing that explains the exit. One helper rather than a copy per
- * call site: the two that existed had already disagreed on that order.
+ * `error` first: a command that never started has no stderr, and its spawn failure is the only
+ * thing that explains the exit.
  */
 export function failureOutput(result: Pick<RunResult, 'stdout' | 'stderr' | 'error'>): string | null {
   const parts = [result.error, result.stderr, result.stdout]

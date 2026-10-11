@@ -1,10 +1,8 @@
 /**
  * Where a panel keeps its state on home-hosted 0.8+.
  *
- * Everything lives under `<root>/.hh`: the global files at the top, one directory
- * per workspace. A pre-0.7 root is never read or written — only *recognised*
- * (`isLegacyRoot`), so a read reports the root instead of an empty panel, and a write
- * says what to do instead of creating `.hh/` files nothing would boot.
+ * Everything lives under `<root>/.hh`: the global files at the top, one directory per workspace.
+ * A pre-0.7 root is only recognised (`isLegacyRoot`), never read or written.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -126,9 +124,8 @@ export function isHhRoot(home: string): boolean {
 /**
  * A pre-0.7 root: state at the top level and no `.hh` yet.
  *
- * Detection only, and deliberately kept: the panel refuses such a root, so reading it as
- * empty would report "no servers" while the config sits right there, and a write would
- * create `.hh/` files nothing ever boots.
+ * Recognised so a read reports the root rather than an empty panel, and a write says what to do
+ * instead of creating `.hh/` files nothing would boot.
  */
 export function isLegacyRoot(home: string): boolean {
   if (isHhRoot(home))
