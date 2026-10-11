@@ -239,7 +239,12 @@ export function isOnPortConflict(value: unknown): value is OnPortConflict {
 /** Only the fields this plugin reads or writes are typed; the rest is preserved. */
 export interface ServerEntry {
   id: string
-  label?: string
+  /**
+   * `null` clears it. The panel has accepted that since 0.7.21 (`serverPatchSchema` now uses
+   * `labelOrNullSchema`, matching `serverSchema` and every `label ?? id` display) and `applyPatch`
+   * deletes the key on `null`; `''` is a *value*, which satisfies neither the fallback nor a clear.
+   */
+  label?: string | null
   enabled?: boolean
   autostart?: boolean
   command?: string

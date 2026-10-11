@@ -142,7 +142,8 @@ const ENTRY_FIELDS: ParameterSchemaSpec = {
   command: { type: 'string', description: 'Executable to run' },
   args: { type: 'array', items: { type: 'string' }, description: 'Arguments' },
   cwd: { type: 'string', description: 'Working directory' },
-  label: { type: 'string', description: 'Human label' },
+  // The panel's patch schema is `string | null`; a null clears it, an empty string stores a blank.
+  label: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Human label, or null to clear it' },
   enabled: { type: 'boolean', description: 'Whether the entry may run' },
   autostart: { type: 'boolean', description: 'Start it when the panel starts' },
   // The panel's schema is `1..65535 | null`, and a patch that clears a port sends it.

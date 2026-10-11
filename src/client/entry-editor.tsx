@@ -141,7 +141,9 @@ export function createBodyFromDraft(draft: EntryDraft): ServerEntry | null {
 export function patchFromDraft(entry: ServerEntry, draft: EntryDraft): ServerEntryPatch | null {
   const patch: ServerEntryPatch = {}
   const label = draft.label.trim()
-  if (label !== (entry.label ?? '')) patch.label = label
+  // Clearing sends `null`, which deletes the key; `''` would store an empty label, which
+  // every `label ?? id` fallback reads as a label that is there and blank.
+  if (label !== (entry.label ?? '')) patch.label = label.length > 0 ? label : null
   const command = draft.command.trim()
   if (command.length > 0 && command !== (entry.command ?? '')) patch.command = command
   const args = parseArgs(draft.args)
