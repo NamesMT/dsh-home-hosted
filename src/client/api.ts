@@ -38,7 +38,6 @@ export interface EndpointResults {
   'servers.delete': { id: string, workspace?: string }
   'servers.freePort': FreePortResult
   'workspaces.list': WorkspaceSummary[]
-  'panel.migrate': PanelControlResult
   'entries.apply': ManagedEntryStatus[]
   'entries.remove': ManagedEntryStatus[]
   'panel.start': PanelControlResult

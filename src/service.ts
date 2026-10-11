@@ -38,7 +38,7 @@ import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot
 import type { SettingsStore } from './settings.js'
 import { bootUnitName, dshHome } from './util/paths.js'
 import type { RunResult } from './util/exec.js'
-import { run } from './util/exec.js'
+import { failureOutput, run } from './util/exec.js'
 import { suggestName } from './util/suggest.js'
 import { readJson, writeJsonAtomic } from './util/fsx.js'
 
@@ -84,45 +84,6 @@ export class HomeHostedError extends Error {
     super(message)
     this.name = 'HomeHostedError'
   }
-}
-
-
-/**
- * Whether a failed CLI call failed because that panel does not know the command.
- *
- * Three shapes, because the refusal comes from three places, and all three were
- * taken from the real binaries rather than guessed:
- *
- * - a panel from before `restart <id>` answers the `/_hh` route with a bare 404
- *   and the CLI prints "… does not know this command — restart it on this
- *   release" (`src/cli/server.ts`);
- * - a CLI from before the command existed rejects the subcommand with
- *   "unknown command: restart" (the curated dispatch in `src/cli.ts`);
- * - and the *likely* case — a 0.7.12 CLI, which has `restart` for the daemon but
- *   no positional — rejects the id with `Unexpected argument 'web'`, verified
- *   against the published 0.7.12 package. Missing this one would have made the
- *   degradation never fire where it matters most.
- *
- * Anything else — an unknown entry, a stopped panel, an unreachable daemon — is a
- * real failure that must not be retried as a different command.
- */
-function unknownCommand(result: RunResult): boolean {
-  const text = `${result.stderr}\n${result.stdout}\n${result.error ?? ''}`
-  // Anchored to the shapes the three real refusals actually print, rather than a bare
-  // substring. An unanchored `unknown command:` also matched a *genuine* failure that merely
-  // quotes an entry id — `no server "unknown command: x" exists` — and a false positive here
-  // is not cosmetic: the caller then runs stop+start on an entry it never needed to touch,
-  // which is exactly the non-atomic hazard the degradation exists to avoid.
-  //
-  // `unknown command:` is emitted at the start of a line by the curated dispatch, and the
-  // 404 refusal reads "… which does not know this command …".
-  // `unknown command:` is the whole line the curated dispatch writes, optionally behind the
-  // `error ` prefix `fail()` adds. `Unexpected argument '<token>'` likewise stands alone at
-  // the start of a line — never inside a quoted id, which is what the old substring match let
-  // through.
-  return /^(?:error )?unknown command:/im.test(text)
-    || /\bwhich does not know this command\b/i.test(text)
-    || /^(?:error )?Unexpected argument /im.test(text)
 }
 
 function foreignView(entry: ServerEntry, workspace: string): ServerEntryView {
@@ -459,43 +420,18 @@ export class HomeHostedService extends Service {
    * holds no API token for a panel it does not manage, and a config edit cannot
    * start anything.
    *
-   * `restart <id>` is one command from home-hosted 0.7.13, and it is what the UI
-   * itself does. The stop-then-start pair it replaces was never equivalent: it is
-   * not atomic, and a stop that is not followed by a start left the entry **down**
-   * — the failure was reported only after it had already happened. A local panel
-   * older than that release is a real scenario, so an unknown-command refusal
-   * degrades to the pair, and says so in the result.
+   * `restart <id>` is one command in every supported release, and it is what the
+   * panel's own UI does. The stop-then-start pair it replaces was never equivalent:
+   * it is not atomic, and a stop that is not followed by a start left the entry
+   * **down**.
    */
-  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string, workspace: string = defaultWorkspace(home)): Promise<{ home: string, workspace: string, id: string, action: string, via: 'cli', downgraded?: boolean }> {
-    /** Run one step; `unknown` marks a refusal this panel cannot have meant. */
-    const once = async (command: string): Promise<{ unknown: boolean }> => {
-      const result = await this.cliExec([command, id, '--workspace', workspace, '--home', home], { ...process.env, HHOSTED_HOME: home })
-      if (result.code === 0)
-        return { unknown: false }
-      const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
-      const failure = new HomeHostedError(output.length > 0 ? output : `home-hosted ${command} ${id} exited ${String(result.code)}`, 'CLI_FAILED')
-      if (unknownCommand(result))
-        return { unknown: true }
-      throw failure
+  private async lifecycleForeign(home: string, action: 'start' | 'stop' | 'restart', id: string, workspace: string = defaultWorkspace(home)): Promise<{ home: string, workspace: string, id: string, action: string, via: 'cli' }> {
+    const result = await this.cliExec([action, id, '--workspace', workspace, '--home', home], { ...process.env, HHOSTED_HOME: home })
+    if (result.code !== 0) {
+      const output = failureOutput(result)
+      throw new HomeHostedError(output ?? `home-hosted ${action} ${id} exited ${String(result.code)}`, 'CLI_FAILED')
     }
-
-    if (action !== 'restart') {
-      await once(action)
-      return { home, workspace, id, action, via: 'cli' }
-    }
-
-    // One command: the panel restarts the entry without it ever being down for a
-    // caller to observe, and a failure leaves the entry as it was rather than
-    // stopped.
-    const attempt = await once('restart')
-    if (!attempt.unknown)
-      return { home, workspace, id, action, via: 'cli' }
-
-    // A panel from before 0.7.13 refused the command before touching anything, so
-    // the pair still starts from the state the entry was already in.
-    await once('stop')
-    await once('start')
-    return { home, workspace, id, action, via: 'cli', downgraded: true }
+    return { home, workspace, id, action, via: 'cli' }
   }
 
   // -------------------------------------------------------------------------
@@ -587,22 +523,6 @@ export class HomeHostedService extends Service {
     // The workspace is part of the URL; the legacy `/logs` path would land on the
     // panel's default workspace, which is not necessarily the managed one.
     return `${url.replace(/\/+$/, '')}/w/${encodeURIComponent(this.managedWorkspace())}/logs?server=${encodeURIComponent(this.options.defaultEntryId)}`
-  }
-
-  /**
-   * Relocate a pre-0.7 root into `.hh`. `up` does this on its own, but a person
-   * looking at a root this plugin cannot write needs the one step that fixes it;
-   * `migrate` is the CLI that does exactly that, non-interactively with `--yes`.
-   */
-  async migrateRoot(): Promise<PanelControlResult> {
-    if (!isLegacyRoot(this.options.home))
-      return { ok: true, detail: `${this.options.home} is already on the .hh layout` }
-    const result = await this.cliExec(['migrate', '--yes', '--home', this.options.home], { ...process.env, HHOSTED_HOME: this.options.home })
-    if (result.code !== 0) {
-      const output = [result.stderr, result.stdout, result.error].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
-      return { ok: false, detail: output.length > 0 ? output : `home-hosted migrate exited ${String(result.code)}` }
-    }
-    return { ok: true, detail: `${this.options.home} was moved to the .hh layout` }
   }
 
   /** The port the panel's settings hold, without touching a running panel. */
@@ -1087,8 +1007,7 @@ export class HomeHostedService extends Service {
         : await run(launch.program, full, { env, timeoutMs: 300_000 })
       // A CLI that never started has no stdout to show, so its spawn error is the
       // only thing that explains the failure.
-      const output = [result.error, result.stdout, result.stderr].filter(part => typeof part === 'string' && part.trim().length > 0).join('\n').trim()
-      return { code: result.code, output }
+      return { code: result.code, output: failureOutput(result) ?? '' }
     }
 
     interface ActiveUi { name: string | null, version: string | null, repo: string | null, tag: string | null }
@@ -1869,9 +1788,6 @@ export class HomeHostedService extends Service {
         this.options.settings.update(patch)
         return await this.status()
       }
-
-      case 'panel.migrate':
-        return await this.migrateRoot()
 
       case 'workspaces.list': {
         const target = await this.targetHome(input.home)

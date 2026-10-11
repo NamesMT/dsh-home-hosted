@@ -31,7 +31,6 @@ export const RPC_ENDPOINT_NAMES = [
   'status',
   'servers.list',
   'workspaces.list',
-  'panel.migrate',
   'servers.get',
   'servers.create',
   'servers.update',
@@ -162,8 +161,6 @@ export interface EndpointPayloads {
   'servers.freePort': ForeignTarget & { id: string }
   /** Every workspace a panel serves, with its counts. */
   'workspaces.list': { home?: string }
-  /** Move a pre-0.7 panel root into `.hh` (idempotent; the CLI's own migration). */
-  'panel.migrate': Record<string, never>
   'entries.apply': { intents: EntryIntent[] }
   /** Stop managing an entry: restore what it was, or remove it when we created it. */
   'entries.remove': { id: string }

@@ -40,10 +40,7 @@ export const en = {
     'The panel is not answering, so these counts — and the entry list below — come from the workspace config files, not from live state.',
   workspaceLegacyTitle: 'This state root still uses the pre-0.7 layout',
   workspaceLegacyBody:
-    'The plugin cannot read or write its files until they move into .hh. Starting the panel once does the same move; this runs it directly.',
-  workspaceMigrate: 'Migrate state root',
-  workspaceMigrateFailed: 'The migration did not run.',
-  workspaceMigrateDone: 'The state root was migrated.',
+    'home-hosted 0.8 no longer relocates it, and the plugin cannot read or write these files until they move into .hh. Install the latest 0.7.x once — its first run does the move — then start this release. Nothing has been changed or deleted.',
 
   sigPanel: 'Panel',
   sigAutostart: 'Autostart',
@@ -293,10 +290,7 @@ export const zh: Record<keyof typeof en, string> = {
   workspacesCountsFile: '配置文件中 {servers} 个',
   workspacesDegraded: '面板没有响应，因此这些计数——以及下方的条目列表——来自工作区配置文件，而不是实时状态。',
   workspaceLegacyTitle: '该状态目录仍是 0.7 之前的布局',
-  workspaceLegacyBody: '在文件移入 .hh 之前，插件无法读取或写入它们。启动一次面板即可完成同样的迁移；此按钮直接执行该命令。',
-  workspaceMigrate: '迁移状态目录',
-  workspaceMigrateFailed: '迁移没有执行。',
-  workspaceMigrateDone: '状态目录已迁移。',
+  workspaceLegacyBody: 'home-hosted 0.8 不再迁移该布局，在这些文件移入 .hh 之前，插件无法读取或写入它们。请先安装并运行一次最新的 0.7.x——它首次运行即完成迁移——然后启动本版本。不会改动或删除任何内容。',
 
   sigPanel: '面板',
   sigAutostart: '开机自启',
