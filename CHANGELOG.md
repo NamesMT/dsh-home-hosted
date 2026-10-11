@@ -1,6 +1,31 @@
 # Changelog
 
 
+## v0.7.7
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.6...v0.7.7)
+
+### 🩹 Fixes
+
+- **page:** Stop claiming the panel stops this session ([5aab574](https://github.com/NamesMT/dsh-home-hosted/commit/5aab574))
+- **service:** Say which entries a stop actually ends ([a13b4e2](https://github.com/NamesMT/dsh-home-hosted/commit/a13b4e2))
+- **deps:** Bump home-hosted to ^0.7.21 ([b0c45b3](https://github.com/NamesMT/dsh-home-hosted/commit/b0c45b3))
+- Clear a label with null, not an empty string ([b99745a](https://github.com/NamesMT/dsh-home-hosted/commit/b99745a))
+
+### 📖 Documentation
+
+- Record the copy that outlived its flag ([4f05eae](https://github.com/NamesMT/dsh-home-hosted/commit/4f05eae))
+- Record the 0.7.21 label-null narrowing and the nullable-field trap ([00d5523](https://github.com/NamesMT/dsh-home-hosted/commit/00d5523))
+
+### ✅ Tests
+
+- Pin the corrected stop copy and reject the old claim ([1cd42d8](https://github.com/NamesMT/dsh-home-hosted/commit/1cd42d8))
+- Read the panel's nullable fields instead of listing them ([faa3379](https://github.com/NamesMT/dsh-home-hosted/commit/faa3379))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.7.6
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.5...v0.7.6)
