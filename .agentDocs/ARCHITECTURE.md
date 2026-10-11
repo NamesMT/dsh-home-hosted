@@ -36,7 +36,8 @@ host-only one — it uses `node:` APIs and the client never touches it. Adding a
   owned keys, config file, the managed `dsh` entry, the 401 notice.
 - `src/boot/**` — the autostart ladder: one provider per mechanism, plus payload builders and the
   ownership marker in `common.ts`.
-- `src/client/**` — the settings page (sections + primitives + locales).
+- `src/client/**` — the settings page (sections + primitives + locales), plus `settings-nav-icon.ts`,
+  which claims the section's nav row because the shell offers no icon to pass.
 - `scripts/` — the two esbuild wrappers plus the release version/notes helpers.
 
 ## The two documentation sets

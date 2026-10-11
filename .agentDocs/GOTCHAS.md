@@ -679,6 +679,18 @@ cannot answer a question about the transport.
   that answers is the panel's own `/api/workspaces` `configError`, or a PATCH status.
 - **pnpm 12 enforces a minimum release age**, so `pnpm-workspace.yaml` pins it to `0` — CI and a
   fresh checkout must agree.
+- **A `settings.section` registration cannot choose its own nav icon.** The shell picks glyphs from a
+  closed list of section ids and falls back to its own gear for everything else; the slot projects
+  only `id` / `order` / `label`, and its owner props carry nothing but `close`. Confirmed by reading
+  the installed `dsh-client-ui-settings-general` (and its newest alpha, unchanged): `navIcon(id)`
+  tests `account`, `models`, `agent-presets`, `plugins`, `archived-sessions`, then returns
+  `IconSettingsOutlineMedium`. So every third-party section wears the gear — ours did, and the fix is
+  `settings-nav-icon.ts`, which marks its own row and masks in the house. Two rules in that module are
+  load-bearing and were both **measured**: the label match is exact, not a substring (breaking it to
+  `.includes` passed every other test, and would decorate a neighbour such as "Home Hosted Advanced"),
+  and an empty label matches nothing (a locale that has not resolved would otherwise claim the whole
+  nav). Match on the row's text, never on the shell's hashed CSS-module class — that hash changes with
+  every harness build.
 
 ## How to test
 
