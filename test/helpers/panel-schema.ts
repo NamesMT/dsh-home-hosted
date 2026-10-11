@@ -76,6 +76,53 @@ export function panelPortConflictPolicies(): string[] {
 }
 
 /**
+ * The panel's `editableFields` — what its **patch** schema (`serverPatchSchema`) declares.
+ *
+ * Distinct from `serverSchema`, and the distinction has already cost one bug: upstream fixed
+ * `applyPatch` to delete on `null` and extended the *control* patch schema, while
+ * `editableFields.label` stayed `'string?'`, so the clear could not be sent at all (0.7.21).
+ * Reading this block is what lets a guard notice a field becoming nullable.
+ */
+function panelEditableFieldsSource(): string {
+  const map = JSON.parse(fs.readFileSync(panelSchemaMapPath(), 'utf8')) as { sourcesContent: string[] }
+  const source = map.sourcesContent.find(text => text?.includes('const editableFields = {'))
+  if (source === undefined)
+    throw new Error(`the pinned panel's patch schema was not found in ${panelSchemaMapPath()}`)
+  return source
+}
+
+/**
+ * Every field of the panel's patch schema that accepts an explicit `null`, read from the pinned
+ * release rather than hand-listed.
+ *
+ * A field is nullable when the schema named on its line resolves to one that admits `null` —
+ * `type('string | null')`, `x.or(type('null'))`, or the `portSchema` union. This is the guard the
+ * old hardcoded `['bootstrap', 'port']` could not be: it was true at 0.7.20 and silently false at
+ * 0.7.21, when `label` joined the set. A null the panel rejects is a 400, and one our file
+ * fallback is allowed to carry but the panel is not is a config the panel refuses to boot.
+ */
+export function panelNullablePatchFields(): string[] {
+  const source = panelEditableFieldsSource()
+  const start = source.indexOf('const editableFields = {')
+  const block = source.slice(start, source.indexOf('} as const', start))
+  const lines = [...block.matchAll(/^ {2}([a-zA-Z]+):\s*(\w+)/gm)]
+  const nullable = lines
+    .filter(([, , schema]) => {
+      if (schema === undefined)
+        return false
+      if (schema.endsWith('OrNullSchema'))
+        return true
+      // A schema declared as a union containing `null`, e.g. `portSchema`.
+      const declaration = new RegExp(`const ${schema} = [^\\n]*`).exec(source)
+      return declaration !== null && /\|\s*null|\.or\(type\('null'\)\)/.test(declaration[0])
+    })
+    .map(([, field]) => field!)
+  if (nullable.length === 0)
+    throw new Error('read no nullable patch fields, which would make the parity assertion vacuous')
+  return nullable
+}
+
+/**
  * A `new Set([...])` literal from the pinned panel's own source, as data.
  *
  * The plugin **copies** the panel's merge-key sets, and a missing member is not a

@@ -7,7 +7,7 @@ import { PanelError } from '../src/home-hosted/panel.js'
 import type { HomeHostedService } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
 import { registerAgentTools, toolNameFor } from '../src/tools.js'
-import { panelEntryFields } from './helpers/panel-schema.js'
+import { panelEntryFields, panelNullablePatchFields } from './helpers/panel-schema.js'
 import { tempDir } from './helpers/temp.js'
 
 interface RegisteredTool {
@@ -664,13 +664,14 @@ describe('panel targeting', () => {
    *
    * A top-level `null` in a patch means "delete this key" to the panel, and this plugin's file
    * fallback now agrees. But only a field whose schema is `… | null` may carry one, and the tool's
-   * own parameter types enforce that before the payload is ever built: measured against the real
-   * 0.7.19 schema, `port` and `bootstrap` are the only two entry fields that accept `null` at all.
-   * So this asserts the boundary, not a behaviour — if a field's type widens to allow `null`, or
-   * `ENTRY_FIELDS` gains a nullable one, this fails and the `applyPatchFields` rule must be
-   * re-checked against the panel before that field can reach a config file.
+   * own parameter types enforce that before the payload is ever built. The set is read from the
+   * pinned release rather than listed: `['bootstrap', 'port']` was true at 0.7.20 and silently false
+   * at 0.7.21, where `editableFields.label` became `labelOrNullSchema` so a cleared Label could be
+   * sent at all (`1681a62`). A hardcoded list cannot notice that, which is why `label` reached us
+   * as a bug: our own editor sent `''`, which stores a blank label rather than clearing it, and
+   * every `label ?? id` display then shows the blank string instead of the id.
    */
-  it('lets only the two panel-nullable fields carry a null through the tool layer', async () => {
+  it('lets exactly the panel-nullable fields carry a null through the tool layer', async () => {
     const nullable: string[] = []
     const refused: string[] = []
     // `id` is the entry's key, not a patchable field: `PATCH_PARAM` omits it, so a patch carrying
@@ -685,8 +686,7 @@ describe('panel targeting', () => {
         refused.push(field)
       }
     }
-    // The panel's own schema says these two are `… | null`; everything else is rejected outright.
-    expect(nullable.sort()).toEqual(['bootstrap', 'port'])
+    expect(nullable.sort()).toEqual(panelNullablePatchFields().sort())
     expect(refused.length).toBeGreaterThan(15)
   })
 

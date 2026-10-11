@@ -274,6 +274,19 @@ describe('the entry editor', () => {
     expect(patchFromDraft(stored, { ...draft, args: '' })).toEqual({ args: [] })
   })
 
+  it('clears a label with null, never with an empty string', () => {
+    const stored = { id: 'web', command: 'node', label: 'Demo' }
+    const draft = draftFromEntry(stored)
+    // `''` is a *value*: the panel stores it and every `label ?? id` display then shows a blank
+    // label instead of the id. Only `null` deletes the key, which is why 0.7.21 widened the patch
+    // schema to accept it (`1681a62`).
+    expect(patchFromDraft(stored, { ...draft, label: '' })).toEqual({ label: null })
+    expect(patchFromDraft(stored, { ...draft, label: '   ' })).toEqual({ label: null })
+    expect(patchFromDraft(stored, { ...draft, label: 'Renamed' })).toEqual({ label: 'Renamed' })
+    // A stored blank label and an empty draft agree, so no patch is sent.
+    expect(patchFromDraft({ id: 'web', command: 'node', label: '' }, { ...draft, label: '' })).toBeNull()
+  })
+
   it('reads ports and arguments tolerantly', () => {
     expect(parsePort('')).toBeNull()
     expect(parsePort('8080')).toBe(8080)
