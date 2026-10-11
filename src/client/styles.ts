@@ -47,6 +47,12 @@ export const CSS = `
   min-height: 26px;
 }
 
+.hh-head-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--hh-faint);
+}
+
 .hh-title {
   margin: 0;
   font-size: var(--dsw-font-s-strong-14-font-size, 14px);

@@ -8,6 +8,7 @@
 import type { ClientContext, LocaleService, SlotsService } from './context.js'
 import { createTranslator, en, LOCALE_NS, zh } from './locales.js'
 import { HomeHostedPage } from './page.js'
+import { installSettingsNavIcon } from './settings-nav-icon.js'
 
 /**
  * Slots owns the registration and locale backs the copy. Cordis scopes
@@ -66,6 +67,10 @@ export function apply(ctx: ClientContext): void {
   try {
     const locale = readService<LocaleService>(ctx, 'locale')
     const t = createTranslator(locale)
+    // The nav row wears the shell's fallback gear unless we claim it; there is no icon
+    // option on the registration. Same label thunk as the registration below, so a locale
+    // switch re-claims the row.
+    installSettingsNavIcon(ctx, () => t('tab'))
     if (locale === undefined) {
       warn('the locale service is unavailable; the page keeps its bundled English copy')
     }

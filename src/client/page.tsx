@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Envelope, RpcError, ServerEntryView, UiStyle } from '../shared/contracts.js'
 import { rpc, rpcSettingsUpdate, useStatus } from './api.js'
 import type { TranslateFn } from './context.js'
-import { IconRefresh } from './icons.js'
+import { IconHouse, IconRefresh } from './icons.js'
 import { resolveTranslator } from './locales.js'
 import type { Runner, SectionProps, SettingsUpdater } from './props.js'
 import { AgentsSection } from './section-agents.js'
@@ -167,6 +167,7 @@ export function HomeHostedPage(props: HomeHostedPageProps) {
     <div className="hh-root">
       <style>{CSS}</style>
       <header className="hh-head">
+        <span className="hh-head-icon"><IconHouse /></span>
         <h2 className="hh-title">{t('tab')}</h2>
         <span className="hh-head-spacer" />
         <Select
