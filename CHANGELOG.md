@@ -1,6 +1,37 @@
 # Changelog
 
 
+## v0.8.0
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.7...v0.8.0)
+
+### 🚀 Enhancements
+
+- **deps:** ⚠️  Pin home-hosted ^0.8.0 and raise the floor to it ([297147d](https://github.com/NamesMT/dsh-home-hosted/commit/297147d))
+
+### 💅 Refactors
+
+- ⚠️  Delete the guards and actions no supported panel can reach ([61db30d](https://github.com/NamesMT/dsh-home-hosted/commit/61db30d))
+- One failure-output helper, and drop five dead exports ([6b8b597](https://github.com/NamesMT/dsh-home-hosted/commit/6b8b597))
+
+### 📖 Documentation
+
+- Drop the pre-0.8 compatibility caveats ([49e27f4](https://github.com/NamesMT/dsh-home-hosted/commit/49e27f4))
+
+### ✅ Tests
+
+- Drop the tests that pinned the removed degradations ([ffb3bd1](https://github.com/NamesMT/dsh-home-hosted/commit/ffb3bd1))
+- Run the release gate in a scratch repo, not against this one ([3c27275](https://github.com/NamesMT/dsh-home-hosted/commit/3c27275))
+
+#### ⚠️ Breaking Changes
+
+- **deps:** ⚠️  Pin home-hosted ^0.8.0 and raise the floor to it ([297147d](https://github.com/NamesMT/dsh-home-hosted/commit/297147d))
+- ⚠️  Delete the guards and actions no supported panel can reach ([61db30d](https://github.com/NamesMT/dsh-home-hosted/commit/61db30d))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.7.7
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.6...v0.7.7)
