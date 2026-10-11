@@ -1,6 +1,29 @@
 # Changelog
 
 
+## v0.8.1
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.8.0...v0.8.1)
+
+### 🚀 Enhancements
+
+- **ui:** Give the settings nav row the house, not the shell's gear ([dcc9383](https://github.com/NamesMT/dsh-home-hosted/commit/dcc9383))
+- **ui:** Wear the house in the page header too ([9880884](https://github.com/NamesMT/dsh-home-hosted/commit/9880884))
+
+### 💅 Refactors
+
+- Trim the comments and ceremony added with the nav glyph ([f3fcbd4](https://github.com/NamesMT/dsh-home-hosted/commit/f3fcbd4))
+
+### 📖 Documentation
+
+- **changelog:** The 0.8.0 upgrade path, which the changelog cannot derive ([65f8e4e](https://github.com/NamesMT/dsh-home-hosted/commit/65f8e4e))
+- Record why a section cannot choose its own nav icon ([066f2c3](https://github.com/NamesMT/dsh-home-hosted/commit/066f2c3))
+- Compact the 0.8 migration and nav-icon notes ([d1a321c](https://github.com/NamesMT/dsh-home-hosted/commit/d1a321c))
+
+### ❤️ Contributors
+
+- NamesMT
+
 ## v0.8.0
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.7...v0.8.0)
