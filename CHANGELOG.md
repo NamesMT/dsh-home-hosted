@@ -5,6 +5,18 @@
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.7.7...v0.8.0)
 
+> [!IMPORTANT]
+> **Upgrading from an older panel? Run the latest 0.7.x once first, then install this.**
+>
+> home-hosted 0.8.0 no longer relocates a state root left at the pre-workspace (0.6.x) paths — it
+> refuses one instead, so a config sitting there is never read as an empty panel. The move is still
+> shipped, in the 0.7 line: installing and running the latest `home-hosted@0.7.x` once migrates that
+> state into `.hh/` on its first run. Do that **before** installing this release.
+>
+> Nothing is changed or deleted by the refusal, so a state root can be migrated at any time. This
+> plugin now pins `home-hosted@^0.8.0` and takes 0.8.0 as its floor, so a 0.7.x panel is reported as
+> unsupported rather than driven.
+
 ### 🚀 Enhancements
 
 - **deps:** ⚠️  Pin home-hosted ^0.8.0 and raise the floor to it ([297147d](https://github.com/NamesMT/dsh-home-hosted/commit/297147d))
