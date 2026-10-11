@@ -10,7 +10,7 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one alone makes
 it recommend a range the plugin is not built against.
 
-The pin is `^0.7.20`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
+The pin is `^0.7.21`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
 
 **A capability that needs a newer 0.7.x degrades; it never raises the floor.** A `^0.7.3` range already
 admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable without
@@ -51,6 +51,20 @@ literal survives in either generated script. The same predicate was re-derived a
 `panelStatus`, whose `reachable` local was dead — it now reads `answered`, so nothing there claims
 liveness from a pid.
 
+**0.7.21 changed one field of one schema, and it was the bug this file had already flagged as latent.**
+`editableFields.label` (which feeds `serverPatchSchema`, not `serverSchema`) became
+`labelOrNullSchema`, so `PATCH {label:null}` now clears a label instead of answering 400 (`1681a62` —
+upstream's own follow-up to the `1f58a5d` drift recorded above, whose message had cited the *control*
+patch schema while the editor validates against the other one). Our editor had the matching gap on the
+sending side: it cleared a label with `''`, which the panel *accepts* and stores — so every
+`label ?? id` display then shows a blank label instead of the id, and nothing reports a failure. It now
+sends `null`, and the tool layer's `label` admits one. Both are asserted against the pinned release:
+`panelNullablePatchFields()` reads `editableFields` from the shipped sourcemap, so the day a field
+becomes nullable the parity guard fails instead of the hardcoded `['bootstrap', 'port']` silently
+lying. The other five commits in this release reach nothing this plugin names — verified by use, not
+filename: no `.proxy/proxy.json`, `ProxyService`, `terminatePid`, `DELETE /api/logs`, and `serverSchema`,
+`CONFIG_SCHEMA`, `/_hh` and the CLI are untouched.
+
 ## Settings files
 
 `src/settings.ts` holds `SETTINGS_VERSION` and migrates on **read**, never in `update()`.
@@ -84,7 +98,7 @@ be answering. So:
 `onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and an older panel
 handed either key can refuse to *boot* from the config. The plugin used to consult the answering
 panel's version and refuse or drop them (`KILL_UNSUPPORTED`). **That is gone on purpose**: it pins
-`^0.7.20` and autostarts its own copy, so a panel older than those keys is only reachable by
+`^0.7.21` and autostarts its own copy, so a panel older than those keys is only reachable by
 deliberately preferring an old global install, and this is pre-1.0. Supporting older panels again
 means restoring that check from history, not re-deriving it.
 

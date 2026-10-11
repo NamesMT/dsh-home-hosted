@@ -55,6 +55,17 @@ plus its `.1`, and the 5 MB rotation — is unchanged too, and this plugin's rea
 the floor: `logs` (0.7.12) is a file read either way, and `restart <id>` (0.7.13) falls back to the
 stop/start pair it replaced.
 
+**0.7.21 widens that nullable set by one field, and it closed a bug here.** Clearing a server's label
+sent an empty string, which the panel accepts and saves — so the entry kept a blank label instead of
+falling back to its id, and nothing reported a failure. Only `null` clears the key, and 0.7.21 is the
+release that let the *patch* schema carry one for `label`; before it, that request was refused with
+`label must be a string (was null)`. The editor now sends `null`, and the parity guard reads the
+nullable fields from the pinned release instead of a list that went stale at exactly this bump. The
+release's other five fixes — proxy pid identity, a duplicate liveness predicate, a removed entry
+recreating its own log, an unflushed log batch, a Windows test skip — touch nothing this plugin names:
+no `.proxy/proxy.json`, `ProxyService`, `terminatePid`, or `DELETE /api/logs`, and `serverSchema`,
+`CONFIG_SCHEMA`, `/_hh` and the CLI are unchanged.
+
 That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
 and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it
 matters. So the entry runs a generated launcher in the plugin state dir (`bin/home-hosted.mjs`,

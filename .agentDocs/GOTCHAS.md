@@ -621,10 +621,10 @@ cannot answer a question about the transport.
 
 ## Versions and dependencies
 
-- **Only the `home-hosted` this plugin pins is supported** (`^0.7.20`): the state layout is `.hh`, and
+- **Only the `home-hosted` this plugin pins is supported** (`^0.7.21`): the state layout is `.hh`, and
   the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
   can refuse to boot. See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.20` already
+- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.21` already
   admits every 0.7.x, so a feature added in 0.7.12/0.7.13 is reachable without moving the pin — and a
   *local* panel older than it is a real scenario. The newer path is tried first and an
   unknown-command refusal falls back to what that panel can do (`lifecycleForeign`). Detect the
@@ -650,6 +650,15 @@ cannot answer a question about the transport.
   was gone. Two different claims hide here and only one is wrong — stopping the *panel* spares a
   persistent entry (the page survives), while an explicit stop or restart of the *entry* tears it
   down and does end the session. Check which one a sentence is about before "fixing" it.
+- **`null` clears a key; `''` stores a blank one, and a schema only accepts the first where it says
+  so.** Clearing a label sent `''`, which the panel accepts and writes, so every `label ?? id` display
+  shows an empty label rather than the id — nothing errors, the value is just wrong. The clearing
+  spelling is `null`/absent, and only a field whose schema is `… | null` may carry it; upstream widened
+  that set in 0.7.21 (`editableFields.label`, 0.7.20 rejects it with a 400). A hardcoded list of
+  nullable fields cannot notice such a widening — read it from the pinned release
+  (`panelNullablePatchFields`) so the parity guard fails on the bump instead of the field arriving as a
+  bug. The tool layer's parameter types are the other half: they must admit exactly what the panel's
+  patch schema does, and the same test asserts both.
 - **A copy of the panel's own function is a fork of its semantics, so a bump can silently split
   them.** This plugin keeps `applyPatchFields`/`mergeGroup` because the file fallback must mean what
   the API means. Upstream fixed a top-level `null` to *delete* the key in 0.7.18; the copy kept
