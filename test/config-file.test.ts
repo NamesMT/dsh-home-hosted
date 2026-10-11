@@ -348,7 +348,8 @@ describe('a pre-0.7 root', () => {
     expect(read.raw).toBeNull()
     expect(read.exists).toBe(false)
     expect(read.error).toContain('pre-0.7 layout')
-    expect(read.error).toContain(`--home ${dir}`)
+    // 0.8 dropped the relocation, so the remedy names the release that still has it.
+    expect(read.error).toContain('latest 0.7.x')
 
     const settings = readGlobalSettings(dir)
     expect(settings.raw).toBeNull()

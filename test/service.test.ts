@@ -396,108 +396,22 @@ describe('home-hosted service', () => {
     expect(cliCalls[0]?.args).toEqual(['start', 'web', '--workspace', 'default', '--home', other])
     expect(cliCalls[0]?.env.HHOSTED_HOME).toBe(other)
 
-    // A restart is ONE command (home-hosted 0.7.13+): the entry is never down for
-    // a caller to observe, and a failure leaves it as it was. The stop-then-start
-    // pair it replaces could leave the entry down when the start did not follow.
+    // A restart is ONE command: the entry is never down for a caller to observe,
+    // and a failure leaves it as it was.
     const restarted = await service.call('servers.restart', { id: 'web', home: other })
     expect(restarted).toMatchObject({ id: 'web', action: 'restart', via: 'cli' })
     expect(cliCalls.slice(1).map(call => call.args)).toEqual([
       ['restart', 'web', '--workspace', 'default', '--home', other],
     ])
-    expect((restarted as { downgraded?: boolean }).downgraded).toBeUndefined()
   })
 
   /**
-   * A local panel older than 0.7.13 does not know `restart <id>` and says so; the
-   * plugin must still bring the entry back, and must say the result came from two
-   * steps. Nothing has been stopped at the point of the refusal, so the pair is
-   * still safe to run.
+   * Every supported panel knows `restart <id>`, so there is no fallback to prove:
+   * a refusal is reported, never retried as a different command. The stop-then-start
+   * pair it used to degrade to could leave the entry **down** when the start did not
+   * follow, and only an out-of-support panel could ever have needed it.
    */
-  it('degrades to stop-then-start only when the panel does not know `restart`', async () => {
-    const calls: string[][] = []
-    const { service, home } = await harness({
-      otherPanels: ['other-panel'],
-      execCli: async (args): Promise<RunResult> => {
-        calls.push(args)
-        // Exactly what src/cli/server.ts prints for a panel from before this command.
-        if (args[0] === 'restart')
-          return { command: 'hh', args, code: 1, signal: null, stdout: '', stderr: 'error the panel on http://127.0.0.1:1 is home-hosted 0.7.12, which does not know this command — restart it on this release', timedOut: false, error: null }
-        return { command: 'hh', args, code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
-      },
-    })
-    const other = path.join(path.dirname(home), 'other-panel')
-
-    const result = await service.call('servers.restart', { id: 'web', home: other })
-    expect(result).toMatchObject({ id: 'web', action: 'restart', via: 'cli', downgraded: true })
-    expect(calls.map(call => call[0])).toEqual(['restart', 'stop', 'start'])
-  })
-
-  /**
-   * The *likely* older panel is a 0.7.12 CLI: it has `restart` for the daemon but
-   * no positional id, so it rejects the id with `Unexpected argument 'web'`.
-   * Verified by running the published 0.7.12 package
-   * (`node dist/cli.js restart foo` → `error Unexpected argument 'foo'`).
-   *
-   * This shape matters more than the 404 one, and a detector that only knew the
-   * 404 text would never fire for it — the degradation would silently not happen
-   * on exactly the versions a user is most likely to have.
-   */
-  it('degrades for a 0.7.12 CLI that rejects the id as an unexpected argument', async () => {
-    const calls: string[][] = []
-    const { service, home } = await harness({
-      otherPanels: ['other-panel'],
-      execCli: async (args): Promise<RunResult> => {
-        calls.push(args)
-        if (args[0] === 'restart')
-          return { command: 'hh', args, code: 1, signal: null, stdout: '', stderr: "error Unexpected argument 'web'", timedOut: false, error: null }
-        return { command: 'hh', args, code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
-      },
-    })
-    const other = path.join(path.dirname(home), 'other-panel')
-
-    const result = await service.call('servers.restart', { id: 'web', home: other })
-    expect(result).toMatchObject({ action: 'restart', downgraded: true })
-    expect(calls.map(call => call[0])).toEqual(['restart', 'stop', 'start'])
-  })
-
-  /**
-   * Only an unknown command may be retried as something else. A restart that fails
-   * for a real reason — a missing entry, a stopped panel — must be reported, not
-   * quietly turned into a stop the caller never asked for.
-   */
-  /**
-   * The refusal shapes are matched by **position**, not by substring.
-   *
-   * `unknown command:` and `Unexpected argument '<token>'` are only refusals when they stand
-   * at the start of a line — the CLI's own messages. A bare substring match also fired on a
-   * *genuine* failure that merely quotes an entry id, and this is not cosmetic: a false
-   * positive here makes the caller run stop+start on an entry it never needed to touch, which
-   * is the non-atomic hazard the degradation exists to avoid. The id reaches this unvalidated
-   * (`String(input.id)`), so it is the caller's text.
-   */
-  it('does not read a genuine failure as an unknown command when it quotes the id', async () => {
-    for (const stderr of [
-      'home-hosted: no server "unknown command: x" exists',
-      'error: failed to start unknown command: handler',
-      'no server "Unexpected argument \'x\'" exists',
-    ]) {
-      const calls: string[][] = []
-      const { service, home } = await harness({
-        otherPanels: ['other-panel'],
-        execCli: async (args): Promise<RunResult> => {
-          calls.push(args)
-          return { command: 'hh', args, code: 1, signal: null, stdout: '', stderr, timedOut: false, error: null }
-        },
-      })
-      const other = path.join(path.dirname(home), 'other-panel')
-      await expect(service.call('servers.restart', { id: 'web', home: other }), stderr)
-        .rejects.toMatchObject({ code: 'CLI_FAILED' })
-      // Only the one restart: no stop was issued against an entry that was never the problem.
-      expect(calls.map(call => call[0]), stderr).toEqual(['restart'])
-    }
-  })
-
-  it('never degrades a restart that failed for a real reason', async () => {
+  it('reports a failed restart instead of retrying it as stop+start', async () => {
     const calls: string[][] = []
     const { service, home } = await harness({
       otherPanels: ['other-panel'],
@@ -512,7 +426,7 @@ describe('home-hosted service', () => {
 
     await expect(service.call('servers.restart', { id: 'web', home: other }))
       .rejects.toMatchObject({ code: 'CLI_FAILED', message: expect.stringContaining('unknown entry') })
-    // The entry was never stopped: the failure was reported, not worked around.
+    // One command, and the entry was never stopped.
     expect(calls.map(call => call[0])).toEqual(['restart'])
   })
 
@@ -1797,11 +1711,15 @@ describe('a root still on the pre-0.7 layout', () => {
     expect(fs.existsSync(serversFile(home, 'default'))).toBe(false)
   })
 
-  it('degrades to a no-op migrate for a root already on `.hh`', async () => {
-    const { service, cliCalls } = await harness()
-    const result = await service.call('panel.migrate', {}) as { ok: boolean, detail: string }
-    expect(result.ok).toBe(true)
-    expect(result.detail).toContain('already on the .hh layout')
+  it('names the only remedy a pre-0.7 root has left', async () => {
+    const { home, service, cliCalls } = await harness()
+    fs.rmSync(hhDir(home), { recursive: true, force: true })
+    writeJsonFile(path.join(home, 'servers.config.json'), { servers: [] })
+
+    const status = await service.status()
+    expect(status.legacyRoot).toBe(true)
+    // 0.8 refuses to relocate, so the refusal has to name the release that can.
+    expect(status.lastError).toContain('latest 0.7.x')
     expect(cliCalls).toHaveLength(0)
   })
 })

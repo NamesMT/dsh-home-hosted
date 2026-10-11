@@ -224,14 +224,15 @@ describe('recognising a root', () => {
 })
 
 describe('the migration refusal', () => {
-  it('names the root, the fix, and the non-interactive CLI', () => {
+  it('names the release that can still do the move', () => {
     const root = makeLegacyHome(home(), { servers: [] })
     const refusal = migrationRefusal(root)
     expect(refusal).toContain(root)
     expect(refusal).toContain('pre-0.7 layout')
-    expect(refusal).toContain('Start the panel once on home-hosted 0.7')
     expect(refusal).toContain('.hh')
-    expect(refusal).toContain(`home-hosted migrate --yes --home ${root}`)
+    // 0.8 dropped the relocation, so this must not point at a command that refuses.
+    expect(refusal).toContain('latest 0.7.x')
+    expect(refusal).not.toContain('home-hosted migrate')
   })
 
   it('is null for a root that has already moved', () => {

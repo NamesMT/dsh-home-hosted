@@ -109,21 +109,25 @@ describe('the workspace picker', () => {
     expect(markup).not.toContain(t('workspacesCounts', { servers: 1, running: 0 }))
   })
 
-  it('offers the migration only for a pre-0.7 root', () => {
+  it('explains a pre-0.7 root, and offers no action that cannot work', () => {
+    // 0.8 dropped the relocation, so the only remedy is an older release — a button
+    // here could not do it, and its absent detail was the whole point.
     const legacy = renderToStaticMarkup(createElement(WorkspacesSection, {
       ...props(status({ legacyRoot: true })),
       viewing: 'default',
       onView: () => {},
     }))
     expect(legacy).toContain(en.workspaceLegacyTitle)
-    expect(legacy).toContain(en.workspaceMigrate)
+    expect(legacy).toContain(en.workspaceLegacyBody)
+    expect(legacy).toContain('latest 0.7.x')
+    expect(legacy).not.toContain('<button')
 
     const current = renderToStaticMarkup(createElement(WorkspacesSection, {
       ...props(status()),
       viewing: 'default',
       onView: () => {},
     }))
-    expect(current).not.toContain(en.workspaceMigrate)
+    expect(current).not.toContain(en.workspaceLegacyTitle)
   })
 })
 
