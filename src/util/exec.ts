@@ -27,6 +27,19 @@ export interface RunResult {
   error: string | null
 }
 
+/**
+ * Everything a failed run has to say, as one message — or null when it said nothing.
+ *
+ * `error` comes first because a command that never started has no stderr, and its spawn
+ * failure is the only thing that explains the exit. One helper rather than a copy per
+ * call site: the two that existed had already disagreed on that order.
+ */
+export function failureOutput(result: Pick<RunResult, 'stdout' | 'stderr' | 'error'>): string | null {
+  const parts = [result.error, result.stderr, result.stdout]
+    .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+  return parts.length === 0 ? null : parts.join('\n').trim()
+}
+
 /** Run a program and always resolve; a non-zero code is data, not a throw. */
 export async function run(command: string, args: string[] = [], options: RunOptions = {}): Promise<RunResult> {
   const maxBytes = options.maxBytes ?? 256 * 1024
@@ -108,23 +121,6 @@ export async function run(command: string, args: string[] = [], options: RunOpti
       finish({ code, signal })
     })
   })
-}
-
-/** Run a program and fail loudly on anything but success. */
-export async function runOk(command: string, args: string[] = [], options: RunOptions = {}): Promise<RunResult> {
-  const result = await run(command, args, options)
-  if (result.error !== null)
-    throw new Error(`${command} failed: ${result.error}`)
-  if (result.code !== 0)
-    throw new Error(`${command} exited ${String(result.code)}: ${result.stderr.trim() || result.stdout.trim()}`)
-  return result
-}
-
-/** True when the program exists and answers to `--version` or similar. */
-export async function hasCommand(command: string): Promise<boolean> {
-  const probe = process.platform === 'win32' ? 'where.exe' : 'which'
-  const result = await run(probe, [command], { timeoutMs: 5000 })
-  return result.code === 0
 }
 
 /**

@@ -6,15 +6,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
-export function fileExists(file: string): boolean {
-  try {
-    return fs.statSync(file).isFile()
-  }
-  catch {
-    return false
-  }
-}
-
 export function readText(file: string): string | null {
   try {
     return fs.readFileSync(file, 'utf8')
@@ -59,14 +50,4 @@ export function writeFileAtomic(file: string, data: string, mode?: number): void
 
 export function writeJsonAtomic(file: string, value: unknown, mode?: number): void {
   writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`, mode)
-}
-
-/** Best-effort removal; a missing file is not an error. */
-export function removeFile(file: string): void {
-  try {
-    fs.rmSync(file, { force: true })
-  }
-  catch {
-    // ignored: the caller only cares that it is gone, and reconciliation reports the rest
-  }
 }

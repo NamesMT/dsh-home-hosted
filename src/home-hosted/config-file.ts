@@ -13,7 +13,8 @@
  * then flips `autostart`, which the watcher sees as a changed definition —
  * applied on that entry's next start, never started now.
  *
- * A pre-0.7 root is refused: starting the panel once relocates it.
+ * A pre-0.7 root is refused: 0.8 no longer relocates one, so the refusal names the
+ * release that still does.
  */
 import fs from 'node:fs'
 import type { ServerEntry, ServerEntryPatch } from '../shared/contracts.js'

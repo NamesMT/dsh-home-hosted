@@ -1,10 +1,10 @@
 /**
- * Where a panel keeps its state on home-hosted 0.7+.
+ * Where a panel keeps its state on home-hosted 0.8+.
  *
  * Everything lives under `<root>/.hh`: the global files at the top, one directory
- * per workspace. The plugin targets 0.7 and never reads a pre-0.7 root — but it
- * still *recognises* one (`isLegacyRoot`) so an install is not lost before its
- * first 0.7 start, and so a write can say what to do instead of corrupting it.
+ * per workspace. A pre-0.7 root is never read or written — only *recognised*
+ * (`isLegacyRoot`), so a read reports the root instead of an empty panel, and a write
+ * says what to do instead of creating `.hh/` files nothing would boot.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -123,7 +123,13 @@ export function isHhRoot(home: string): boolean {
   return fs.existsSync(workspacesFile(home)) || fs.existsSync(globalSettingsFile(home))
 }
 
-/** A pre-0.7 root: state at the top level and no `.hh` yet. Detection only. */
+/**
+ * A pre-0.7 root: state at the top level and no `.hh` yet.
+ *
+ * Detection only, and deliberately kept: the panel refuses such a root, so reading it as
+ * empty would report "no servers" while the config sits right there, and a write would
+ * create `.hh/` files nothing ever boots.
+ */
 export function isLegacyRoot(home: string): boolean {
   if (isHhRoot(home))
     return false
@@ -131,13 +137,9 @@ export function isLegacyRoot(home: string): boolean {
     .some(name => fs.existsSync(path.join(home, name)))
 }
 
-/**
- * The refusal a write to a not-yet-migrated root gets, or null when it is safe.
- * Starting the panel once on 0.7 relocates the root; `home-hosted migrate` does
- * the same with a report and needs no terminal.
- */
+/** The refusal a read or write of a not-yet-migrated root gets, or null when it is safe. */
 export function migrationRefusal(home: string): string | null {
   if (!isLegacyRoot(home))
     return null
-  return `${home} still uses the pre-0.7 layout (state at the top level). Start the panel once on home-hosted 0.7 — it moves everything into .hh — or run \`home-hosted migrate --yes --home ${home}\`.`
+  return `${home} still uses the pre-0.7 layout (state at the top level), which home-hosted 0.8 no longer relocates. Install the latest 0.7.x once — its first run moves that state into .hh/ — then start this release.`
 }

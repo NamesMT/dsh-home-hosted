@@ -50,18 +50,6 @@ export function resolveShimmedCli(absolute: string, nodePath = process.execPath)
   return { program: absolute, args: [], cliEntry: null, shimPath: absolute, source: 'shim' }
 }
 
-export async function resolveHomeHostedLaunch(override?: string | null): Promise<CliLaunch | null> {
-  const configured = override?.trim()
-  const found = configured && configured.length > 0 ? configured : (await which('home-hosted')) ?? (await which('hh'))
-  if (found === null || found === undefined)
-    return null
-
-  const launch = resolveShimmedCli(path.resolve(found))
-  if (launch === null)
-    return null
-  return configured ? { ...launch, source: 'override' } : launch
-}
-
 export interface HomeHostedFacts {
   home: string
   projectDir?: string | null
