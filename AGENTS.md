@@ -79,8 +79,9 @@ nobody reads is worse than a long file.
   workspace means the panel's `default`, which is also the only one the plugin *manages* (reconcile,
   the `dsh` entry, snapshots); every other is reachable per call. Anything keyed by id alone — SSE, log
   buffers, series, route params, **local UI state** — must key on the pair.
-- **A pre-0.7 root is never read or written**; it is only *recognised* (`isLegacyRoot`), reported as
-  `legacyRoot`, and fixed by `panel.migrate` (`home-hosted migrate --yes`).
+- **A pre-0.7 root is never read or written**; it is only *recognised* (`isLegacyRoot`) and reported as
+  `legacyRoot`. home-hosted 0.8 dropped the relocation and refuses such a root, so the only remedy is
+  to run the latest 0.7.x once before installing this — the refusal says so.
 - **The settings file is versioned** (`SETTINGS_VERSION`). Migrate on **read**, never in `update()`;
   see [COMPATIBILITY](.agentDocs/COMPATIBILITY.md) for the allowlist rule.
 - **A mutating agent tool asks for approval only when the calling session is not `danger-full-access`**,
@@ -108,8 +109,8 @@ nobody reads is worse than a long file.
   enforced, and a literal `t('…')` key that does not exist is a test failure).
 - **A refused mutation is `ok: false` inside a successful envelope**: read the payload, not just
   `envelope.ok`, and surface it.
-- **Only `home-hosted@^0.7.21` is supported**, and a capability needing a newer 0.7.x *degrades* rather
-  than raising the floor — see [COMPATIBILITY](.agentDocs/COMPATIBILITY.md).
+- **Only `home-hosted@^0.8.0` is supported**, and the floor is that same release — a 0.7.x panel is one
+  this plugin cannot drive, not a lesser-supported one. See [COMPATIBILITY](.agentDocs/COMPATIBILITY.md).
 - **The panel console is a first-class diagnostic** (`panel.console`): read from disk, so it needs no
   session, no token and no answering panel, and matches `home-hosted logs` line for line.
 

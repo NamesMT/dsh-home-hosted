@@ -35,12 +35,14 @@ its page.
 
 ## Config compatibility was dropped, deliberately
 
-`onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and an older panel
-handed either key can refuse to *boot* from the config. The plugin used to consult the answering
-panel's version and refuse or drop them (`KILL_UNSUPPORTED`). That is gone on purpose: it pins
-`home-hosted@^0.7.21` and autostarts its own copy, so a panel older than those keys is only reachable by
-deliberately preferring an old global install — and this is pre-1.0. Supporting older panels again means
-bringing that check back from history, not re-deriving it.
+`onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13) and the nullable-`label`
+patch (0.7.21) all predate the release this plugin pins. The plugin used to consult the answering
+panel's version and refuse or drop those keys (`KILL_UNSUPPORTED`), and later to retry a `restart` as a
+stop-then-start pair. Both are gone: it pins `home-hosted@^0.8.0`, which refuses an older panel
+outright, so neither check could ever fire again.
+
+An old state root is upgraded by running the latest 0.7.x **once, before installing 0.8** — its first
+run moves the state into `.hh/`.
 
 ## Tests
 

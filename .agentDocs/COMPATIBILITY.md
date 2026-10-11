@@ -10,15 +10,15 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one alone makes
 it recommend a range the plugin is not built against.
 
-The pin is `^0.7.21`. `MIN_SUPPORTED_VERSION` is `0.7.0` and stays there.
+The pin is `^0.8.0`. `MIN_SUPPORTED_VERSION` is `0.8.0` too: 0.8.0 dropped the pre-workspace state
+relocation and now *refuses* a 0.6.x root, so a 0.7.x panel is not a lesser-supported copy — it is one
+this plugin cannot drive. The floor used to sit at `0.7.0` with capabilities degrading, which is why
+`lifecycleForeign` once fell back to a stop-then-start pair for a panel without `restart <id>`; every
+supported release has that command, so the fallback was dead weight and is gone.
 
-**A capability that needs a newer 0.7.x degrades; it never raises the floor.** A `^0.7.3` range already
-admits every 0.7.x, so a feature added in 0.7.12/0.7.13 (`logs`, `restart <id>`) is reachable without
-moving the pin — and a *local* panel older than it is a real scenario, not a mistake. The newer path is
-tried first and an unknown-command refusal falls back to what that panel can do
-(`lifecycleForeign`). Detect the refusal from the CLI's own text and know **all** its shapes: a
-pre-0.7.13 panel answers a 404 through the daemon, while a 0.7.12 CLI rejects the positional with
-`Unexpected argument` — the one a 404-only check misses. Both are pinned in `test/service`.
+An old state root is upgraded by running the **latest 0.7.x once**, before installing 0.8 — its first
+run performs the move. That instruction lives in the release notes and in the refusal text, not in the
+code, so the plugin carries no migrator of its own.
 
 ### Re-checking a bump
 
@@ -93,21 +93,21 @@ be answering. So:
 - **The client bundle's externals do not change**: `react`, `react-dom`, `react/jsx-runtime`. Adding
   another means editing `scripts/build-client.mjs` deliberately, not by accident.
 
-## Config compatibility against older panels
+## What an older panel can no longer be
 
-`onPortConflict: kill` arrived in home-hosted 0.6.0 and `persistent` in 0.6.3, and an older panel
-handed either key can refuse to *boot* from the config. The plugin used to consult the answering
-panel's version and refuse or drop them (`KILL_UNSUPPORTED`). **That is gone on purpose**: it pins
-`^0.7.21` and autostarts its own copy, so a panel older than those keys is only reachable by
-deliberately preferring an old global install, and this is pre-1.0. Supporting older panels again
-means restoring that check from history, not re-deriving it.
+`onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13), the nullable-`label` patch
+(0.7.21): every one of those arrived before the floor, so nothing needs a version check to stay safe.
+The plugin used to consult the answering panel's version and refuse or drop keys (`KILL_UNSUPPORTED`),
+and later to retry a `restart` as a stop-then-start pair; both are gone, because both existed only for
+panels this release refuses anyway.
 
 `writeConfig` keeps the panel's `meta` and never invents `meta.schema`: an absent schema reads as the
 panel's current one, while a stale stamp stops the panel booting.
 
 ## How to test
 
-`test/service` pins the CLI-refusal shapes, `test/resolve` the pin agreement, `test/settings` the read
-migrations and the non-record guards, `test/config-file` the merge-key parity against the pinned
-dependency. When a compatibility claim changes, break the guard you are relying on and watch a test
+`test/resolve` pins the two range constants against each other and the floor inside them,
+`test/service` the panel-targeting rules, `test/settings` the read migrations and the non-record
+guards, `test/config-file` the merge-key parity against the pinned dependency. When a compatibility
+claim changes, break the guard you are relying on and watch a test
 fail before believing it.

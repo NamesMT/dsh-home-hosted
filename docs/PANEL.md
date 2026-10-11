@@ -51,9 +51,16 @@ Verified against a real 0.7.20 panel and its own CLI: `PATCH {port:null}` delete
 and `bootstrap` have a schema that admits `null`; `_hh` is still exactly four routes; and every route,
 subcommand and flag this plugin drives is unchanged. The console **file** — `.hh/.logs/home-hosted.log`
 plus its `.1`, and the 5 MB rotation — is unchanged too, and this plugin's reader still matches
-`home-hosted logs` line for line. A capability that needs a *newer* 0.7.x degrades rather than raising
-the floor: `logs` (0.7.12) is a file read either way, and `restart <id>` (0.7.13) falls back to the
-stop/start pair it replaced.
+`home-hosted logs` line for line.
+
+**0.8.0 is the release that stopped relocating an old state root, and this plugin follows it.** A
+0.6.x root used to be moved into `.hh/` on the first run of 0.7; 0.8 refuses such a root instead, before
+any command resolves a path into it, so that a config sitting at the old paths is never read as an empty
+panel. Nothing is changed or deleted by that refusal. **If you are upgrading from 0.7 or earlier, run
+the latest 0.7.x once first** — that release performs the move — **then install 0.8.** The plugin's own
+floor is `0.8.0` for the same reason: a 0.7.x panel is one it cannot drive, so it says so rather than
+degrading. That removed the last version-conditional code here — a stop-then-start fallback for a panel
+without `restart <id>` — along with the `panel.migrate` action, whose CLI no longer performs that move.
 
 **0.7.21 widens that nullable set by one field, and it closed a bug here.** Clearing a server's label
 sent an empty string, which the panel accepts and saves — so the entry kept a blank label instead of

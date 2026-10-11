@@ -232,7 +232,7 @@ would be: `BootStatus.recommended` is the host's own `recommend()` answer, and `
 to it when nothing is installed (`pickOf(mechanism ?? before.mechanism ?? before.recommended)`). So
 "Automatic" says which mechanism the next install would use, instead of leaving a person to install it
 and read the result. The sentence is only shown while nothing is installed under that mechanism, and it
-is absent — never "undefined" — when an older panel does not send the field.
+is absent — never "undefined" — when a response omits the field.
 
 The `Details` block describes the mechanism that is actually **installed**, which is a different one
 while a switch is pending, so both it and the picker read one shared lookup rather than each formatting

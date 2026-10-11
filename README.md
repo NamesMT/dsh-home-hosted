@@ -179,7 +179,7 @@ Topic docs, one per area — written for whoever has to touch it next:
 
 One entry (`dsh`), one toggle: the panel keeps it alive, restarts it and reclaims its port. A
 detached restart is recognised on macOS and Linux (`follow`); Windows cannot prove identity through
-a `.cmd` shim, so it uses `onPortConflict: kill`. The plugin pins home-hosted 0.7+, so every key it
+a `.cmd` shim, so it uses `onPortConflict: kill`. The plugin pins home-hosted 0.8+, so every key it
 writes is one that panel parses.
 <sub>Web only — see **dsh Desktop** above.</sub>
 

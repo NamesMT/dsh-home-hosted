@@ -42,8 +42,8 @@ machines. The RPC endpoint still defaults an absent value (the page always sends
 call should not break), but a model is never left to guess.
 
 A pre-0.7 root is not read or written at all. It is recognised (`legacyRoot` on the status), refused on
-every write, and fixed through one action that runs `home-hosted migrate --yes` — the same relocation a
-first 0.7 start does on its own.
+every write, and the refusal names the one remedy: run the latest 0.7.x once — its first run moves the
+state into `.hh/` — before installing 0.8. Nothing is changed or deleted by the refusal.
 
 ## Several panels on one machine
 
@@ -76,12 +76,8 @@ that endpoint has, least invasive first:
   credential, but no live status either, and a running panel applies a changed definition at that
   entry's next start;
 - `cli` runs the CLI against its state root — the only runtime path the panel itself offers.
-  `start`/`stop` act on one entry; a restart is now the CLI's own `restart <id>` (home-hosted
-  0.7.13), which is what the panel's UI does and leaves no window in which the entry is down. A
-  local panel older than that refused the command before touching anything, so the plugin falls
-  back to the stop-then-start pair and reports `downgraded` in the result — the refusal is
-  detected from the CLI's own text, including the `Unexpected argument` a 0.7.12 CLI prints for
-  the positional id;
+  `start`/`stop` act on one entry, and a restart is the CLI's own `restart <id>`, which is what the
+  panel's UI does and leaves no window in which the entry is down;
 - `api` mints a token for that panel, enrols it and uses its HTTP API — the only way to get live
   status, and it replaces any token that panel had, which the question says outright.
 

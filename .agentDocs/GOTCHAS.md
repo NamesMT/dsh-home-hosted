@@ -621,16 +621,17 @@ cannot answer a question about the transport.
 
 ## Versions and dependencies
 
-- **Only the `home-hosted` this plugin pins is supported** (`^0.7.21`): the state layout is `.hh`, and
-  the `kill`/`persistent` version guards were dropped pre-1.0, so an older panel handed those keys
-  can refuse to boot. See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **A capability that needs a newer panel degrades; it never raises the floor.** `^0.7.21` already
-  admits every 0.7.x, so a feature added in 0.7.12/0.7.13 is reachable without moving the pin — and a
-  *local* panel older than it is a real scenario. The newer path is tried first and an
-  unknown-command refusal falls back to what that panel can do (`lifecycleForeign`). Detect the
-  refusal from the CLI's own text and know all of its shapes: a pre-0.7.13 panel answers a 404
-  through the daemon, while a 0.7.12 CLI rejects the positional with `Unexpected argument` — the one
-  a 404-only check misses.
+- **Only the `home-hosted` this plugin pins is supported** (`^0.8.0`), and the floor is that release:
+  the state layout is `.hh`, and 0.8 refuses a pre-workspace root rather than relocating it. An old
+  root is upgraded by running the latest 0.7.x once *before* installing 0.8 — said in the release
+  notes and in the refusal, never in code. See [COMPATIBILITY.md](COMPATIBILITY.md).
+- **A guard written for a version that is now below the floor is dead weight, not insurance.** The
+  floor sat at `0.7.0` for a long time, so this plugin grew a stop-then-start fallback for a panel
+  without `restart <id>` and a detector for three shapes of "unknown command" refusal; none of that
+  could ever run again once every supported release had the command. When the floor moves, delete what
+  it made unreachable — and delete the tests that pinned it, rather than leaving them to fail at the
+  next bump. The same reasoning removed `panel.migrate`: 0.8's own `migrate` no longer relocates, so a
+  button calling it could only ever fail.
 - **A pid is not an identity, and the plugin must never signal on one.** Pids are recycled and a
   zombie answers signal 0, so "the pid exists" cannot tell the panel from a stranger. Both generated
   helpers (`buildActivationSource`, `buildTakeoverSource`) used to escalate SIGTERM→SIGKILL on that
