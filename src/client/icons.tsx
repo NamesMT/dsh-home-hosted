@@ -30,6 +30,23 @@ function Glyph({ size = 14, children }: IconProps & { children: ReactNode }) {
   )
 }
 
+/**
+ * The house, for the settings-nav row and the page header.
+ *
+ * Drawn with the same stroke geometry as the rest so it reads as part of the set, and
+ * exported as a **path string** as well as a component: the nav glyph is applied by CSS
+ * `mask-image`, which needs markup, not a React node. See `settings-nav-icon.ts`.
+ */
+export const HOUSE_PATH = 'M2.6 6.9 8 2.6l5.4 4.3M3.9 6.4v6.2a.6.6 0 0 0 .6.6h2.1V9.9h2.8v3.3h2.1a.6.6 0 0 0 .6-.6V6.4'
+
+export function IconHouse(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d={HOUSE_PATH} />
+    </Glyph>
+  )
+}
+
 /** The panel: a screen that answers on a port. */
 export function IconPanel(props: IconProps) {
   return (
