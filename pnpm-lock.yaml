@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       home-hosted:
-        specifier: ^0.7.21
-        version: 0.7.21(zod@4.6.5)
+        specifier: ^0.8.0
+        version: 0.8.0(zod@4.6.5)
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
@@ -936,8 +936,8 @@ packages:
     resolution: {integrity: sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ==}
     engines: {node: '>=20.0.0'}
 
-  home-hosted@0.7.21:
-    resolution: {integrity: sha512-0AocU/wz+Jeq0edD5dRp+6/g73oGyOFD30Op11rpZgSROJ4+NnwKEsZ3Hq47sqqfuFTPn2GMroxHS+wGWYooGw==}
+  home-hosted@0.8.0:
+    resolution: {integrity: sha512-nqygaxf6GRhJY/AXrBQW0s6BkV5pRWehLsup2YYJBFL4teqYf7lf4Gx5BvL1uPJD25VMQGqnL03n+RdX60Z7ig==}
     engines: {node: '>=24.0.0'}
     hasBin: true
 
@@ -1834,7 +1834,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  home-hosted@0.7.21(zod@4.6.5):
+  home-hosted@0.8.0(zod@4.6.5):
     dependencies:
       '@grammyjs/auto-retry': 2.0.2(grammy@1.46.0)
       '@namesmt/utils': 0.5.20
