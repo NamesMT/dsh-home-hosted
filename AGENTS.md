@@ -13,17 +13,29 @@ one is refused until allowlisted).
 
 ## Docs
 
-Read on demand, not every session. This file holds orientation and the rules that prevent defects;
-these hold the reasoning and the traps.
+Where knowledge lives, and when to reach for each:
+
+| tier | what it holds | when you use it |
+| --- | --- | --- |
+| `AGENTS.md` — this file | orientation and the rules that prevent defects | read every session; write when a rule is learned the hard way |
+| `.agentDocs/` | depth: module rationale, traps with their causes, compatibility | read on demand, before touching that area; write when a rule needs its reasoning kept |
+| `docs/` | how-to and reference for a person using this package | read when the task is user-facing; write in the same commit as the change |
+| `README.md` | the first read, for a person | write alongside `docs/` |
+
+- **One home per fact.** State the rule here, keep the reasoning in `.agentDocs/` and link it — never both.
+- **A dead pointer is a bug.** If the target is gone, delete the pointer rather than leave it.
+- Move depth behind a pointer once a section outgrows a screen or two; keep the rule inline.
 
 | file | what it covers |
 | --- | --- |
 | [`.agentDocs/ARCHITECTURE.md`](.agentDocs/ARCHITECTURE.md) | what each module owns and why; the two doc sets |
-| [`.agentDocs/GOTCHAS.md`](.agentDocs/GOTCHAS.md) | the traps this repo already paid for, with their causes |
+| [`.agentDocs/GOTCHAS.md`](.agentDocs/GOTCHAS.md) | index of the traps this repo already paid for, split by topic |
 | [`.agentDocs/COMPATIBILITY.md`](.agentDocs/COMPATIBILITY.md) | the version pin, settings migrations, page compatibility |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | index of the user-facing topic docs |
 
 `docs/*.md` are for a person and are published; `.agentDocs/*.md` are for an agent and are not.
+`.agentDocs/GOTCHAS.md` is an index — read only the `gotchas/` topic for the area you touch, never all
+of them. Depth goes behind a pointer, never pasted twice.
 
 ## Commands
 
@@ -35,8 +47,8 @@ gh workflow run release.yml -f version=0.4.0 # release; see Releasing
 ```
 
 `pnpm-workspace.yaml` is load-bearing, so do not tidy it away: dropping `allowBuilds: esbuild` makes
-`pnpm install` fail outright (measured — pnpm 12 blocks esbuild's `postinstall`, which fetches its
-platform binary), and `minimumReleaseAge: 0` is deliberate, not a leftover.
+`pnpm install` fail outright (pnpm 12 blocks esbuild's `postinstall`, which fetches its platform
+binary), and `minimumReleaseAge: 0` is deliberate, not a leftover.
 
 Test the page against a throwaway profile (`dsh plugin --profile scratch add .`): **never** install a
 real boot entry, run a real service manager, or restart the harness you are running in to "check"
@@ -44,28 +56,23 @@ something.
 
 ## Structure
 
-- `src/index.ts` — plugin entry (settings, service, RPC, tools, startup reconcile, sign-in notice).
-- `src/config.ts` — the Cordis row config: `stateDir`, `homeHostedCommand`, `defaultEntryId`.
-- `src/service.ts` — the orchestrator: panel lifecycle, entries, boot, tokens, servers, dispatch.
-- `src/rpc.ts` — the page's transport, `POST /api/home-hosted` (`RPC_PATH` + `API_BASE`).
-- `src/tools.ts` — the agent tools; `src/settings.ts` — the versioned settings file.
-- `src/util/**` — paths, fs/exec seams, and `surface.ts` (web or Desktop). Host-only: it uses `node:`.
-- `src/home-hosted/**` — resolution and version constants, launchers, panel API, panel control, token,
-  owned keys, config file, the managed `dsh` entry, the 401 notice.
-- `src/boot/**` — the autostart ladder: one provider per mechanism, plus payload builders and the
-  ownership marker in `common.ts`.
-- `src/client/**` — the settings page (sections + primitives + locales).
-- `src/shared/contracts.ts` — the one wire contract both halves share. **Keep it import-free**: both
-  esbuild entries inline it, and a `node:` import there breaks the client build.
-- `scripts/` — the two esbuild wrappers plus the release version/notes helpers.
+- `src/index.ts` (plugin entry) · `src/config.ts` (the Cordis row config).
+- `src/service.ts` (panel lifecycle, entries, boot, tokens, servers, dispatch) · `src/rpc.ts`
+  (`POST /api/home-hosted`, `RPC_PATH` + `API_BASE`).
+- `src/tools.ts` (the agent tools) · `src/settings.ts` (the versioned settings file).
+- `src/util/**` (host-only seams) · `src/home-hosted/**` (resolution, launchers, panel API/control,
+  token, config file, the managed `dsh` entry, the 401 notice) · `src/boot/**` (the ladder, one
+  provider per mechanism) · `scripts/` (the two esbuild wrappers plus release helpers).
+- `src/client/**` (the settings page) · `src/shared/contracts.ts` (the one wire contract both halves
+  share — **keep it import-free**: both esbuild entries inline it).
 
 ## Rules that matter
 
 These prevent defects if broken. They stay here rather than in `.agentDocs/` for that reason — a rule
 nobody reads is worse than a long file.
 
-- **The plugin owns exactly** `autostart`, `onPortConflict`, `persistent` and `stop.killPortHolders`
-  (`OWNED_ENTRY_KEYS`); a patch never carries anything else from a person's entry.
+- **The plugin owns exactly** `autostart`, `onPortConflict`, `persistent` and `stop.killPortHolders`;
+  a patch never carries anything else from a person's entry.
 - **Snapshot before adopting.** `{ id }` alone is the marker for an entry this plugin created, so an
   owned key that was absent is recorded as the schema's default, never omitted — restore-versus-delete
   depends on telling those apart.
@@ -92,9 +99,8 @@ nobody reads is worse than a long file.
   CLI against its state root, or minting a token and using its API — three mechanisms, of which
   `FOREIGN_MECHANISMS` lists **which apply per endpoint**, least invasive first. An endpoint that names
   none cannot be aimed at another panel at all.
-- **`/_hh` is deliberately four routes** (`shutdown` plus three lifecycle), token-plus-loopback — so no
-  capability may be invented over them, and none may open an unauthenticated `/api` route to get
-  around it.
+- **Invent no capability over the panel's control route, and open no unauthenticated `/api` route** to
+  get around it: `/_hh` belongs to the pinned dependency, token-plus-loopback.
 - **Desktop is a second surface**: the harness entry is refused there (`DESKTOP_ENTRY_UNSUPPORTED`) and
   the page shows it web-only; every other server entry is managed exactly as on web.
 - **Boot entries point at a generated stable launcher**, never at a pnpm path; the marker proves
@@ -116,45 +122,45 @@ nobody reads is worse than a long file.
 
 ## How to work here
 
-- **Check who calls it before you change it** — grep the callers and the tests that name it. Two
-  guards here looked like the one that runs and were not: a launchd hint has two copies (one per
-  return) so breaking "it" hit the wrong site, and `assertArg`/`assertLabel` are thin delegators whose
-  real protection is the escaper behind them.
-- **Never overwrite or delete a large section you have not understood.** Read it, or say what you
-  could not determine and ask.
-- **Report the risk, not only the change** — what could break, what you could not verify, and every
-  assumption. Worth checking by kind: correctness, security, operational, integration.
-- **Fix the root cause, not the instance.** When the same bug keeps reappearing under different
-  names — a copied helper, a rule stated twice, a guard bypassed by a second code path — fix the
-  class: one shared implementation, one formatter, one guard. That is the work, not a follow-up to
-  ask for. Say what you changed and what it now prevents, and keep it inside the task's scope rather
-  than refactoring the world. Two here were exactly that: eight private `isRecord` copies (one of
-  which accepted an array) became one predicate, and two hand-written launchd log-path sites became
-  one `launchdLogPaths` shared with the plist builder.
-- **Verify before claiming, and say what you checked.** A green test proves only what it asserts —
-  **break the thing it guards and watch it fail.** If it still passes, either the test is decoration
-  or a different guard is running; find out which. A "text rules" test here copied the regexes it
-  asserted and survived the exact change its comment forbade — that is the failure this prevents.
-  Where a stub cannot answer the question, drive the real thing. Mark anything unverified as
-  unverified.
-- **If recall of this project is missing** (a fresh session, a compacted context, a different
-  machine), read this file, `.agentDocs/` and `git log` before acting, and ask 1–3 targeted questions
-  instead of reconstructing intent from guesswork.
+- **Check the callers before you change anything.** Grep who uses it and which tests name it. If the
+  impact is unclear, say so — do not guess.
+- **Never overwrite or delete a large section you have not understood.** Read it, or say what you could
+  not determine and ask.
+- **Do not invent requirements.** Build what was asked; surface what else you notice and let it be
+  decided.
+- **Fix the class, not the instance.** A copied helper, a rule stated twice, a guard bypassed by a
+  second path is one problem: one implementation, one guard. That is the work, not a follow-up to ask
+  for. Stay inside the task rather than refactoring the world.
+- **Verify before claiming, and say what you checked.** A passing test is not evidence it pins
+  anything — **break the thing it guards and watch it fail.** If it still passes, either the test is
+  decoration or a different guard is running; find out which. Where a stub cannot answer the question,
+  drive the real thing.
+- **Never write an identifier from memory.** A commit hash, path, line number or version must be quoted
+  from the source; a plausible-looking invented one is worse than none.
+- **A stated blocker is a hypothesis, not a fact.** Re-test "cannot install X" / "tool unavailable"
+  before inheriting it, and never report a failure your own flag forced.
+- **Report the risk with the change** — correctness, security, operational and integration; plus what
+  you could not verify and every assumption you made. An unverified claim marked as such beats a
+  confident one that is wrong.
+- **Missing recall of this repo?** Read this file, `.agentDocs/` and `git log` before acting, then ask
+  1–3 focused questions rather than guessing at intent.
+- **Two guards here looked like the one that runs and were not**: a launchd hint has two copies, and
+  `assertArg`/`assertLabel` are thin delegators whose real protection is the escaper behind them. The
+  copies this repo paid for are in [GOTCHAS](.agentDocs/GOTCHAS.md).
+- **A "text rules" test here copied the regexes it asserted** and survived the exact change its
+  comment forbade.
 - **Leave the docs better than you found them**: delete what is stale, compact what has grown, and
   never leave a pointer to content that does not exist.
 
 ## Conciseness
 
-**Prune verbose; keep correctness.** This covers code, comments, user docs and agent docs alike.
+**Prune verbose, keep correctness** — code, comments, docs alike.
 
-- Code: say it once, name it well. A comment only for non-obvious *intent*, never to restate the line,
-  and **short** — a block arguing for its own change is a commit message, and long evidence belongs in
-  `.agentDocs/`. A 20-line header on a new file is the tell.
-- Docs: one idea per sentence; prefer a table or a line to a paragraph. Cut any sentence that would
-  not change what a reader does.
-- **Delete history `git log` already holds.** Keep the *rule* that came out of it, not the story — a
-  list of where something used to live is archaeology, not guidance.
-- Do not drop a caveat to save a line. Concise means no filler, not fewer facts.
+- Code: a comment only for non-obvious *intent*, never to restate the line, and never long. A block
+  arguing for its own change is a commit message.
+- Docs: one idea per sentence. Cut anything that would not change what a reader does.
+- Delete history `git log` already holds — keep the *rule* that came out of it, not the story.
+- **Never drop a caveat to save a line.** Concise means no filler, not fewer facts.
 
 ## User-facing docs
 
@@ -171,7 +177,7 @@ nobody reads is worse than a long file.
 
 **Commits are conventional** (`fix:`, `feat:`, `docs:`…), because `scripts/check-release-version.mjs`
 parses them: it refuses a patch while a `!` or `BREAKING CHANGE:` commit is pending and warns on a
-minor without one, so a message that does not parse is a release that cannot be dispatched.
+minor without one.
 
 Versions are dispatched, never hand-edited:
 
@@ -180,10 +186,10 @@ gh workflow run release.yml -f version=0.4.0        # -f dry-run=true to rehears
 ```
 
 It gates on the macOS suite (`platform-gate.yml`) at that commit, typechecks/tests/builds, lets
-changelogen derive the changelog and bump/commit/tag `v<version>`, creates the GitHub release and
-publishes through npm trusted publishing. Below 1.0 the minor means "read the notes and act"; anything
-else is a patch. `prepublishOnly` runs typecheck + tests, so a release cannot ship a red suite.
-`pnpm pack` ships the `files` list in `package.json`; `.agentDocs/` is deliberately not published.
+changelogen bump/commit/tag `v<version>`, creates the release and publishes through npm trusted
+publishing. Below 1.0 the minor means "read the notes and act"; anything else is a patch.
+`prepublishOnly` runs typecheck + tests; `pnpm pack` ships `package.json`'s `files` list, which
+deliberately excludes `.agentDocs/`.
 
 ## Where to extend
 
