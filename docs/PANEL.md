@@ -104,10 +104,29 @@ exact stock body, guards every assignment, and replaces the response's `end` for
 authentication plugin's own page (or an exotic response) is passed through untouched rather than fought
 over. `authNotice` turns it off; `{url}` is read per 401.
 
-## Starting and replacing the panel
+## Starting and stopping the panel
 
-`panel.start` runs the preferred CLI's `up`, which detaches itself and returns once the panel answers —
-that is the whole out-of-the-box path when nothing is running.
+`panel.start` and `panel.stop` ask the *installed* autostart entry first, and fall back to the CLI's
+`up`/`down` only when nothing supervises the panel. That fallback is the out-of-the-box path: with no
+entry, the CLI is the only thing that can start one.
+
+It cannot be the other way round. An entry that carries a restart policy — `Restart=always` for
+systemd, `KeepAlive` for launchd — reads the CLI's `down` as an unexpected death and starts the panel
+again seconds later, so "Stop the panel" came back on its own: a stop the page reported and the machine
+did not honour. The mirror is just as wrong: a CLI `up` starts a panel *outside* the entry, which then
+cannot be stopped or observed by it either. Whoever supervises the panel is who may change its state.
+
+So an installed `systemd-user`/`systemd-system` entry answers with `systemctl start|stop`, a
+`launchd-agent`/`launchd-daemon` with `kickstart`/`kill`, and a `windows-task` with `schtasks /Run`.
+Mechanisms that start the panel from outside their own control — a `.desktop` file, a `Run` value, a
+container restart policy — have no stop to offer, so those fall back to the CLI. A Windows scheduled
+task deliberately offers only the start: `schtasks /End` kills the process tree instead of asking the
+panel to shut down, so the servers it supervises would die without their stop policy running.
+
+The entry's command returns as soon as systemd/launchd accepted it, which is not the same as the panel
+answering, so the call then watches `/healthz` for up to 20 s — the CLI's own startup budget. A stop
+follows the same rule: if the entry's stop ran but the panel still answers, it was not the panel that
+entry supervises, and the CLI's `down` finishes the job.
 
 `panel.takeover` replaces an answering panel with the preferred copy. Stopping the old panel also stops
 the non-persistent servers it supervises — this dsh only if it is one, which an entry this plugin

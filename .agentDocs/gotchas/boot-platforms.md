@@ -34,6 +34,21 @@ write the artifact.
 - **A successful install hands the running panel to the new entry through a detached helper.** Prove
   the start, stop the previous mechanism's panel, start the entry — *then* retire the others, or you
   delete the entry keeping the panel alive (`test/boot/activate.test.ts`).
+- **A restart policy turns the CLI's `down` into a restart, and no test sees it.** systemd's
+  `Restart=` (read out of this machine's `systemd.service(5)`, systemd 261) restarts a process that
+  dies outside systemd and explicitly not one systemd stopped itself — "When the death of the process
+  is a result of systemd operation (e.g. service stop or restart), the service will not be restarted."
+  So a CLI `down` on a supervised panel comes back seconds later and `panel.stop` reported a stop the
+  machine had already undone; the mirror is a CLI `up` starting a panel beside the entry. Both actions therefore ask the installed mechanism (`control()` in `src/boot/ladder.ts`,
+  `*Commands()` in each provider) and fall back to the CLI only when nothing is installed — the
+  services at `test/service.test.ts` ("panel start and stop go through the installed entry") assert
+  the CLI is never called, in either direction.
+- **`schtasks /End` is not a stop.** It kills the task's process tree, so a supervised server dies
+  without its stop policy running; a scheduled task offers `startCommands()` and deliberately no stop,
+  so the CLI's graceful `down` is what runs. The task's `RestartOnFailure` behaviour after `/End` was
+  **not** measured, which is why the decision rests on the graceful-shutdown argument alone.
+- **A launchd job launchd does not have loaded cannot be `kickstart`ed**, so `startCommands()` proves
+  it with `launchctl print` and answers null rather than printing a command that would fail.
 - **An entry this process runs as is never deleted**; "stop managing" pauses or restores it instead.
   **The `unsupported` candidate is real**, not a bug to filter out.
 - **A choice the host can already resolve should not be left to the reader to guess** —

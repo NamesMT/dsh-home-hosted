@@ -137,6 +137,21 @@ keys (`Path=`, `Name=`, `Comment=`), and `Exec=` applies it on top of its shell 
 Every ownership check reads the escaped marker too, or a marker carrying a backslash would
 be written escaped and searched for raw — and the plugin would call its own entry foreign.
 
+## Once an entry is installed, it owns the panel's start and stop
+
+The page's Start and Stop buttons drive that entry, not the CLI. On systemd that is
+`systemctl start|stop`; a `Restart=always` unit restarts a process that dies *outside* systemd, so
+the CLI's `down` brought the panel back seconds later and the page reported a stop the machine had
+already undone. systemd's own manual is explicit: "When the death of the process is a result of
+systemd operation (e.g. service stop or restart), the service will not be restarted." On launchd it
+is `kickstart`/`kill` for the same reason (`KeepAlive`). A Windows scheduled task offers the start
+only — `schtasks /End` kills the process tree rather than shutting the panel down.
+
+Nothing needs the reverse care during a *handover*, which is why the two paths differ: the activation
+helper above already stops the old panel through the mechanism that supervises it (step 2) and then
+uses the CLI's `down` only for the panel it drove itself. This rule is about the buttons a person
+presses, where the CLI must never be the one acting on a supervised panel.
+
 ## Enabling autostart hands the panel over
 
 An install alone proves nothing. The panel the plugin started keeps running, so nothing shows whether
