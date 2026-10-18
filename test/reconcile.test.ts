@@ -80,6 +80,7 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
     },
     uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, status }),
     activate: async () => null,
+    control: async () => null,
   }
 
   const settings = new SettingsStore(path.join(state, 'settings.json'), 'dsh')

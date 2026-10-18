@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { BootStatus, HomeHostedStatus, InstanceView, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
+import type { BootMechanism, BootStatus, HomeHostedStatus, InstanceView, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
 import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
@@ -15,7 +15,7 @@ import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
 import type { ActivationPlan } from '../src/home-hosted/panel-control.js'
-import type { BootActivation } from '../src/boot/types.js'
+import type { BootActivation, BootSpec } from '../src/boot/types.js'
 import type { PanelControlResult } from '../src/shared/contracts.js'
 import { SettingsStore } from '../src/settings.js'
 import { bootUnitName } from '../src/util/paths.js'
@@ -50,6 +50,7 @@ const ladder: BootLadderLike = {
   install: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: bootStatus }),
   uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: null, status: bootStatus }),
     activate: async () => null,
+    control: async () => null,
 }
 
 let scratch: TempDir | null = null
@@ -93,6 +94,10 @@ async function harness(options: {
   otherPanels?: string[]
   /** Replaces the boot ladder, for tests about what was written or retired. */
   ladder?: BootLadderLike
+  /** Replaces an autostart entry's own start/stop step, so no service manager runs. */
+  execControl?: (argv: string[]) => Promise<RunResult>
+  /** How long a mechanism's start/stop is watched for; a short window keeps the suite fast. */
+  controlWaitMs?: number
   /** Replaces the detached hand-over helper, so no process is spawned. */
   spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
   /** The project the managed row belongs to; defaults to this process's cwd. */
@@ -143,6 +148,8 @@ async function harness(options: {
     homeDir: scratch.path,
     settings,
     createLadder: () => options.ladder ?? ladder,
+    execControl: options.execControl,
+    controlWaitMs: options.controlWaitMs,
     // Stubbed, exactly as `execCli` is: the real preflight spawns the CLI and loads the
     // whole panel graph to print a version. `launcherVersion: null` is the honest default
     // here — no launcher was run — and the warning path has its own test.
@@ -1041,6 +1048,131 @@ describe('panel lifecycle from the page', () => {
   })
 })
 
+/**
+ * The bug this suite exists for: a panel supervised by an installed autostart
+ * entry cannot be stopped through the CLI.
+ *
+ * `Restart=always`/`KeepAlive` read the CLI's `down` as an unexpected death and
+ * start the panel again a few seconds later, so "Stop the panel" came back on its
+ * own — a stop the page reported and the machine did not honour. The reverse is
+ * the same rule: a CLI `up` starts a panel outside the entry, which the entry can
+ * then neither stop nor observe. So both actions go through the mechanism that
+ * supervises the panel when one is installed, and through the CLI only when
+ * nothing is.
+ */
+describe('panel start and stop go through the installed entry', () => {
+  /** A ladder reporting `mechanism` installed, whose control steps are recorded. */
+  function entryLadder(mechanism: BootMechanism | null, steps: { start: string[][], stop: string[][] }) {
+    const installed = mechanism !== null
+    const status: BootStatus = {
+      ...bootStatus,
+      mechanism,
+      state: installed ? 'enabled-running' : 'not-installed',
+    }
+    return {
+      status: async () => status,
+      install: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism, status }),
+      uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: null, status }),
+      activate: async () => null,
+      control: async (_spec: BootSpec, action: 'start' | 'stop') => mechanism === null
+        ? null
+        : { mechanism, commands: action === 'start' ? steps.start : steps.stop, display: [] },
+    } satisfies BootLadderLike
+  }
+
+  const unitSteps = {
+    start: [['systemctl', '--user', 'start', 'home-hosted.service']],
+    stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+  }
+
+  it('stops a supervised panel through systemctl, never the CLI down that the unit would undo', async () => {
+    const panel = await withPanel()
+    const ran: string[][] = []
+    const { home, service, cliCalls } = await harness({
+      panel,
+      ladder: entryLadder('systemd-user', unitSteps),
+      // A stopped panel clears its own `run.json` on the way out, which is what
+      // makes the wait below see it gone rather than answer from a stale record.
+      execControl: async (argv) => {
+        ran.push(argv)
+        fs.rmSync(runFile(home), { force: true })
+        return { command: argv[0]!, args: argv.slice(1), code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
+      },
+      controlWaitMs: 500,
+    })
+    const result = await service.stopPanelNow()
+
+    expect(result.ok).toBe(true)
+    expect(result.detail).toContain('systemd-user')
+    // The heart of it: `systemctl stop`, and no CLI `down` at all. A `down` here is
+    // what `Restart=always` immediately reverses.
+    expect(ran).toEqual(unitSteps.stop)
+    expect(cliCalls.some(call => call.args.includes('down'))).toBe(false)
+  })
+
+  it('starts a supervised panel through systemctl, never the CLI up that would run beside the unit', async () => {
+    const ran: string[][] = []
+    const { service, cliCalls } = await harness({
+      ladder: entryLadder('systemd-user', unitSteps),
+      execControl: async (argv) => {
+        ran.push(argv)
+        return { command: argv[0]!, args: argv.slice(1), code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
+      },
+      controlWaitMs: 50,
+    })
+    const result = await service.startPanelNow()
+
+    expect(ran).toEqual(unitSteps.start)
+    // It really was asked to start; the window is short, so the answer is a
+    // truthful "did not answer" rather than a claim the panel is up.
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('systemd-user')
+    expect(cliCalls.some(call => call.args.includes('up'))).toBe(false)
+  })
+
+  it('still uses the CLI when no entry is installed, which is the only supervisor then', async () => {
+    const panel = await withPanel()
+    const ran: string[][] = []
+    const { service, cliCalls } = await harness({
+      panel,
+      ladder: entryLadder(null, unitSteps),
+      execControl: async (argv) => {
+        ran.push(argv)
+        return { command: argv[0]!, args: argv.slice(1), code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
+      },
+      controlWaitMs: 50,
+    })
+    await service.stopPanelNow()
+
+    expect(ran).toEqual([])
+    expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
+  })
+
+  it('reports the entry\'s refusal instead of claiming the panel stopped', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({
+      panel,
+      ladder: entryLadder('systemd-system', unitSteps),
+      execControl: async (argv) => ({
+        command: argv[0]!,
+        args: argv.slice(1),
+        code: 1,
+        signal: null,
+        stdout: '',
+        stderr: 'Failed to stop home-hosted.service: Access denied',
+        timedOut: false,
+        error: null,
+      }),
+      controlWaitMs: 50,
+    })
+    const result = await service.stopPanelNow()
+
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('Access denied')
+    expect(result.detail).toContain('systemd-system')
+  })
+})
+
 describe('retiring the pre-per-instance boot artifact', () => {
   /** A ladder where a marker-owned legacy `home-hosted` entry already exists. */
   function recordingLadder(dir: string): { ladder: BootLadderLike, written: string[], retired: string[] } {
@@ -1076,6 +1208,7 @@ describe('retiring the pre-per-instance boot artifact', () => {
           return { ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: stateFor(spec.unitName, 'not-installed', null) }
         },
         activate: async () => null,
+        control: async () => null,
       },
     }
   }
@@ -1172,6 +1305,7 @@ describe('handing the panel to the entry that was just installed', () => {
       install: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism: 'systemd-user', status: bootStatus }),
       uninstall: async (): Promise<BootInstallResult> => ({ ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: null, status: bootStatus }),
       activate: async () => activation,
+      control: async () => null,
     }
   }
 

@@ -64,8 +64,12 @@ describe('systemd activation', () => {
   it('stops the panel the unit supervises, without disabling the unit', async () => {
     const runner = fakeRun(() => ({ code: 0 }))
     const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
-    // `Restart=always` is why the CLI's `down` alone loses the race on a switch.
-    expect(await provider.stopCommands?.(spec())).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+    // `Restart=always` is why the CLI's `down` alone loses the race on a switch,
+    // and why it cannot be the page's Stop either: the unit brings the panel back.
+    expect(await provider.stopCommands?.(spec())).toEqual({
+      commands: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+      display: ['systemctl --user stop home-hosted.service'],
+    })
   })
 
   it('retires a user unit without --now, so it cannot race the start', async () => {
@@ -166,8 +170,10 @@ describe('launchd activation', () => {
       return { code: 0 }
     })
     const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
-    expect(await provider.stopCommands?.(spec()))
-      .toEqual([['launchctl', 'kill', 'SIGTERM', 'gui/1000/dev.home-hosted.home-hosted']])
+    expect(await provider.stopCommands?.(spec())).toEqual({
+      commands: [['launchctl', 'kill', 'SIGTERM', 'gui/1000/dev.home-hosted.home-hosted']],
+      display: ['launchctl kill SIGTERM gui/1000/dev.home-hosted.home-hosted'],
+    })
   })
 
   it('boots out a daemon through sudo -n, never a bare launchctl', async () => {
@@ -230,5 +236,80 @@ describe('windows activation', () => {
     expect(flat[0]).toContain('reg.exe delete')
     expect(flat[0]).toContain('CurrentVersion\\Run')
     expect(flat[1]).toContain('Software\\home-hosted')
+  })
+})
+
+describe('the page\'s own panel start and stop', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => cleanup(home))
+
+  it('starts and stops the systemd user unit itself, never through the CLI', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    // `Restart=always` turns a CLI `down` into a restart a few seconds later, and a
+    // CLI `up` starts a panel the unit does not supervise. Both actions have to be
+    // the unit's own, or the page reports a state the machine is not in.
+    expect((await provider.stopCommands?.(spec()))?.commands)
+      .toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+    expect((await provider.startCommands?.(spec()))?.commands)
+      .toEqual([['systemctl', '--user', 'start', 'home-hosted.service']])
+  })
+
+  it('elevates a system unit\'s start and stop with sudo -n, and not when already root', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    const elevated = createSystemdSystemProvider(ctxFor({
+      home,
+      run: runner.run,
+      sudo: async () => true,
+      exists: file => file === '/run/systemd/system',
+    }))
+    expect((await elevated.stopCommands?.(spec()))?.commands).toEqual([['sudo', '-n', 'systemctl', 'stop', 'home-hosted.service']])
+    // The display is what a person runs when the call could not elevate itself.
+    expect((await elevated.startCommands?.(spec()))?.display).toEqual(['sudo systemctl start home-hosted.service'])
+
+    const root = createSystemdSystemProvider(ctxFor({ home, run: runner.run, isRoot: true, exists: file => file === '/run/systemd/system' }))
+    expect((await root.stopCommands?.(spec()))?.commands).toEqual([['systemctl', 'stop', 'home-hosted.service']])
+  })
+
+  it('has no start for a launchd job launchd does not have loaded', async () => {
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[0] === 'print')
+        return args[1] === 'gui/1000' ? { code: 0 } : { code: 113 }
+      return { code: 0 }
+    })
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    // `kickstart` on an unloaded label fails; claiming a start would be a fiction,
+    // so the caller falls back to the CLI.
+    expect(await provider.startCommands?.(spec())).toBeNull()
+  })
+
+  it('kickstarts a loaded launchd job', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    expect((await provider.startCommands?.(spec()))?.commands)
+      .toEqual([['launchctl', 'kickstart', 'gui/1000/dev.home-hosted.home-hosted']])
+  })
+
+  it('starts a scheduled task and leaves stopping it to the CLI, which is graceful', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    const provider = createWindowsTaskProvider(ctxFor({ home, run: runner.run, platform: 'win32' }))
+    expect((await provider.startCommands?.(winSpec()))?.commands).toEqual([['schtasks.exe', '/Run', '/TN', 'home-hosted']])
+    // `schtasks /End` kills the tree instead of asking the panel to shut down, so
+    // the servers it supervises would be killed without their stop policy running.
+    expect(await provider.stopCommands?.(winSpec())).toBeNull()
+  })
+
+  it('claims neither action for mechanisms the session reads at login', async () => {
+    const runner = fakeRun(() => ({ code: 0 }))
+    // A `.desktop` file and a `Run` value are read by the session at login: nothing
+    // there can be told to start or stop anything, so they offer no method at all —
+    // `?? null` is the ladder's own reading of the absent method.
+    const xdg = createXdgAutostartProvider(ctxFor({ home, run: runner.run }))
+    expect(await xdg.startCommands?.(spec()) ?? null).toBeNull()
+    expect(await xdg.stopCommands?.(spec()) ?? null).toBeNull()
+    const run = createWindowsRunProvider(ctxFor({ home, run: runner.run, platform: 'win32' }))
+    expect(await run.startCommands?.(winSpec()) ?? null).toBeNull()
+    expect(await run.stopCommands?.(winSpec()) ?? null).toBeNull()
   })
 })

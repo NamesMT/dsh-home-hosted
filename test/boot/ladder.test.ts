@@ -420,3 +420,85 @@ describe('ladder activation and switching', () => {
     expect(plan?.retire.flat().join(' ')).toContain('autostart/home-hosted.desktop')
   })
 })
+
+describe('ladder control: the installed entry owns start and stop', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => cleanup(home))
+
+  /** A machine where the systemd user unit is installed and enabled. */
+  function installedLadder() {
+    const runner = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-system-running'))
+        return { code: 0, stdout: 'running\n' }
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 0 }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=yes\n' }
+      return { code: 0 }
+    })
+    return createBootLadder({
+      platform: 'linux',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+  }
+
+  it('stops through the unit that supervises the panel, not through the CLI', async () => {
+    const ladder = installedLadder()
+    const control = await ladder.control(spec(), 'stop')
+    // `Restart=always` reads the CLI's `down` as a crash and brings the panel back;
+    // only `systemctl stop` is a stop the entry believes in.
+    expect(control?.mechanism).toBe('systemd-user')
+    expect(control?.commands).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+  })
+
+  it('starts through the same unit', async () => {
+    const ladder = installedLadder()
+    const control = await ladder.control(spec(), 'start')
+    expect(control?.mechanism).toBe('systemd-user')
+    expect(control?.commands).toEqual([['systemctl', '--user', 'start', 'home-hosted.service']])
+  })
+
+  it('answers null with no entry installed, which is when the CLI is right', async () => {
+    const runner = fakeRun(noSystemdHandler())
+    const ladder = createBootLadder({
+      platform: 'linux',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+    // Nothing supervises the panel, so a mechanism's stop would stop nothing and a
+    // mechanism's start would be a command for an entry that is not there.
+    expect(await ladder.control(spec(), 'stop')).toBeNull()
+    expect(await ladder.control(spec(), 'start')).toBeNull()
+  })
+
+  it('answers null for a mechanism whose entry cannot be commanded', async () => {
+    const runner = fakeRun(noSystemdHandler())
+    const ladder = createBootLadder({
+      platform: 'linux',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+    await ladder.install(spec(), 'xdg-autostart')
+    // The `.desktop` entry is installed, and the session that reads it cannot be
+    // told to stop anything — so the CLI remains the only path.
+    expect(await ladder.control(spec(), 'stop')).toBeNull()
+    expect(await ladder.control(spec(), 'start')).toBeNull()
+  })
+})
