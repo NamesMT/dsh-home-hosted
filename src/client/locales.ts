@@ -84,7 +84,7 @@ export const en = {
   panelStop: 'Stop the panel',
   panelStopTitle: 'Stop the running panel?',
   panelStopBody:
-    'This stops the panel and all non-persistent servers it supervises. Persistent entries keep running. An autostart entry starts the rest again at the next panel start.',
+    'This stops the panel and all non-persistent servers it supervises. Persistent entries keep running, and an installed autostart entry stops the panel through itself, so it does not restart it.',
   panelStopping: 'Stopping the panel…',
   panelStopped: 'The panel stopped.',
   panelStopFailed: 'The panel did not stop: {message}',
@@ -333,7 +333,7 @@ export const zh: Record<keyof typeof en, string> = {
   panelStart: '启动面板',
   panelStop: '停止面板',
   panelStopTitle: '停止正在运行的面板？',
-  panelStopBody: '这会停止面板以及它监管的所有非持久化服务器；持久化条目会继续运行。带有自启的条目会在下次启动面板时重新启动。',
+  panelStopBody: '这会停止面板以及它监管的所有非持久化服务器；持久化条目会继续运行。若已安装自启条目，停止会通过该条目进行，因此不会把面板重新拉起。',
   panelStopping: '正在停止面板…',
   panelStopped: '面板已停止。',
   panelStopFailed: '面板未能停止：{message}',
