@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
+import type { BootActionResult, BootControl, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
   assertUserName,
@@ -495,15 +495,33 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
     },
 
     /** `KeepAlive` would resurrect the panel, so the job itself has to stop it. */
-    async stopCommands(spec: BootSpec): Promise<string[][]> {
+    async stopCommands(spec: BootSpec): Promise<BootControl | null> {
       const label = launchdLabel(spec)
       const domain = await domainOf()
       if (domain === null)
-        return []
+        return null
       const job = `${domain}/${label}`
       return mode === 'daemon'
-        ? [['sudo', '-n', 'launchctl', 'kill', 'SIGTERM', job]]
-        : [['launchctl', 'kill', 'SIGTERM', job]]
+        ? { commands: [['sudo', '-n', 'launchctl', 'kill', 'SIGTERM', job]], display: [shellCommand('sudo', ['launchctl', 'kill', 'SIGTERM', job])] }
+        : { commands: [['launchctl', 'kill', 'SIGTERM', job]], display: [shellCommand('launchctl', ['kill', 'SIGTERM', job])] }
+    },
+
+    /**
+     * `kickstart` starts a loaded job; an unloaded one is not something a stopped
+     * panel implies, so a missing domain or a job launchd does not know is `null`
+     * and the caller falls back to the CLI.
+     */
+    async startCommands(spec: BootSpec): Promise<BootControl | null> {
+      const label = launchdLabel(spec)
+      const domain = await domainOf()
+      if (domain === null)
+        return null
+      const job = `${domain}/${label}`
+      if (codeOf(await ctx.run('launchctl', ['print', job])) !== 0)
+        return null
+      return mode === 'daemon'
+        ? { commands: [['sudo', '-n', 'launchctl', 'kickstart', job]], display: [shellCommand('sudo', ['launchctl', 'kickstart', job])] }
+        : { commands: [['launchctl', 'kickstart', job]], display: [shellCommand('launchctl', ['kickstart', job])] }
     },
 
     /**

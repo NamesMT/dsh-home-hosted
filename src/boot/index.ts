@@ -6,6 +6,8 @@
 export type {
   BootAccount,
   BootActionResult,
+  BootControl,
+  BootControlResult,
   BootLadder,
   BootLadderOptions,
   BootProvider,

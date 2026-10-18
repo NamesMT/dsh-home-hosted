@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
+import type { BootActionResult, BootControl, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
   assertUserName,
@@ -420,8 +420,23 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
     },
 
     /** Stops the panel the unit supervises, keeping the unit enabled. */
-    async stopCommands(spec: BootSpec): Promise<string[][]> {
-      return [['systemctl', '--user', 'stop', unitOf(spec)]]
+    async stopCommands(spec: BootSpec): Promise<BootControl | null> {
+      return {
+        commands: [['systemctl', '--user', 'stop', unitOf(spec)]],
+        display: [shellCommand('systemctl', ['--user', 'stop', unitOf(spec)])],
+      }
+    },
+
+    /**
+     * `start`, never `restart`: the unit is not running when this is asked for.
+     * No `--no-block` either — the caller waits on the answer to know it worked.
+     */
+    async startCommands(spec: BootSpec): Promise<BootControl | null> {
+      const unit = unitOf(spec)
+      return {
+        commands: [['systemctl', '--user', 'start', unit]],
+        display: [shellCommand('systemctl', ['--user', 'start', unit])],
+      }
     },
 
     /**
@@ -697,9 +712,23 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
      * race: `Restart=always` brings the panel back as soon as the CLI's `down`
      * ends, before the new entry starts one.
      */
-    async stopCommands(spec: BootSpec): Promise<string[][]> {
+    async stopCommands(spec: BootSpec): Promise<BootControl | null> {
+      const unit = unitOf(spec)
       const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
-      return [elevate(['systemctl', 'stop', unitOf(spec)])]
+      return {
+        commands: [elevate(['systemctl', 'stop', unit])],
+        display: [shellCommand('sudo', ['systemctl', 'stop', unit])],
+      }
+    },
+
+    /** Starts the unit, so the panel comes up under it rather than beside it. */
+    async startCommands(spec: BootSpec): Promise<BootControl | null> {
+      const unit = unitOf(spec)
+      const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
+      return {
+        commands: [elevate(['systemctl', 'start', unit])],
+        display: [shellCommand('sudo', ['systemctl', 'start', unit])],
+      }
     },
 
     /**

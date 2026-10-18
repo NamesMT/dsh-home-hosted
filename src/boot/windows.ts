@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { BootCandidate, BootState } from '../shared/contracts.js'
-import type { BootActionResult, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
+import type { BootActionResult, BootControl, BootProvider, BootProviderContext, BootProviderStatus, BootRetirement, BootSpec, BootStart } from './types.js'
 import {
   assertAbsolute,
   assertArg,
@@ -275,7 +275,8 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
     /**
      * The `Run` key is read by the shell at logon; there is no way to make it
      * start something now. Reporting none is what sends the caller back to the
-     * CLI, which is the only honest way to bring the panel up here.
+     * CLI, which is the only honest way to bring the panel up here — and, for the
+     * same reason, the only way to stop what it started.
      */
     async activate(): Promise<null> {
       return null
@@ -547,6 +548,25 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
         requires: { commands: [['schtasks.exe', '/Query', '/TN', name]], files: [] },
         display: [windowsDisplayCommand('schtasks.exe', ['/Run', '/TN', name])],
       }
+    },
+
+    /** `/Run` starts the registered task now, which is where the panel comes up. */
+    async startCommands(spec: BootSpec): Promise<BootControl | null> {
+      const name = nameOf(spec)
+      return {
+        commands: [['schtasks.exe', '/Run', '/TN', name]],
+        display: [windowsDisplayCommand('schtasks.exe', ['/Run', '/TN', name])],
+      }
+    },
+
+    /**
+     * No stop command, deliberately: `schtasks /End` terminates the task's process
+     * tree rather than asking the panel to shut down, so the servers it supervises
+     * are killed without their stop policy running. The CLI's `down` is the only
+     * stop here that is graceful.
+     */
+    async stopCommands(): Promise<null> {
+      return null
     },
 
     /** Unregistering a task stops nothing that is already running. */

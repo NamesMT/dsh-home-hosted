@@ -13,7 +13,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import type { BootInstallResult, BootMechanism, BootStatus, DshSurface, EntryIntent, ForeignMechanism, HomeHostedStatus, InstanceView, ManagedEntryStatus, PanelControlResult, PanelStatus, RpcEndpoint, ServerEntry, ServerEntryPatch, ServerEntryView, UiAction, UiResult, WorkspaceSummary } from './shared/contracts.js'
 import { BOOT_MECHANISM_NAMES, FOREIGN_MECHANISMS, isBootMechanismName, isOnPortConflict, isRecord, isWorkspaceId, ON_PORT_CONFLICT_POLICIES, RPC_ENDPOINT_NAMES } from './shared/contracts.js'
-import type { BootActivation, BootSpec } from './boot/types.js'
+import type { BootActivation, BootControlResult, BootSpec } from './boot/types.js'
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
 import { accountOf } from './boot/index.js'
@@ -58,6 +58,24 @@ const ENTRY_RECOVERY_INTERVAL_MS = 30_000
 /** How long a panel inventory stands before the next read re-scans the disk. */
 const INSTANCES_CACHE_MS = 10_000
 
+/**
+ * How long `panel.start`/`panel.stop` watch for the panel to come up or go down.
+ *
+ * The entry's own command returns as soon as systemd/launchd accepted it, which
+ * is not the same as the panel answering — and `up --foreground` boots the whole
+ * panel graph before it serves. The window matches the CLI's own 20 s startup
+ * budget (`waitForStartup`), so a handover is not slower than the CLI path.
+ */
+const PANEL_CONTROL_WAIT_MS = 20_000
+/**
+ * The same, for a stop. `systemctl stop` already blocks until the unit is gone, so
+ * a short window is enough for launchd's asynchronous `kill` — and it bounds the
+ * cost of the fallback when the answering panel turns out not to be under the entry.
+ */
+const PANEL_STOP_WAIT_MS = 5_000
+/** Between two `/healthz` probes while waiting; also the CLI's own startup poll interval. */
+const PANEL_CONTROL_POLL_MS = 250
+
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
 function pluginRoot(): string | null {
   try {
@@ -77,6 +95,7 @@ export interface BootLadderLike {
   install: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
   uninstall: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
   activate: (spec: BootSpec, mechanism?: BootMechanism, from?: BootMechanism | null) => Promise<BootActivation | null>
+  control: (spec: BootSpec, action: 'start' | 'stop') => Promise<BootControlResult | null>
 }
 
 export class HomeHostedError extends Error {
@@ -124,6 +143,10 @@ export interface HomeHostedServiceOptions {
   installGlobal?: (range: string) => Promise<{ ok: boolean, detail: string, output: string }>
   /** Test seam: supply the boot ladder instead of probing the real OS. */
   createLadder?: () => BootLadderLike
+  /** Test seam: run an autostart entry's own start/stop step without spawning it. */
+  execControl?: (argv: string[]) => Promise<RunResult>
+  /** Test seam: how long a mechanism's start/stop is watched for, instead of 20 s. */
+  controlWaitMs?: number
   /** Test seam: hand the panel to an autostart entry without spawning a helper. */
   spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
   /** The project the managed `dsh` row belongs to; defaults to this process's cwd. */
@@ -1414,7 +1437,92 @@ export class HomeHostedService extends Service {
   // Panel lifecycle
   // -------------------------------------------------------------------------
 
-  /** Out-of-the-box start: run the preferred CLI's `up`, which detaches itself. */
+  /**
+   * The installed entry's own start or stop, or null when nothing installed can
+   * do it.
+   *
+   * This is the whole reason `panel.start`/`panel.stop` ask the ladder first: a
+   * panel supervised by an OS entry has one correct way to change its state, and
+   * it is not the CLI's. `Restart=always`/`KeepAlive` reads the CLI's `down` as an
+   * unexpected death and starts the panel again seconds later — a "stop" that
+   * silently comes back — and a CLI `up` starts a panel outside the entry, which
+   * that entry can no longer stop or observe either.
+   */
+  private async bootControl(action: 'start' | 'stop'): Promise<BootControlResult | null> {
+    const spec = await this.bootSpec()
+    if (spec === null)
+      return null
+    try {
+      return await this.ladder().control(spec, action)
+    }
+    catch {
+      return null
+    }
+  }
+
+  /**
+   * Run an entry's start/stop steps **in order**, and report the first refusal.
+   *
+   * Order is load-bearing for the mechanisms that need two steps (a daemon's
+   * `bootstrap` then `kickstart`): running them concurrently would hand the second
+   * one a job the first has not loaded yet.
+   */
+  private async runControl(control: BootControlResult, action: 'start' | 'stop'): Promise<PanelControlResult | null> {
+    for (const step of control.commands) {
+      const [program, ...args] = step
+      if (program === undefined)
+        return { ok: false, detail: `${control.mechanism} produced an empty ${action} command` }
+      const result = this.options.execControl !== undefined
+        ? await this.options.execControl(step)
+        : await run(program, args, { timeoutMs: 90_000 })
+      if (result.code !== 0) {
+        const reason = failureOutput(result) ?? `${program} exited ${String(result.code)}`
+        return {
+          ok: false,
+          detail: `${control.mechanism} could not ${action} the panel: ${reason}; run \`${control.display.join(' && ')}\` by hand to see why`,
+        }
+      }
+    }
+    return null
+  }
+
+  private controlWaitMs(): number {
+    return this.options.controlWaitMs ?? PANEL_CONTROL_WAIT_MS
+  }
+
+  /** Wait for the panel to answer, up to the deadline; null means it never did. */
+  private async awaitPanelAnswer(deadlineMs = this.controlWaitMs()): Promise<{ url: string, version: string | null } | null> {
+    const until = Date.now() + deadlineMs
+    for (;;) {
+      const runtime = this.runtime()
+      if (runtime !== null && await probePanel(runtime.url))
+        return { url: runtime.url, version: runtime.version }
+      if (Date.now() >= until)
+        return null
+      await new Promise(resolve => setTimeout(resolve, PANEL_CONTROL_POLL_MS))
+    }
+  }
+
+  /** Wait for the panel to stop answering; false means it still answers. */
+  private async awaitPanelSilent(deadlineMs = this.options.controlWaitMs ?? PANEL_STOP_WAIT_MS): Promise<boolean> {
+    const until = Date.now() + deadlineMs
+    for (;;) {
+      const runtime = this.runtime()
+      if (runtime === null || !await probePanel(runtime.url))
+        return true
+      if (Date.now() >= until)
+        return false
+      await new Promise(resolve => setTimeout(resolve, PANEL_CONTROL_POLL_MS))
+    }
+  }
+
+  /**
+   * Start the panel: through its autostart entry when one supervises it, else
+   * through the preferred CLI's `up`, which detaches itself.
+   *
+   * `applyPanelPort` runs either way: the port lives in the panel's own settings,
+   * and the entry's `up --foreground` reads the same state root.
+   */
   async startPanelNow(): Promise<PanelControlResult> {
     const { resolution } = await this.cli()
     const deps = await this.panelControlDeps()
@@ -1425,6 +1533,19 @@ export class HomeHostedService extends Service {
       return { ok: true, detail: 'a panel is already answering', url: runtime.url, version: runtime.version }
     }
     this.applyPanelPort()
+
+    const control = await this.bootControl('start')
+    if (control !== null) {
+      const refused = await this.runControl(control, 'start')
+      if (refused !== null)
+        return refused
+      const answered = await this.awaitPanelAnswer()
+      this.clientCache = null
+      return answered !== null
+        ? { ok: true, detail: `the panel was started by its ${control.mechanism} entry`, url: answered.url, version: answered.version }
+        : { ok: false, detail: `${control.mechanism} was told to start the panel, but it did not answer within ${this.controlWaitMs() / 1000}s; check the entry's own output` }
+    }
+
     const result = await startPanelProcess(deps)
     this.clientCache = null
     return result
@@ -1433,11 +1554,13 @@ export class HomeHostedService extends Service {
   /**
    * Stop the panel the plugin drives, and the non-persistent servers it supervises.
    *
-   * Deliberately not a replacement for the takeover guard: stopping is safe to
-   * lose (an `autostart` entry comes back), while replacing is not. A persistent
-   * entry survives the panel, so this usually answers normally; if this process
-   * *is* a non-persistent one of those servers the answer may never arrive, and
-   * the page treats a dropped call as "the panel is stopping" rather than a failure.
+   * Through the installed entry when there is one — see {@link bootControl} — and
+   * through the CLI's `down` otherwise. Deliberately not a replacement for the
+   * takeover guard: stopping is safe to lose (an `autostart` entry comes back),
+   * while replacing is not. A persistent entry survives the panel, so this usually
+   * answers normally; if this process *is* a non-persistent one of those servers
+   * the answer may never arrive, and the page treats a dropped call as "the panel
+   * is stopping" rather than a failure.
    */
   async stopPanelNow(): Promise<PanelControlResult> {
     const { resolution } = await this.cli()
@@ -1448,6 +1571,26 @@ export class HomeHostedService extends Service {
     const deps = await this.panelControlDeps()
     if (deps.launch === null)
       throw new HomeHostedError(resolution.status.detail, 'CLI_NOT_FOUND')
+
+    const control = await this.bootControl('stop')
+    if (control !== null) {
+      const refused = await this.runControl(control, 'stop')
+      if (refused !== null)
+        return refused
+      if (await this.awaitPanelSilent()) {
+        this.clientCache = null
+        this.tokenProof = null
+        return { ok: true, detail: `the panel was stopped by its ${control.mechanism} entry; the servers it supervised stopped with it` }
+      }
+      // The entry was stopped but the panel still answers: it is not the panel that
+      // entry supervises (started by the CLI earlier), so the CLI is the right stop
+      // for it after all.
+      const fallback = await stopPanelProcess(deps)
+      this.clientCache = null
+      this.tokenProof = null
+      return fallback
+    }
+
     const result = await stopPanelProcess(deps)
     this.clientCache = null
     this.tokenProof = null

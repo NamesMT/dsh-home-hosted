@@ -158,7 +158,7 @@ export function createXdgAutostartProvider(ctx: BootProviderContext): BootProvid
 
     /**
      * A `.desktop` entry has no launcher of its own: the desktop session reads
-     * the file at login. Nothing here can start the panel, and claiming a start
+     * the file at login. Nothing here can start or stop the panel, and claiming a
      * command would be a fiction, so the caller falls back to the CLI.
      */
     async activate(): Promise<null> {

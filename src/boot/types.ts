@@ -70,6 +70,26 @@ export interface BootRetirement {
   display: string[]
 }
 
+/**
+ * A mechanism's own start or stop for the panel its entry supervises.
+ *
+ * This is the only *correct* way to change that panel's state: an entry with a
+ * restart policy (`Restart=always`, `KeepAlive`) treats the CLI's `down` as an
+ * unexpected death and brings the panel straight back, and a panel started by
+ * the CLI runs outside the entry nobody can then stop. Both are the same rule —
+ * whoever supervises the panel is who may change its state — so a mechanism that
+ * cannot do either answers null and the CLI remains the only path.
+ */
+export interface BootControl {
+  commands: string[][]
+  display: string[]
+}
+
+/** {@link BootControl} plus the mechanism it belongs to, for the caller's detail line. */
+export interface BootControlResult extends BootControl {
+  mechanism: BootMechanism
+}
+
 /** A mechanism's start steps plus everything a switch has to clean up. */
 export interface BootActivation extends BootStart {
   /**
@@ -96,8 +116,10 @@ export interface BootProvider {
   uninstall(spec: BootSpec): Promise<BootActionResult>
   /** The start steps for an installed entry; null when this mechanism cannot start one now. */
   activate?(spec: BootSpec): Promise<BootStart | null>
+  /** Steps that start the panel this mechanism supervises; null when it cannot. */
+  startCommands?(spec: BootSpec): Promise<BootControl | null>
   /** Steps that stop the panel this mechanism supervises, without removing its entry. */
-  stopCommands?(spec: BootSpec): Promise<string[][]>
+  stopCommands?(spec: BootSpec): Promise<BootControl | null>
   /**
    * Steps that delete this mechanism's entry *without* stopping the panel it may
    * be running. A switch retires the mechanism it came from inside the helper,
@@ -204,6 +226,14 @@ export interface BootLadder {
    * by then, so the mechanism holding the panel cannot be inferred.
    */
   activate(spec: BootSpec, mechanism?: BootMechanism, from?: BootMechanism | null): Promise<BootActivation | null>
+  /**
+   * The installed entry's own start or stop for the panel it supervises.
+   *
+   * `null` means nothing installed can do it, and the caller falls back to the
+   * CLI. This is the opposite fallback from `activate()`: a *missing* entry is
+   * exactly when the CLI is right, because nothing is supervising the panel.
+   */
+  control(spec: BootSpec, action: 'start' | 'stop'): Promise<BootControlResult | null>
 }
 
 export type BootProviderStatus = Awaited<ReturnType<BootProvider['status']>>

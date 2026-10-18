@@ -11,6 +11,8 @@ import { run as execRun, sudoAvailable } from '../util/exec.js'
 import type {
   BootActionResult,
   BootActivation,
+  BootControl,
+  BootControlResult,
   BootLadder,
   BootLadderOptions,
   BootProvider,
@@ -224,10 +226,23 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     if (provider.stopCommands === undefined)
       return []
     try {
-      return await provider.stopCommands(spec)
+      return (await provider.stopCommands(spec))?.commands ?? []
     }
     catch {
       return []
+    }
+  }
+
+  /** The installed entry's own start or stop; null when nothing installed can do it. */
+  async function safeControl(provider: BootProvider, spec: BootSpec, action: 'start' | 'stop'): Promise<BootControl | null> {
+    const method = action === 'start' ? provider.startCommands : provider.stopCommands
+    if (method === undefined)
+      return null
+    try {
+      return await method.call(provider, spec)
+    }
+    catch {
+      return null
     }
   }
 
@@ -350,6 +365,23 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
         retired: usable.map(([provider]) => provider.mechanism),
         retireDisplay: usable.flatMap(([, retirement]) => retirement.display),
       }
+    },
+
+    /**
+     * The installed entry's own start or stop for the panel it supervises.
+     *
+     * The answer is deliberately the *installed* mechanism, never the recommended
+     * one: pressing Start on a page that reports a `systemd-user` entry must start
+     * that unit, and a machine with no entry at all is exactly when the CLI is the
+     * right answer (`null`).
+     */
+    async control(spec: BootSpec, action: 'start' | 'stop'): Promise<BootControlResult | null> {
+      const status = await buildStatus(spec)
+      const provider = status.mechanism === null ? undefined : pickOf(status.mechanism)
+      if (provider === undefined)
+        return null
+      const control = await safeControl(provider, spec, action)
+      return control === null ? null : { ...control, mechanism: provider.mechanism }
     },
   }
 }
