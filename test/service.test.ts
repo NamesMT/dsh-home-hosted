@@ -1195,6 +1195,25 @@ describe('panel start and stop go through the installed entry', () => {
     expect(result.detail).not.toContain('systemd-user')
   })
 
+  it('falls back to the CLI when the ladder cannot even answer, rather than failing', async () => {
+    // A provider that throws is a broken probe, not a refusal: the panel is still
+    // there to be stopped, and losing the stop over it would be worse.
+    const panel = await withPanel()
+    const { service, cliCalls } = await harness({
+      panel,
+      ladder: {
+        ...entryLadder('systemd-user', unitSteps),
+        control: async () => {
+          throw new Error('the provider blew up')
+        },
+      },
+      controlWaitMs: 50,
+    })
+    const result = await service.stopPanelNow()
+    expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
+    expect(result.ok).toBe(true)
+  })
+
   it('reports the entry\'s refusal instead of claiming the panel stopped', async () => {
     const panel = await withPanel()
     const { service } = await harness({
