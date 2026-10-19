@@ -427,12 +427,14 @@ describe('ladder control: the installed entry owns start and stop', () => {
   afterEach(() => cleanup(home))
 
   /** A machine where the systemd user unit is installed and enabled. */
-  function installedLadder() {
+  function installedLadder(options: { active?: boolean } = {}) {
     const runner = fakeRun((command, args) => {
       if (command === 'systemctl' && args.includes('is-system-running'))
         return { code: 0, stdout: 'running\n' }
       if (command === 'systemctl' && args.includes('is-enabled'))
         return { code: 0 }
+      if (command === 'systemctl' && args.includes('show'))
+        return { code: 0, stdout: `ActiveState=${options.active === false ? 'inactive' : 'active'}\n` }
       if (command === 'loginctl')
         return { code: 0, stdout: 'Linger=yes\n' }
       return { code: 0 }
@@ -500,5 +502,65 @@ describe('ladder control: the installed entry owns start and stop', () => {
     // told to stop anything — so the CLI remains the only path.
     expect(await ladder.control(spec(), 'stop')).toBeNull()
     expect(await ladder.control(spec(), 'start')).toBeNull()
+  })
+})
+
+describe('ladder control with more than one entry installed', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => cleanup(home))
+
+  /**
+   * An install does not retire another entry when no panel is answering
+   * (`service.installBoot`), so two entries can coexist. Acting on the wrong one
+   * starts a second panel beside the real one.
+   *
+   * The second entry is `xdg-autostart` rather than `systemd-system`: the latter
+   * writes `/etc/systemd/system` and this machine really has a foreign
+   * `home-hosted.service` there, which the provider correctly refuses to touch.
+   */
+  function twoEntries() {
+    const runner = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('is-system-running'))
+        return { code: 0, stdout: 'running\n' }
+      if (command === 'systemctl' && args.includes('is-enabled'))
+        return { code: 0 }
+      if (command === 'systemctl' && args.includes('show'))
+        return { code: 0, stdout: 'ActiveState=inactive\n' }
+      if (command === 'loginctl')
+        return { code: 0, stdout: 'Linger=yes\n' }
+      return { code: 0 }
+    })
+    return createBootLadder({
+      platform: 'linux',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', UID: '1000' },
+      uid: 1000,
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+  }
+
+  it('acts on the mechanism the caller reported, not the first installed one', async () => {
+    const ladder = twoEntries()
+    await ladder.install(spec(), 'systemd-user')
+    await ladder.install(spec(), 'xdg-autostart')
+    // Provider order puts systemd-user first. A caller that reported the `.desktop`
+    // entry must not have the systemd unit acted on instead.
+    const control = await ladder.control(spec(), 'stop', 'xdg-autostart')
+    // The `.desktop` entry cannot be commanded, so the honest answer is "nothing
+    // installed can do it" — not a command for a different, unasked mechanism.
+    expect(control).toBeNull()
+  })
+
+  it('answers for the reported mechanism when it can be commanded', async () => {
+    const ladder = twoEntries()
+    await ladder.install(spec(), 'systemd-user')
+    await ladder.install(spec(), 'xdg-autostart')
+    const control = await ladder.control(spec(), 'stop', 'systemd-user')
+    expect(control?.mechanism).toBe('systemd-user')
+    expect(control?.commands).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
   })
 })

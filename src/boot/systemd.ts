@@ -40,6 +40,8 @@ import {
 
 const ENABLED_UNIT_STATES = new Set(['enabled', 'enabled-runtime', 'alias', 'static', 'indirect', 'generated', 'transient'])
 const FAILED_RESULTS = new Set(['failed', 'exit-code', 'signal', 'timeout', 'core-dump', 'watchdog', 'start-limit-hit', 'oom-kill'])
+/** `ActiveState` values where `start` would be a no-op, so the unit needs `restart`. */
+const ACTIVE_STATES = new Set(['active', 'activating', 'deactivating', 'reloading', 'refreshing'])
 
 type Scope = 'user' | 'system'
 
@@ -212,6 +214,41 @@ async function readUnit(ctx: BootProviderContext, unit: string, scope: Scope): P
     reachable: show.error === undefined || show.error === null,
     detail: `UnitFileState=${unitFileState || '(none)'} ActiveState=${props.ActiveState || '(none)'} Result=${result || '(none)'} NRestarts=${props.NRestarts ?? '0'}`,
   }
+}
+
+/**
+ * Whether this mechanism may command the panel's state at all.
+ *
+ * `status()` proves a unit exists, not who wrote it, and `home-hosted` is the name
+ * a machine-default install uses — so a foreign unit of that name would otherwise
+ * be stopped and started by the page. `FragmentPath` is what systemd actually
+ * loaded, which catches both a foreign file at our path and a distro unit found
+ * elsewhere on the search path (`retireCommands()` guards its deletions the same
+ * way, from the file).
+ */
+async function mayCommand(ctx: BootProviderContext, spec: BootSpec, file: string, unit: string, scope: Scope): Promise<boolean> {
+  if (inspectOwned(file, spec.marker).owned)
+    return true
+  const scopeArgs = scope === 'user' ? ['--user'] : []
+  const probe = await ctx.run('systemctl', [...scopeArgs, 'show', '-p', 'FragmentPath', unit])
+  const loaded = parseKeyValues(probe.stdout).FragmentPath ?? ''
+  if (loaded === '')
+    return true
+  return inspectOwned(loaded, spec.marker).owned
+}
+
+/**
+ * `start` or `restart`, from the unit's `ActiveState`.
+ *
+ * An unreadable answer is treated as inactive: `start` on an active unit is a
+ * no-op, which is the safe failure, while a needless `restart` stops the panel's
+ * servers.
+ */
+async function startVerb(ctx: BootProviderContext, unit: string, scope: Scope): Promise<'start' | 'restart'> {
+  const scopeArgs = scope === 'user' ? ['--user'] : []
+  const probe = await ctx.run('systemctl', [...scopeArgs, 'show', '-p', 'ActiveState', unit])
+  const active = parseKeyValues(probe.stdout).ActiveState ?? ''
+  return ACTIVE_STATES.has(active) ? 'restart' : 'start'
 }
 
 async function userScopeReachable(ctx: BootProviderContext): Promise<{ reachable: boolean, reason: string }> {
@@ -421,6 +458,8 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
 
     /** Stops the panel the unit supervises, keeping the unit enabled. */
     async stopCommands(spec: BootSpec): Promise<BootControl | null> {
+      if (!await mayCommand(ctx, spec, pathOf(spec), unitOf(spec), 'user'))
+        return null
       return {
         commands: [['systemctl', '--user', 'stop', unitOf(spec)]],
         display: [shellCommand('systemctl', ['--user', 'stop', unitOf(spec)])],
@@ -428,16 +467,19 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
     },
 
     /**
-     * `restart`, not `start`: this is asked for exactly when `/healthz` does not
-     * answer, and a wedged panel is still *active* to systemd — `start` on an
-     * active unit is a no-op and could never recover it. `restart` also starts a
-     * unit that is not running (systemctl(1)), so one command covers both states.
+     * The verb follows the unit's own state: `start` when it is not running, and
+     * `restart` when it is — a wedged panel is still active, where `start` is a
+     * no-op. Probing matters: the trigger is a 2 s `/healthz` probe, so a merely
+     * slow panel would otherwise be restarted (and its servers stopped) for nothing.
      */
     async startCommands(spec: BootSpec): Promise<BootControl | null> {
+      if (!await mayCommand(ctx, spec, pathOf(spec), unitOf(spec), 'user'))
+        return null
       const unit = unitOf(spec)
+      const verb = await startVerb(ctx, unit, 'user')
       return {
-        commands: [['systemctl', '--user', 'restart', unit]],
-        display: [shellCommand('systemctl', ['--user', 'restart', unit])],
+        commands: [['systemctl', '--user', verb, unit]],
+        display: [shellCommand('systemctl', ['--user', verb, unit])],
       }
     },
 
@@ -715,6 +757,8 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
      * ends, before the new entry starts one.
      */
     async stopCommands(spec: BootSpec): Promise<BootControl | null> {
+      if (!await mayCommand(ctx, spec, pathOf(spec), unitOf(spec), 'system'))
+        return null
       const unit = unitOf(spec)
       const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
       return {
@@ -723,13 +767,16 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
       }
     },
 
-    /** `restart` for the same reason as the user unit: a wedged panel is still active. */
+    /** See the user unit: `restart` only when the unit is already active. */
     async startCommands(spec: BootSpec): Promise<BootControl | null> {
+      if (!await mayCommand(ctx, spec, pathOf(spec), unitOf(spec), 'system'))
+        return null
       const unit = unitOf(spec)
       const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
+      const verb = await startVerb(ctx, unit, 'system')
       return {
-        commands: [elevate(['systemctl', 'restart', unit])],
-        display: [shellCommand('sudo', ['systemctl', 'restart', unit])],
+        commands: [elevate(['systemctl', verb, unit])],
+        display: [shellCommand('sudo', ['systemctl', verb, unit])],
       }
     },
 

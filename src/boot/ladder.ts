@@ -6,7 +6,7 @@
  */
 import os from 'node:os'
 import process from 'node:process'
-import type { BootCandidate, BootMechanism, BootStatus } from '../shared/contracts.js'
+import type { BootCandidate, BootMechanism, BootState, BootStatus } from '../shared/contracts.js'
 import { run as execRun, sudoAvailable } from '../util/exec.js'
 import type {
   BootActionResult,
@@ -139,10 +139,18 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
       statuses.set(provider.mechanism, status)
 
     const explicit = mechanism ? providers.find(provider => provider.mechanism === mechanism) : undefined
-    const installedProvider = providers.find((provider) => {
-      const status = statuses.get(provider.mechanism)
-      return status !== undefined && isInstalledState(status.state)
-    })
+    /**
+     * The installed entry that most plausibly owns the panel, by state — never by
+     * provider order. Two entries can be installed (an install does not retire the
+     * others when no panel is answering), and acting on the wrong one starts a
+     * second panel beside the real one.
+     */
+    const installedProvider = [...providers]
+      .filter((provider) => {
+        const status = statuses.get(provider.mechanism)
+        return status !== undefined && isInstalledState(status.state)
+      })
+      .sort((left, right) => rankInstalled(statuses.get(left.mechanism)?.state) - rankInstalled(statuses.get(right.mechanism)?.state))[0]
     const recommended = recommend(candidates)
     const target = explicit
       ?? installedProvider
@@ -244,6 +252,15 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     catch {
       return null
     }
+  }
+
+  /** How much an installed state says about the entry actually running the panel. */
+  function rankInstalled(state: BootState | undefined): number {
+    if (state === 'enabled-running')
+      return 0
+    if (state === 'enabled-failing')
+      return 1
+    return 2
   }
 
   /** Every mechanism the OS currently has an entry for, whatever it is doing. */
@@ -371,12 +388,12 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
      * The installed entry's own start or stop for the panel it supervises.
      *
      * The answer is deliberately the *installed* mechanism, never the recommended
-     * one: pressing Start on a page that reports a `systemd-user` entry must start
-     * that unit, and a machine with no entry at all is exactly when the CLI is the
-     * right answer (`null`).
+     * one: a machine with no entry at all is exactly when the CLI is right
+     * (`null`). `mechanism` lets the caller pass the one it reported, so the entry
+     * that acts is the entry the page names.
      */
-    async control(spec: BootSpec, action: 'start' | 'stop'): Promise<BootControlResult | null> {
-      const status = await buildStatus(spec)
+    async control(spec: BootSpec, action: 'start' | 'stop', mechanism?: BootMechanism | null): Promise<BootControlResult | null> {
+      const status = await buildStatus(spec, mechanism ?? undefined)
       const provider = status.mechanism === null ? undefined : pickOf(status.mechanism)
       if (provider === undefined)
         return null

@@ -232,8 +232,12 @@ export interface BootLadder {
    * `null` means nothing installed can do it, and the caller falls back to the
    * CLI. This is the opposite fallback from `activate()`: a *missing* entry is
    * exactly when the CLI is right, because nothing is supervising the panel.
+   *
+   * `mechanism` is the one the page reported, so the acting entry and the named
+   * one cannot differ. Omitted means "the installed entry", ranked by state —
+   * callers that show a status pass the one they showed.
    */
-  control(spec: BootSpec, action: 'start' | 'stop'): Promise<BootControlResult | null>
+  control(spec: BootSpec, action: 'start' | 'stop', mechanism?: BootMechanism | null): Promise<BootControlResult | null>
 }
 
 export type BootProviderStatus = Awaited<ReturnType<BootProvider['status']>>

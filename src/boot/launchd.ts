@@ -494,13 +494,22 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
       }
     },
 
-    /** `KeepAlive` would resurrect the panel, so the job itself has to stop it. */
+    /**
+     * `KeepAlive` would resurrect the panel, so the job itself has to stop it.
+     *
+     * Guarded like the start: `status()` calls a written plist `enabled-running`
+     * even when launchd has not loaded it, and `kill` on an unknown label fails —
+     * which would report a refusal where the CLI would have worked. `null` sends
+     * the caller there instead.
+     */
     async stopCommands(spec: BootSpec): Promise<BootControl | null> {
       const label = launchdLabel(spec)
       const domain = await domainOf()
       if (domain === null)
         return null
       const job = `${domain}/${label}`
+      if (codeOf(await ctx.run('launchctl', ['print', job])) !== 0)
+        return null
       return mode === 'daemon'
         ? { commands: [['sudo', '-n', 'launchctl', 'kill', 'SIGTERM', job]], display: [shellCommand('sudo', ['launchctl', 'kill', 'SIGTERM', job])] }
         : { commands: [['launchctl', 'kill', 'SIGTERM', job]], display: [shellCommand('launchctl', ['kill', 'SIGTERM', job])] }

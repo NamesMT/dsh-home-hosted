@@ -12,6 +12,18 @@ import { createWindowsRunProvider, createWindowsTaskProvider } from '../../src/b
 import { createXdgAutostartProvider } from '../../src/boot/xdg.js'
 import { cleanup, ctxFor, fakeRun, spec, tempHome, winSpec } from './harness.js'
 
+/**
+ * A handler that answers `ActiveState` for the unit probe, so a start can be told
+ * apart from a restart. Everything else succeeds.
+ */
+function activeUnit(active: boolean) {
+  return (command: string, args: string[]) => {
+    if (command === 'systemctl' && args.includes('show'))
+      return { code: 0, stdout: `ActiveState=${active ? 'active' : 'inactive'}\n` }
+    return { code: 0 }
+  }
+}
+
 describe('systemd activation', () => {
   let home: string
   beforeEach(() => { home = tempHome() })
@@ -164,9 +176,9 @@ describe('launchd activation', () => {
   })
 
   it('kills the job under the previous entry, so KeepAlive cannot revive it', async () => {
-    const runner = fakeRun((command, args) => {
-      if (command === 'launchctl' && args[0] === 'print')
-        return args[1] === 'gui/1000' ? { code: 0 } : { code: 113 }
+    const runner = fakeRun((command) => {
+      if (command === 'launchctl')
+        return { code: 0 }
       return { code: 0 }
     })
     const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
@@ -174,6 +186,19 @@ describe('launchd activation', () => {
       commands: [['launchctl', 'kill', 'SIGTERM', 'gui/1000/dev.home-hosted.home-hosted']],
       display: ['launchctl kill SIGTERM gui/1000/dev.home-hosted.home-hosted'],
     })
+  })
+
+  it('offers no stop for a plist launchd has not loaded, so the CLI can stop it', async () => {
+    // `status()` calls a written plist `enabled-running` even when launchd never
+    // loaded it, and `kill` on an unknown label exits 113 — reporting a refusal
+    // where the CLI's `down` would have worked.
+    const runner = fakeRun((command, args) => {
+      if (command === 'launchctl' && args[0] === 'print')
+        return args[1] === 'gui/1000' ? { code: 0 } : { code: 113 }
+      return { code: 0 }
+    })
+    const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    expect(await provider.stopCommands?.(spec())).toBeNull()
   })
 
   it('boots out a daemon through sudo -n, never a bare launchctl', async () => {
@@ -245,24 +270,31 @@ describe('the page\'s own panel start and stop', () => {
   afterEach(() => cleanup(home))
 
   it('starts and stops the systemd user unit itself, never through the CLI', async () => {
-    const runner = fakeRun(() => ({ code: 0 }))
+    const runner = fakeRun(activeUnit(false))
     const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
     // `Restart=always` turns a CLI `down` into a restart a few seconds later, and a
     // CLI `up` starts a panel the unit does not supervise. Both actions have to be
     // the unit's own, or the page reports a state the machine is not in.
     expect((await provider.stopCommands?.(spec()))?.commands)
       .toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
-    // `restart`, not `start`: the Start button shows exactly when `/healthz` does not
-    // answer, and a wedged panel is still *active* to systemd — `start` on an active
-    // unit is a no-op, so it could never recover the case the button exists for.
-    // `restart` also starts a unit that is not running (systemctl(1)), so one
-    // command covers both states.
+    // Not running, so `start` — a `restart` here would be a needless stop of a
+    // healthy panel when the `/healthz` probe merely timed out.
+    expect((await provider.startCommands?.(spec()))?.commands)
+      .toEqual([['systemctl', '--user', 'start', 'home-hosted.service']])
+  })
+
+  it('restarts an active unit, because `start` is a no-op on the panel a slow probe hid', async () => {
+    const runner = fakeRun(activeUnit(true))
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    // The panel answers nothing within the probe's 2 s but is still active: only a
+    // restart recovers it, and only the unit's own state can tell that apart from
+    // "stopped", so the verb is chosen from `ActiveState`.
     expect((await provider.startCommands?.(spec()))?.commands)
       .toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
   })
 
   it('elevates a system unit\'s start and stop with sudo -n, and not when already root', async () => {
-    const runner = fakeRun(() => ({ code: 0 }))
+    const runner = fakeRun(activeUnit(false))
     const elevated = createSystemdSystemProvider(ctxFor({
       home,
       run: runner.run,
@@ -271,11 +303,28 @@ describe('the page\'s own panel start and stop', () => {
     }))
     expect((await elevated.stopCommands?.(spec()))?.commands).toEqual([['sudo', '-n', 'systemctl', 'stop', 'home-hosted.service']])
     // The display is what a person runs when the call could not elevate itself.
-    // `restart`, for the reason the user unit's test records: a wedged panel is active.
-    expect((await elevated.startCommands?.(spec()))?.display).toEqual(['sudo systemctl restart home-hosted.service'])
+    expect((await elevated.startCommands?.(spec()))?.display).toEqual(['sudo systemctl start home-hosted.service'])
 
-    const root = createSystemdSystemProvider(ctxFor({ home, run: runner.run, isRoot: true, exists: file => file === '/run/systemd/system' }))
+    // As root there is nothing to elevate — asserted for the start too, or putting
+    // `sudo -n` back into the root start would still pass.
+    const rootRunner = fakeRun(activeUnit(true))
+    const root = createSystemdSystemProvider(ctxFor({ home, run: rootRunner.run, isRoot: true, exists: file => file === '/run/systemd/system' }))
     expect((await root.stopCommands?.(spec()))?.commands).toEqual([['systemctl', 'stop', 'home-hosted.service']])
+    expect((await root.startCommands?.(spec()))?.commands).toEqual([['systemctl', 'restart', 'home-hosted.service']])
+  })
+
+  it('refuses to command a unit systemd loaded from a file we did not write', async () => {
+    // `status()` proves a unit exists, not who wrote it, and `home-hosted` is the
+    // name a machine-default install uses. `FragmentPath` is what systemd actually
+    // loaded, so it catches a distro unit found elsewhere on the search path too.
+    const runner = fakeRun((command, args) => {
+      if (command === 'systemctl' && args.includes('show'))
+        return { code: 0, stdout: 'FragmentPath=/etc/systemd/system/home-hosted.service\nActiveState=active\n' }
+      return { code: 0 }
+    })
+    const provider = createSystemdUserProvider(ctxFor({ home, run: runner.run }))
+    expect(await provider.stopCommands?.(spec())).toBeNull()
+    expect(await provider.startCommands?.(spec())).toBeNull()
   })
 
   it('has no start for a launchd job launchd does not have loaded', async () => {
