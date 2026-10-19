@@ -26,7 +26,7 @@ import { errorMessage, failed, isInstalledState } from './common.js'
 import { createSystemdSystemProvider, createSystemdUserProvider } from './systemd.js'
 import { createLaunchdAgentProvider, createLaunchdDaemonProvider } from './launchd.js'
 import { createXdgAutostartProvider } from './xdg.js'
-import { createWindowsRunProvider, createWindowsTaskProvider } from './windows.js'
+import { createWindowsBootProvider, createWindowsRunProvider, createWindowsTaskProvider } from './windows.js'
 import { createContainerProvider, createUnsupportedProvider } from './fallback.js'
 
 function platformKind(platform: NodeJS.Platform): BootStatus['platform'] {
@@ -48,7 +48,7 @@ export function bootProviders(
     case 'darwin':
       return [createLaunchdAgentProvider(ctx), createLaunchdDaemonProvider(ctx), unsupported]
     case 'win32':
-      return [createWindowsRunProvider(ctx), createWindowsTaskProvider(ctx), unsupported]
+      return [createWindowsRunProvider(ctx), createWindowsTaskProvider(ctx), createWindowsBootProvider(ctx), unsupported]
     default:
       return [container, unsupported]
   }
@@ -103,12 +103,22 @@ export function createBootLadder(options: BootLadderOptions = {}): BootLadder {
     }
   }
 
+  /**
+   * Mechanisms that work but are never the automatic choice.
+   *
+   * `windows-boot` runs the panel as SYSTEM in **session 0** before any login,
+   * which has no interactive desktop — so a supervised server that wants a display
+   * breaks there. It must stay reachable by name and out of `auto`.
+   */
+  const OPT_IN_ONLY: ReadonlySet<string> = new Set(['windows-boot'])
+
   function recommend(candidates: BootCandidate[]): BootMechanism | null {
     const byMechanism = new Map(candidates.map(candidate => [candidate.mechanism, candidate]))
     const available = providers
       .map(provider => provider.mechanism)
       .filter(mechanism => byMechanism.get(mechanism)?.available === true)
-    const usable = (mechanism: string): boolean => mechanism !== 'container' && mechanism !== 'unsupported'
+    const usable = (mechanism: string): boolean =>
+      mechanism !== 'container' && mechanism !== 'unsupported' && !OPT_IN_ONLY.has(mechanism)
     // Inside a container no OS entry starts anything, so the honest advice is the
     // restart policy — ahead of anything else that merely looks available.
     if (available.includes('container'))

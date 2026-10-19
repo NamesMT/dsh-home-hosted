@@ -1,7 +1,7 @@
 /**
- * Windows: the per-user `Run` key (login scope, no admin) and a scheduled task
- * (admin). `sc.exe` is never used — a plain Node process has no service
- * dispatcher and would fail with error 1053.
+ * Windows: the per-user `Run` key (login scope, no admin), a logon triggered task
+ * (admin) and a boot triggered SYSTEM task (admin, opt-in). `sc.exe` is never used
+ * — a plain Node process has no service dispatcher and would fail with error 1053.
  *
  * The `Run` key starts *every* value it holds, so the ownership marker cannot
  * live beside the command there; it lives under this plugin's own key
@@ -346,6 +346,90 @@ export function scheduledTaskXml(spec: BootSpec): string {
   ].join('\r\n')}`
 }
 
+/**
+ * The boot task's name, which must differ from the logon task's.
+ *
+ * Both mechanisms key their artifact on `spec.unitName`, so sharing it would mean
+ * installing one silently replaces the other — and switching between them is the
+ * one thing a person wants to be able to undo.
+ */
+export function bootTaskNameOf(unitName: string): string {
+  return `${assertUnitName(unitName)}-boot`
+}
+
+/**
+ * The boot-triggered task, which runs the panel as SYSTEM before any login.
+ *
+ * Deliberately narrow: a `BootTrigger` and the `S-1-5-18` well-known SYSTEM SID,
+ * with no stored password anywhere. A named account would need `PASSWORD` logon
+ * credentials written into the artifact, which this plugin will not do — that is a
+ * credential store, not a boot entry.
+ *
+ * The cost is real and unavoidable: SYSTEM runs in **session 0**, which has no
+ * interactive desktop, so a supervised server that needs a display or the user's
+ * own profile breaks there. That is why this mechanism is opt-in and never
+ * recommended automatically.
+ */
+export function bootTaskXml(spec: BootSpec): string {
+  validate(spec)
+  const args = spec.args.map(windowsArg).join(' ')
+  return `${[
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    '<RegistrationInfo>',
+    `<Description>${xmlEscape(spec.marker)}</Description>`,
+    '</RegistrationInfo>',
+    '<Triggers>',
+    // `Delay` gives the network stack and disks a moment, matching the systemd
+    // unit's `After=network-online.target` intent.
+    '<BootTrigger>',
+    '<Enabled>true</Enabled>',
+    '<Delay>PT15S</Delay>',
+    '</BootTrigger>',
+    '</Triggers>',
+    '<Principals>',
+    '<Principal id="Author">',
+    '<UserId>S-1-5-18</UserId>',
+    '<RunLevel>HighestAvailable</RunLevel>',
+    '</Principal>',
+    '</Principals>',
+    '<Settings>',
+    '<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>',
+    '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>',
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
+    '<StartWhenAvailable>true</StartWhenAvailable>',
+    '<RestartOnFailure>',
+    '<Interval>PT1M</Interval>',
+    '<Count>3</Count>',
+    '</RestartOnFailure>',
+    '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
+    '</Settings>',
+    '<Actions Context="Author">',
+    '<Exec>',
+    `<Command>${xmlEscape(spec.command)}</Command>`,
+    `<Arguments>${xmlEscape(args)}</Arguments>`,
+    `<WorkingDirectory>${xmlEscape(spec.cwd)}</WorkingDirectory>`,
+    '</Exec>',
+    '</Actions>',
+    '</Task>',
+    '',
+  ].join('\r\n')}`
+}
+
+/** The cmdlet form of {@link bootTaskXml}; `-AtStartup` with a SYSTEM principal. */
+export function registerBootTaskScript(spec: BootSpec): string {
+  validate(spec)
+  const name = bootTaskNameOf(spec.unitName)
+  const args = spec.args.map(windowsArg).join(' ')
+  return [
+    `$action = New-ScheduledTaskAction -Execute ${powershellLiteral(spec.command)} -Argument ${powershellLiteral(args)} -WorkingDirectory ${powershellLiteral(spec.cwd)}`,
+    '$trigger = New-ScheduledTaskTrigger -AtStartup',
+    `$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest`,
+    '$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)',
+    `Register-ScheduledTask -TaskName ${powershellLiteral(name)} -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description ${powershellLiteral(spec.marker)} -Force | Out-Null`,
+  ].join('; ')
+}
+
 export function registerTaskScript(spec: BootSpec): string {
   validate(spec)
   const args = spec.args.map(windowsArg).join(' ')
@@ -373,9 +457,55 @@ interface TaskInfo {
   matches: boolean
 }
 
-export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvider {
-  const mechanism = 'windows-task' as const
-  const nameOf = (spec: BootSpec): string => assertUnitName(spec.unitName)
+/**
+ * What differs between the two scheduled-task mechanisms.
+ *
+ * Everything else — the ownership marker, the elevation probe, the drift check
+ * and the unregister path — is identical, so it lives in one implementation. A
+ * copy would be the bug: two guards that look alike and only one of them runs.
+ */
+interface TaskFlavour {
+  mechanism: 'windows-task' | 'windows-boot'
+  /** The task name this flavour owns; the two must never collide. */
+  nameOf: (spec: BootSpec) => string
+  xml: (spec: BootSpec) => string
+  script: (spec: BootSpec) => string
+  /** How the entry starts the panel. */
+  describe: string
+  /** Whether it starts the panel before an interactive login. */
+  bootCapable: boolean
+  detectReason: { elevated: string, anonymous: string }
+}
+
+const LOGON_TASK: TaskFlavour = {
+  mechanism: 'windows-task',
+  nameOf: spec => assertUnitName(spec.unitName),
+  xml: scheduledTaskXml,
+  script: registerTaskScript,
+  describe: 'runs at logon, not at boot',
+  bootCapable: false,
+  detectReason: {
+    elevated: 'administrator rights are available; the task is registered for logon (not for boot)',
+    anonymous: 'registering a scheduled task needs an elevated process',
+  },
+}
+
+const BOOT_TASK: TaskFlavour = {
+  mechanism: 'windows-boot',
+  nameOf: spec => bootTaskNameOf(spec.unitName),
+  xml: bootTaskXml,
+  script: registerBootTaskScript,
+  describe: 'runs at boot as SYSTEM, before any login, in session 0',
+  bootCapable: true,
+  detectReason: {
+    elevated: 'administrator rights are available; the boot task runs as SYSTEM in session 0, with no interactive desktop',
+    anonymous: 'registering a boot task needs an elevated process',
+  },
+}
+
+function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): BootProvider {
+  const mechanism = flavour.mechanism
+  const nameOf = flavour.nameOf
 
   const query = async (name: string): Promise<{ exists: boolean, xml: string | null }> => {
     const res = await ctx.run('schtasks.exe', ['/Query', '/TN', name, '/XML'])
@@ -420,11 +550,9 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
       return {
         mechanism,
         available: elevated,
-        bootCapable: false,
+        bootCapable: flavour.bootCapable,
         privileged: elevated,
-        reason: elevated
-          ? 'administrator rights are available; the task is registered for logon (not for boot)'
-          : 'registering a scheduled task needs an elevated process',
+        reason: elevated ? flavour.detectReason.elevated : flavour.detectReason.anonymous,
       }
     },
 
@@ -437,7 +565,7 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
         if (!info.marked)
           return { state: 'not-installed', unitPath: null, detail: `task ${name} exists but does not carry this plugin's marker; refusing to treat it as this plugin's entry`, commands: [] }
         const state: BootState = bootState(true, true, false)
-        return { state, unitPath: null, detail: `scheduled task ${name} is registered (runs at logon, not at boot)`, commands: [] }
+        return { state, unitPath: null, detail: `scheduled task ${name} is registered (${flavour.describe})`, commands: [] }
       }
       catch (error) {
         return { state: 'not-installed', unitPath: null, detail: errorMessage(error), commands: [] }
@@ -467,7 +595,7 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
 
         const cmdlet = await hasRegisterCmdlet()
         if (cmdlet) {
-          const script = registerTaskScript(spec)
+          const script = flavour.script(spec)
           const res = await ctx.run('powershell.exe', ['-NoProfile', '-Command', script])
           if (codeOf(res) !== 0)
             return failed(problem(res, windowsDisplayCommand('powershell.exe', ['-NoProfile', '-Command', script])) ?? 'Register-ScheduledTask failed', { needsPrivilege: true, commands: elevatedCommands })
@@ -475,7 +603,7 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
         else {
           const xmlFile = path.join(tempDir(ctx), `${name}.xml`)
           fs.mkdirSync(path.dirname(xmlFile), { recursive: true })
-          fs.writeFileSync(xmlFile, Buffer.from(`\uFEFF${scheduledTaskXml(spec)}`, 'utf16le'))
+          fs.writeFileSync(xmlFile, Buffer.from(`\uFEFF${flavour.xml(spec)}`, 'utf16le'))
           const createCommand = windowsDisplayCommand('schtasks.exe', ['/Create', '/TN', name, '/XML', xmlFile, '/F'])
           const create = await ctx.run('schtasks.exe', ['/Create', '/TN', name, '/XML', xmlFile, '/F'])
           if (codeOf(create) !== 0)
@@ -490,7 +618,7 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
         return {
           ok: true,
           changed: true,
-          detail: `scheduled task ${name} registered (runs at logon, not at boot)`,
+          detail: `scheduled task ${name} registered (${flavour.describe})`,
           commands: [],
           needsPrivilege: true,
         }
@@ -587,6 +715,21 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
       }
     },
   }
+}
+
+export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvider {
+  return createTaskProvider(ctx, LOGON_TASK)
+}
+
+/**
+ * The boot-triggered SYSTEM task: the panel is up before anyone logs in.
+ *
+ * Deliberately *last* in the ladder and never the automatic pick — running in
+ * session 0 breaks any supervised server that wants a display, and the user's own
+ * profile is not loaded. It exists for the headless case (`docs/BOOT.md`).
+ */
+export function createWindowsBootProvider(ctx: BootProviderContext): BootProvider {
+  return createTaskProvider(ctx, BOOT_TASK)
 }
 
 export function createWindowsRunProvider(ctx: BootProviderContext): BootProvider {

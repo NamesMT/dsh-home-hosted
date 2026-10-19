@@ -479,6 +479,7 @@ export const BOOT_MECHANISM_NAMES = [
   'launchd-daemon',
   'windows-run',
   'windows-task',
+  'windows-boot',
   'container',
   'unsupported',
 ] as const
