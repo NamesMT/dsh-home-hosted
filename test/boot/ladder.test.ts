@@ -458,11 +458,11 @@ describe('ladder control: the installed entry owns start and stop', () => {
     expect(control?.commands).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
   })
 
-  it('starts through the same unit', async () => {
+  it('starts through the same unit, with restart so a wedged panel recovers', async () => {
     const ladder = installedLadder()
     const control = await ladder.control(spec(), 'start')
     expect(control?.mechanism).toBe('systemd-user')
-    expect(control?.commands).toEqual([['systemctl', '--user', 'start', 'home-hosted.service']])
+    expect(control?.commands).toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
   })
 
   it('answers null with no entry installed, which is when the CLI is right', async () => {

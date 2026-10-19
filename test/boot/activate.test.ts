@@ -252,8 +252,13 @@ describe('the page\'s own panel start and stop', () => {
     // the unit's own, or the page reports a state the machine is not in.
     expect((await provider.stopCommands?.(spec()))?.commands)
       .toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+    // `restart`, not `start`: the Start button shows exactly when `/healthz` does not
+    // answer, and a wedged panel is still *active* to systemd — `start` on an active
+    // unit is a no-op, so it could never recover the case the button exists for.
+    // `restart` also starts a unit that is not running (systemctl(1)), so one
+    // command covers both states.
     expect((await provider.startCommands?.(spec()))?.commands)
-      .toEqual([['systemctl', '--user', 'start', 'home-hosted.service']])
+      .toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
   })
 
   it('elevates a system unit\'s start and stop with sudo -n, and not when already root', async () => {
@@ -266,7 +271,8 @@ describe('the page\'s own panel start and stop', () => {
     }))
     expect((await elevated.stopCommands?.(spec()))?.commands).toEqual([['sudo', '-n', 'systemctl', 'stop', 'home-hosted.service']])
     // The display is what a person runs when the call could not elevate itself.
-    expect((await elevated.startCommands?.(spec()))?.display).toEqual(['sudo systemctl start home-hosted.service'])
+    // `restart`, for the reason the user unit's test records: a wedged panel is active.
+    expect((await elevated.startCommands?.(spec()))?.display).toEqual(['sudo systemctl restart home-hosted.service'])
 
     const root = createSystemdSystemProvider(ctxFor({ home, run: runner.run, isRoot: true, exists: file => file === '/run/systemd/system' }))
     expect((await root.stopCommands?.(spec()))?.commands).toEqual([['systemctl', 'stop', 'home-hosted.service']])
@@ -284,11 +290,14 @@ describe('the page\'s own panel start and stop', () => {
     expect(await provider.startCommands?.(spec())).toBeNull()
   })
 
-  it('kickstarts a loaded launchd job', async () => {
+  it('kickstarts a loaded launchd job with -k, so a wedged job is restarted', async () => {
     const runner = fakeRun(() => ({ code: 0 }))
     const provider = createLaunchdAgentProvider(ctxFor({ home, run: runner.run, platform: 'darwin' }))
+    // Plain `kickstart` leaves a running job alone, and `KeepAlive` means a wedged
+    // job is still running — so without `-k` the Start button could not recover the
+    // panel. The activation plan uses `-k` for the same reason.
     expect((await provider.startCommands?.(spec()))?.commands)
-      .toEqual([['launchctl', 'kickstart', 'gui/1000/dev.home-hosted.home-hosted']])
+      .toEqual([['launchctl', 'kickstart', '-k', 'gui/1000/dev.home-hosted.home-hosted']])
   })
 
   it('starts a scheduled task and leaves stopping it to the CLI, which is graceful', async () => {

@@ -550,7 +550,13 @@ export function createWindowsTaskProvider(ctx: BootProviderContext): BootProvide
       }
     },
 
-    /** `/Run` starts the registered task now, which is where the panel comes up. */
+    /**
+     * `/Run` starts the registered task now. Unlike systemd's `restart` this
+     * cannot recover a *wedged* panel: the task is written
+     * `MultipleInstancesPolicy=IgnoreNew`, so `/Run` on a running instance is a
+     * no-op. There is no graceful restart in `schtasks`, so the wait then reports
+     * that the panel did not answer rather than claiming it restarted.
+     */
     async startCommands(spec: BootSpec): Promise<BootControl | null> {
       const name = nameOf(spec)
       return {

@@ -428,14 +428,16 @@ export function createSystemdUserProvider(ctx: BootProviderContext): BootProvide
     },
 
     /**
-     * `start`, never `restart`: the unit is not running when this is asked for.
-     * No `--no-block` either — the caller waits on the answer to know it worked.
+     * `restart`, not `start`: this is asked for exactly when `/healthz` does not
+     * answer, and a wedged panel is still *active* to systemd — `start` on an
+     * active unit is a no-op and could never recover it. `restart` also starts a
+     * unit that is not running (systemctl(1)), so one command covers both states.
      */
     async startCommands(spec: BootSpec): Promise<BootControl | null> {
       const unit = unitOf(spec)
       return {
-        commands: [['systemctl', '--user', 'start', unit]],
-        display: [shellCommand('systemctl', ['--user', 'start', unit])],
+        commands: [['systemctl', '--user', 'restart', unit]],
+        display: [shellCommand('systemctl', ['--user', 'restart', unit])],
       }
     },
 
@@ -721,13 +723,13 @@ export function createSystemdSystemProvider(ctx: BootProviderContext): BootProvi
       }
     },
 
-    /** Starts the unit, so the panel comes up under it rather than beside it. */
+    /** `restart` for the same reason as the user unit: a wedged panel is still active. */
     async startCommands(spec: BootSpec): Promise<BootControl | null> {
       const unit = unitOf(spec)
       const elevate = (args: string[]): string[] => ctx.isRoot ? args : ['sudo', '-n', ...args]
       return {
-        commands: [elevate(['systemctl', 'start', unit])],
-        display: [shellCommand('sudo', ['systemctl', 'start', unit])],
+        commands: [elevate(['systemctl', 'restart', unit])],
+        display: [shellCommand('sudo', ['systemctl', 'restart', unit])],
       }
     },
 

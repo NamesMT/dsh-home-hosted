@@ -507,9 +507,10 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
     },
 
     /**
-     * `kickstart` starts a loaded job; an unloaded one is not something a stopped
-     * panel implies, so a missing domain or a job launchd does not know is `null`
-     * and the caller falls back to the CLI.
+     * `kickstart -k`, like the activation plan: plain `kickstart` leaves a running
+     * job alone, and `KeepAlive` means the wedged panel the Start button exists for
+     * is still running. An unloaded job is not something a stopped panel implies,
+     * so a missing domain or unknown label answers null and the caller uses the CLI.
      */
     async startCommands(spec: BootSpec): Promise<BootControl | null> {
       const label = launchdLabel(spec)
@@ -520,8 +521,8 @@ function createLaunchdProvider(ctx: BootProviderContext, mode: LaunchdMode): Boo
       if (codeOf(await ctx.run('launchctl', ['print', job])) !== 0)
         return null
       return mode === 'daemon'
-        ? { commands: [['sudo', '-n', 'launchctl', 'kickstart', job]], display: [shellCommand('sudo', ['launchctl', 'kickstart', job])] }
-        : { commands: [['launchctl', 'kickstart', job]], display: [shellCommand('launchctl', ['kickstart', job])] }
+        ? { commands: [['sudo', '-n', 'launchctl', 'kickstart', '-k', job]], display: [shellCommand('sudo', ['launchctl', 'kickstart', '-k', job])] }
+        : { commands: [['launchctl', 'kickstart', '-k', job]], display: [shellCommand('launchctl', ['kickstart', '-k', job])] }
     },
 
     /**
