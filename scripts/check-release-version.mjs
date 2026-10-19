@@ -109,11 +109,16 @@ function breakingCommits() {
 
   const subjects = []
   for (const entry of log.split('\x01')) {
-    const [subject = '', body = ''] = entry.split('\x00')
-    if (subject.trim().length === 0)
+    const [rawSubject = '', body = ''] = entry.split('\x00')
+    // `git log` terminates every record with a newline, so each subject after the first arrives
+    // with a leading one. An anchored `^[a-z]+…!:` matched only the first commit and silently
+    // ignored a pending breaking change on any later one — measured: a `feat(deps)!:` three
+    // commits back reported as "no commit carries a breaking marker".
+    const subject = rawSubject.trim()
+    if (subject.length === 0)
       continue
     if (/^[a-z]+(?:\([^)]*\))?!:/.test(subject) || /^BREAKING[ -]CHANGE:/m.test(body))
-      subjects.push(subject.trim())
+      subjects.push(subject)
   }
   return subjects
 }

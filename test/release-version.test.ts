@@ -205,4 +205,23 @@ describe('the release gate keeps the channel and the commits in agreement', () =
     fixture.commit('docs: note that BREAKING CHANGE: is the footer format')
     expect(fixture.gate('0.7.8').code, 'a body line is only a marker at the start of a line').toBe(0)
   })
+
+  /**
+   * Every case above lands **one** commit, which is how an off-by-one survived here: `git log`
+   * terminates each record with a newline, so a subject after the first arrives with a leading
+   * `\n` and the anchored `^[a-z]+…!:` matched only commit one. A pending `!` behind any newer
+   * commit was therefore invisible, and the gate accepted a patch over a breaking change —
+   * observed on this repo's own `feat(deps)!:` three commits back.
+   */
+  it('sees a breaking commit that is not the most recent one', () => {
+    const fixture = repo('0.7.7')
+    fixture.commit('feat(deps)!: a breaking change, then two harmless commits')
+    fixture.commit('docs: record it')
+    fixture.commit('fix: a later, unrelated fix')
+
+    const refused = fixture.gate('0.7.8')
+    expect(refused.code, 'the breaking commit is still pending, so a patch must be refused').toBe(1)
+    expect(refused.stderr).toContain('feat(deps)!: a breaking change')
+    expect(fixture.gate('0.8.0').code).toBe(0)
+  })
 })
