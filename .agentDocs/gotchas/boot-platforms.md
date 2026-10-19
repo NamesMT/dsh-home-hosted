@@ -60,10 +60,23 @@ write the artifact.
   distro unit on this machine lives at `/etc/systemd/system/home-hosted.service`. `retireCommands()`
   gated its deletion on the marker, so `mayCommand()` gates start/stop on `FragmentPath` — the file
   systemd actually loaded — which also catches a unit found elsewhere on the search path.
-- **`schtasks /End` is not a stop.** It kills the task's process tree, so a supervised server dies
-  without its stop policy running; a scheduled task offers `startCommands()` and deliberately no stop,
-  so the CLI's graceful `down` is what runs. The task's `RestartOnFailure` behaviour after `/End` was
-  **not** measured, which is why the decision rests on the graceful-shutdown argument alone.
+- **WSL2 is an ordinary Linux host to `systemd-system`, and has no working `systemd-user` here.**
+  Measured on WSL2 with `systemd=true`: PID 1 is systemd and `systemd-system` works end to end
+  (`systemctl stop` really stops a `Restart=always` unit, and `start`/`restart` behave as documented),
+  while `systemd-user` is genuinely unavailable — `user@1000.service` is `failed` and
+  `systemctl --user` cannot reach a bus. `detect()` reports that honestly and `bootStatus` falls back
+  to the system mechanism, so a WSL user gets autostart and a working Start/Stop, not a broken page.
+  Windows `.exe`s are reachable through interop, which is a *separate* mechanism from `windows-task`:
+  the plugin only uses `schtasks.exe` when `process.platform === 'win32'`, never under WSL.
+- **`schtasks /End` is not a stop, and not reliably a kill either — measured.** On Windows 11 through
+  WSL interop, `/End` reported "terminated successfully" and `Last Result` 267014 (user-terminated), yet
+  a program's own shutdown handler never ran (a PowerShell `trap` stayed cold) and a `ping` child
+  survived `/End` by minutes, parent already dead. `RestartOnFailure` did **not** revive the task after
+  `/End` (waited past its 1-minute interval, still `Ready`), unlike systemd's `Restart=always`. So the
+  task offers `startCommands()` and deliberately no stop: only the CLI's `down`, which signals the
+  panel's pids, runs the supervised servers' stop policy. `/Run` on a running task under
+  `MultipleInstancesPolicy=IgnoreNew` is a real no-op (same pid, one instance, "is currently running"),
+  which is why the wedged Windows panel cannot be recovered from the page.
 - **A launchd job launchd does not have loaded cannot be `kickstart`ed**, so `startCommands()` proves
   it with `launchctl print` and answers null rather than printing a command that would fail.
 - **An entry this process runs as is never deleted**; "stop managing" pauses or restores it instead.

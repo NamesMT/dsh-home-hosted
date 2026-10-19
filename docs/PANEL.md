@@ -127,8 +127,9 @@ Mechanisms that start the panel from outside their own control — a `.desktop` 
 container restart policy — have no stop to offer, so those fall back to the CLI.
 
 A Windows scheduled task is a partial case, and the one place Start may not recover a wedged panel: it
-offers `schtasks /Run` and no stop, because `/End` kills the process tree instead of asking the panel
-to shut down. The task is registered `MultipleInstancesPolicy=IgnoreNew`, so `/Run` on a running
+offers `schtasks /Run` and no stop. Measured on Windows 11: `/End` asks the task to shut down in no
+form a program can observe (a PowerShell `trap` never ran) and, while reporting success, leaves child
+processes alive — so the CLI's `down` is the only stop that runs the panel's own stop policy. The task is registered `MultipleInstancesPolicy=IgnoreNew`, so `/Run` on a running
 instance does nothing, and `schtasks` has no graceful restart — pressing Start on a wedged Windows
 panel therefore reports that the panel did not answer, rather than recovering it. Stopping still goes
 through the CLI's `down`, which is graceful.
