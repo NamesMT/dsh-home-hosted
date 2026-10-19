@@ -1148,6 +1148,31 @@ describe('panel start and stop go through the installed entry', () => {
     expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
   })
 
+  it('runs the entry\'s start step even when a wedged panel blocks every other path', async () => {
+    // `/healthz` not answering is the only condition for the Start button, and a
+    // wedged panel is still *active* to systemd — which is why the step is
+    // `restart` (see `test/boot/activate.test.ts`). What this pins is the service
+    // side: with `run.json` naming a pid that answers nothing, the entry's step
+    // still runs and the CLI is never used.
+    const ran: string[][] = []
+    // No stub panel: a `run.json` whose url nothing listens on is the Start-button
+    // state — up to systemd, unreachable to the page.
+    const { home, service, cliCalls } = await harness({
+      ladder: entryLadder('systemd-user', { start: [['systemctl', '--user', 'restart', 'home-hosted.service']], stop: unitSteps.stop }),
+      execControl: async (argv) => {
+        ran.push(argv)
+        return { command: argv[0]!, args: argv.slice(1), code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }
+      },
+      controlWaitMs: 50,
+    })
+    writeJsonFile(runFile(home), { version: '0.6.1', pid: process.pid, url: 'http://127.0.0.1:1', port: 1 })
+    const result = await service.startPanelNow()
+    expect(ran).toEqual([['systemctl', '--user', 'restart', 'home-hosted.service']])
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('systemd-user')
+    expect(cliCalls.some(call => call.args.includes('up'))).toBe(false)
+  })
+
   it('reports the entry\'s refusal instead of claiming the panel stopped', async () => {
     const panel = await withPanel()
     const { service } = await harness({
