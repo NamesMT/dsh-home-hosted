@@ -59,21 +59,25 @@ const ENTRY_RECOVERY_INTERVAL_MS = 30_000
 const INSTANCES_CACHE_MS = 10_000
 
 /**
- * How long `panel.start`/`panel.stop` watch for the panel to come up or go down.
+ * The *ceiling* on how long `panel.start`/`panel.stop` watch for the panel to come
+ * up or go down — not the time a start takes.
  *
- * The entry's own command returns as soon as systemd/launchd accepted it, which
- * is not the same as the panel answering — and `up --foreground` boots the whole
- * panel graph before it serves. The window matches the CLI's own 20 s startup
- * budget (`waitForStartup`), so a handover is not slower than the CLI path.
+ * The wait exists because a service manager reports readiness before the panel
+ * does: a `Type=exec` unit (what both systemd providers write) counts as started
+ * once `execve` returned, before the panel has bound its port. The poll stops as
+ * soon as `/healthz` answers, which is ~1.2 s on this machine; the ceiling only
+ * decides how long a panel that never answers is awaited before the call admits
+ * it. It matches the CLI's own `waitForStartup` budget.
  */
 const PANEL_CONTROL_WAIT_MS = 20_000
 /**
- * The same, for a stop. `systemctl stop` already blocks until the unit is gone, so
- * a short window is enough for launchd's asynchronous `kill` — and it bounds the
- * cost of the fallback when the answering panel turns out not to be under the entry.
+ * The ceiling for a stop, shorter because there is less to wait for: `systemctl
+ * stop` already blocked until the unit was gone, and launchd's `kill` only needs
+ * the panel's own shutdown. It also bounds the fallback when the answering panel
+ * turns out not to be the one under the entry.
  */
 const PANEL_STOP_WAIT_MS = 5_000
-/** Between two `/healthz` probes while waiting; also the CLI's own startup poll interval. */
+/** Between two `/healthz` probes while waiting. */
 const PANEL_CONTROL_POLL_MS = 250
 
 /** This plugin's own package root, used as a search hint for the pinned CLI. */

@@ -147,6 +147,10 @@ systemd operation (e.g. service stop or restart), the service will not be restar
 is `kickstart`/`kill` for the same reason (`KeepAlive`). A Windows scheduled task offers the start
 only — `schtasks /End` kills the process tree rather than shutting the panel down.
 
+The wait after each action is for the same reason: a `Type=exec` unit reports started once `execve`
+returned, before the panel bound its port, so the call polls `/healthz` and returns as soon as it
+answers (~1.2 s measured here). The 20 s ceiling only bounds a panel that never answers.
+
 Nothing needs the reverse care during a *handover*, which is why the two paths differ: the activation
 helper above already stops the old panel through the mechanism that supervises it (step 2) and then
 uses the CLI's `down` only for the panel it drove itself. This rule is about the buttons a person

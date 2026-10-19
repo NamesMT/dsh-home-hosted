@@ -123,10 +123,13 @@ container restart policy — have no stop to offer, so those fall back to the CL
 task deliberately offers only the start: `schtasks /End` kills the process tree instead of asking the
 panel to shut down, so the servers it supervises would die without their stop policy running.
 
-The entry's command returns as soon as systemd/launchd accepted it, which is not the same as the panel
-answering, so the call then watches `/healthz` for up to 20 s — the CLI's own startup budget. A stop
-follows the same rule: if the entry's stop ran but the panel still answers, it was not the panel that
-entry supervises, and the CLI's `down` finishes the job.
+The entry's command returns as soon as the service manager accepted it, which is not the same as the
+panel answering: a `Type=exec` unit counts as started once the binary was executed, before it binds
+its port. So the call then polls `/healthz`, and stops as soon as the panel answers — about a second
+on the development machine this was measured on. The 20 s is only the ceiling for a panel that never
+answers, matching the CLI's own startup budget. A stop follows the same rule with a 5 s ceiling: if
+the entry's stop ran but the panel still answers, it was not the panel that entry supervises, and the
+CLI's `down` finishes the job.
 
 `panel.takeover` replaces an answering panel with the preferred copy. Stopping the old panel also stops
 the non-persistent servers it supervises — this dsh only if it is one, which an entry this plugin
