@@ -116,14 +116,22 @@ again seconds later, so "Stop the panel" came back on its own: a stop the page r
 did not honour. The mirror is just as wrong: a CLI `up` starts a panel *outside* the entry, which then
 cannot be stopped or observed by it either. Whoever supervises the panel is who may change its state.
 
-So an installed `systemd-user`/`systemd-system` entry answers with `systemctl restart|stop`, a
-`launchd-agent`/`launchd-daemon` with `kickstart -k`/`kill`, and a `windows-task` with
-`schtasks /Run`. Start is a *restart*, not a start: the button only appears when `/healthz` does not
-answer, and such a panel is still active to systemd/launchd, so a plain start would be a no-op.
+So an installed `systemd-user`/`systemd-system` entry answers with `systemctl start|restart` and
+`stop`, and a `launchd-agent`/`launchd-daemon` with `kickstart`/`kickstart -k` and `kill`. The verb
+follows the entry's own state, read before acting: `start` when the unit is not running, `restart`
+when it is — the Start button appears when `/healthz` is silent, and a wedged panel is still active,
+where a plain start would be a no-op. Probing matters, because that trigger is a 2 s health probe: a
+merely slow panel must not be restarted, and restarting it would stop the servers it supervises.
+
 Mechanisms that start the panel from outside their own control — a `.desktop` file, a `Run` value, a
-container restart policy — have no stop to offer, so those fall back to the CLI. A Windows scheduled
-task deliberately offers only the start: `schtasks /End` kills the process tree instead of asking the
-panel to shut down, so the servers it supervises would die without their stop policy running.
+container restart policy — have no stop to offer, so those fall back to the CLI.
+
+A Windows scheduled task is a partial case, and the one place Start may not recover a wedged panel: it
+offers `schtasks /Run` and no stop, because `/End` kills the process tree instead of asking the panel
+to shut down. The task is registered `MultipleInstancesPolicy=IgnoreNew`, so `/Run` on a running
+instance does nothing, and `schtasks` has no graceful restart — pressing Start on a wedged Windows
+panel therefore reports that the panel did not answer, rather than recovering it. Stopping still goes
+through the CLI's `down`, which is graceful.
 
 The entry's command returns as soon as the service manager accepted it, which is not the same as the
 panel answering: a `Type=exec` unit counts as started once the binary was executed, before it binds

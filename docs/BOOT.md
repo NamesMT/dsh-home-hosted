@@ -145,17 +145,12 @@ does not answer and a wedged panel is still active to systemd, where a plain `st
 the CLI's `down` brought the panel back seconds later and the page reported a stop the machine had
 already undone. systemd's own manual is explicit: "When the death of the process is a result of
 systemd operation (e.g. service stop or restart), the service will not be restarted." On launchd it
-is `kickstart`/`kill` for the same reason (`KeepAlive`). A Windows scheduled task offers the start
+is `kickstart -k`/`kill` for the same reason (`KeepAlive`). A Windows scheduled task offers the start
 only — `schtasks /End` kills the process tree rather than shutting the panel down.
 
 The wait after each action is for the same reason: a `Type=exec` unit reports started once `execve`
 returned, before the panel bound its port, so the call polls `/healthz` and returns as soon as it
 answers (~1.2 s measured here). The 20 s ceiling only bounds a panel that never answers.
-
-Nothing needs the reverse care during a *handover*, which is why the two paths differ: the activation
-helper above already stops the old panel through the mechanism that supervises it (step 2) and then
-uses the CLI's `down` only for the panel it drove itself. This rule is about the buttons a person
-presses, where the CLI must never be the one acting on a supervised panel.
 
 ## Enabling autostart hands the panel over
 

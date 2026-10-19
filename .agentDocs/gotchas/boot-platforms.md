@@ -39,17 +39,27 @@ write the artifact.
   dies outside systemd and explicitly not one systemd stopped itself — "When the death of the process
   is a result of systemd operation (e.g. service stop or restart), the service will not be restarted."
   So a CLI `down` on a supervised panel comes back seconds later and `panel.stop` reported a stop the
-  machine had already undone; the mirror is a CLI `up` starting a panel beside the entry. Both actions therefore ask the installed mechanism (`control()` in `src/boot/ladder.ts`,
-  `*Commands()` in each provider) and fall back to the CLI only when nothing is installed — the
-  services at `test/service.test.ts` ("panel start and stop go through the installed entry") assert
-  the CLI is never called, in either direction.
-- **Start must be a restart, or the button cannot fix the case it exists for.** `/healthz` silent is
-  the only condition for showing Start (`section-panel.tsx`), and a wedged panel is still *active* —
-  `systemctl start` on an active unit is a no-op, and plain `launchctl kickstart` leaves a running job
-  alone. So the start step is `systemctl restart` (which also starts a stopped unit —
-  `systemctl(1)`) and `kickstart -k`, matching what `activate()` already did. A `windows-task` is the
-  exception: `/Run` under `MultipleInstancesPolicy=IgnoreNew` is a no-op for a running instance and
-  `schtasks` has no graceful restart, so that path reports "did not answer" rather than recovering.
+  machine had already undone; the mirror is a CLI `up` starting a panel beside the entry. Both actions
+  therefore ask the installed mechanism (`control()` in `src/boot/ladder.ts`, `*Commands()` in each
+  provider) and fall back to the CLI only when nothing is installed. In `test/service.test.ts` ("panel
+  start and stop go through the installed entry") the entry branch asserts the CLI is never called;
+  sibling tests assert the opposite on the paths that *should* reach it (no entry installed, a refused
+  step, an unreachable ladder).
+- **The start verb comes from the entry's own state, not from the health probe.** `/healthz` silent is
+  the only condition for showing Start (`section-panel.tsx`), and that probe times out after 2 s — so a
+  *healthy but slow* panel looks identical to a wedged one. A wedged panel is still active, where
+  `systemctl start` is a no-op, but a blanket `restart` would stop a working panel and every server it
+  supervises over a false negative. So `startVerb()` reads `ActiveState` and picks `start`/`restart`;
+  an unreadable answer means `start`, whose failure mode is a harmless no-op. launchd does the same
+  with the `launchctl print` it already needs: plain `kickstart` when unloaded, `kickstart -k` when
+  running. A `windows-task` cannot follow — `/Run` under `MultipleInstancesPolicy=IgnoreNew` is a no-op
+  for a running instance and `schtasks` has no graceful restart — so that path reports "did not answer"
+  rather than recovering, and `docs/PANEL.md` says so.
+- **Commanding a unit this plugin did not write is the same bug as deleting one.** `status()` proves a
+  unit exists, not who wrote it, and `home-hosted` is the name a machine-default install uses; the
+  distro unit on this machine lives at `/etc/systemd/system/home-hosted.service`. `retireCommands()`
+  gated its deletion on the marker, so `mayCommand()` gates start/stop on `FragmentPath` — the file
+  systemd actually loaded — which also catches a unit found elsewhere on the search path.
 - **`schtasks /End` is not a stop.** It kills the task's process tree, so a supervised server dies
   without its stop policy running; a scheduled task offers `startCommands()` and deliberately no stop,
   so the CLI's graceful `down` is what runs. The task's `RestartOnFailure` behaviour after `/End` was
