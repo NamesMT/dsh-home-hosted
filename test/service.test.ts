@@ -1173,6 +1173,28 @@ describe('panel start and stop go through the installed entry', () => {
     expect(cliCalls.some(call => call.args.includes('up'))).toBe(false)
   })
 
+  it('does not claim a stop the entry did not deliver', async () => {
+    // A `systemctl stop` that exits 0 but leaves the panel answering means the
+    // panel is not under that unit (a CLI-started one), so the CLI down finishes
+    // it — here the CLI also "fails", and the answer must stay honest.
+    const panel = await withPanel()
+    const { service, cliCalls } = await harness({
+      panel,
+      ladder: entryLadder('systemd-user', unitSteps),
+      execControl: async (argv) => ({
+        command: argv[0]!, args: argv.slice(1), code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null,
+      }),
+      controlWaitMs: 50,
+    })
+    const result = await service.stopPanelNow()
+    // The stub panel keeps answering (the fake `systemctl` stopped nothing), so the
+    // entry's stop did not deliver: the CLI down is what answers, and the detail is
+    // the CLI's, not the entry's.
+    expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
+    expect(result.ok).toBe(true)
+    expect(result.detail).not.toContain('systemd-user')
+  })
+
   it('reports the entry\'s refusal instead of claiming the panel stopped', async () => {
     const panel = await withPanel()
     const { service } = await harness({

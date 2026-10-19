@@ -79,6 +79,15 @@ const PANEL_CONTROL_WAIT_MS = 20_000
 const PANEL_STOP_WAIT_MS = 5_000
 /** Between two `/healthz` probes while waiting. */
 const PANEL_CONTROL_POLL_MS = 250
+/**
+ * How long one entry start/stop step may take.
+ *
+ * `systemctl stop` blocks until the unit is down, and the default
+ * `TimeoutStopUSec` is 90 s — so a timeout at that boundary would SIGKILL the
+ * command just as systemd was finishing, reporting a failure for a stop that
+ * worked. Stop-policy grace on the panel's own servers can add to that.
+ */
+const PANEL_CONTROL_STEP_TIMEOUT_MS = 180_000
 
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
 function pluginRoot(): string | null {
@@ -1478,7 +1487,7 @@ export class HomeHostedService extends Service {
         return { ok: false, detail: `${control.mechanism} produced an empty ${action} command` }
       const result = this.options.execControl !== undefined
         ? await this.options.execControl(step)
-        : await run(program, args, { timeoutMs: 90_000 })
+        : await run(program, args, { timeoutMs: PANEL_CONTROL_STEP_TIMEOUT_MS })
       if (result.code !== 0) {
         const reason = failureOutput(result) ?? `${program} exited ${String(result.code)}`
         return {
