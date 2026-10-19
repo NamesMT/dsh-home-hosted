@@ -1,6 +1,58 @@
 # Changelog
 
 
+## v0.9.0
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.8.1...v0.9.0)
+
+### 🚀 Enhancements
+
+- **boot:** Add windows-boot, a SYSTEM task that starts before login ([cee67d7](https://github.com/NamesMT/dsh-home-hosted/commit/cee67d7))
+- **deps:** ⚠️  Support dsh 0.2.1-rc.2 and pin home-hosted ^0.9.0 ([36b2389](https://github.com/NamesMT/dsh-home-hosted/commit/36b2389))
+
+### 🩹 Fixes
+
+- Stop and start a supervised panel through its autostart entry ([2fc0005](https://github.com/NamesMT/dsh-home-hosted/commit/2fc0005))
+- **ui:** Stop promising that autostart restarts a stopped panel ([f04111b](https://github.com/NamesMT/dsh-home-hosted/commit/f04111b))
+- Start a panel under its entry with restart, not start ([dcd74fb](https://github.com/NamesMT/dsh-home-hosted/commit/dcd74fb))
+- Give an entry's start/stop step room for systemd's own grace ([1f83a80](https://github.com/NamesMT/dsh-home-hosted/commit/1f83a80))
+- Choose the start verb from the unit, and only command our own ([5a2e6d4](https://github.com/NamesMT/dsh-home-hosted/commit/5a2e6d4))
+- Pass the page's mechanism through, and fail on an empty step list ([95e46ec](https://github.com/NamesMT/dsh-home-hosted/commit/95e46ec))
+- Stamp the config schema on a file this plugin creates ([7c8bc9e](https://github.com/NamesMT/dsh-home-hosted/commit/7c8bc9e))
+- **release:** See a breaking commit that is not the newest ([119c170](https://github.com/NamesMT/dsh-home-hosted/commit/119c170))
+
+### 📖 Documentation
+
+- **agents:** Bound code-comment length, not just its topic ([2056d55](https://github.com/NamesMT/dsh-home-hosted/commit/2056d55))
+- Re-baseline agent docs; split GOTCHAS into an indexed topic set ([3c3937e](https://github.com/NamesMT/dsh-home-hosted/commit/3c3937e))
+- Whoever supervises the panel may change its state ([ca8304f](https://github.com/NamesMT/dsh-home-hosted/commit/ca8304f))
+- The start wait is a ceiling, not a delay ([f12d6f4](https://github.com/NamesMT/dsh-home-hosted/commit/f12d6f4))
+- Start means restart, and scope the handover's CLI stop ([d6730e8](https://github.com/NamesMT/dsh-home-hosted/commit/d6730e8))
+- Keep the new reasoning out of the constants ([a38586f](https://github.com/NamesMT/dsh-home-hosted/commit/a38586f))
+- Say what Start actually does, including where it cannot ([d7bcb04](https://github.com/NamesMT/dsh-home-hosted/commit/d7bcb04))
+- Replace the guessed Windows behaviour with measurements ([db9539a](https://github.com/NamesMT/dsh-home-hosted/commit/db9539a))
+- Document the Windows boot mechanism and its session-0 cost ([36766cd](https://github.com/NamesMT/dsh-home-hosted/commit/36766cd))
+- Record the 0.9 schema-2 upgrade and the dsh line now supported ([42353ca](https://github.com/NamesMT/dsh-home-hosted/commit/42353ca))
+
+### 🏡 Chore
+
+- Rebuild the committed bundles ([e09101a](https://github.com/NamesMT/dsh-home-hosted/commit/e09101a))
+
+### ✅ Tests
+
+- Pin the CLI out of a supervised panel's start and stop ([5ed8778](https://github.com/NamesMT/dsh-home-hosted/commit/5ed8778))
+- Pin the wedged-panel start path ([ee13282](https://github.com/NamesMT/dsh-home-hosted/commit/ee13282))
+- A broken boot probe must not cost the user a stop ([ab3b365](https://github.com/NamesMT/dsh-home-hosted/commit/ab3b365))
+- Pin the boot task's trigger, principal and separate name ([681fa18](https://github.com/NamesMT/dsh-home-hosted/commit/681fa18))
+
+#### ⚠️ Breaking Changes
+
+- **deps:** ⚠️  Support dsh 0.2.1-rc.2 and pin home-hosted ^0.9.0 ([36b2389](https://github.com/NamesMT/dsh-home-hosted/commit/36b2389))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.8.1
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.8.0...v0.8.1)
