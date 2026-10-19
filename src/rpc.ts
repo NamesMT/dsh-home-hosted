@@ -10,7 +10,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { RpcEndpoint, RpcRequest } from './shared/contracts.js'
 import { RPC_PATH, RPC_VERSION } from './shared/contracts.js'
 import type { HomeHostedService } from './service.js'
-import { HomeHostedError } from './service.js'
 
 interface FetchRoute {
   path: string
@@ -72,10 +71,14 @@ export function registerRpc(ctx: Context, service: HomeHostedService): void {
               return answer(body.endpoint, { ok: true, value })
             }
             catch (error) {
-              const code = error instanceof HomeHostedError ? error.code : 'INTERNAL'
+              // A refusal carries its own `code` (from `HomeHostedError` or the config modules),
+              // so the page can key a remedy to it; anything else is an opaque `INTERNAL`.
+              // Without this a config refusal reached the page as `INTERNAL`, which offers the
+              // person a message and nothing to act on.
+              const code = (error as { code?: unknown } | null)?.code
               const message = error instanceof Error ? error.message : String(error)
               const detail = (error as { detail?: unknown } | null)?.detail
-              return answer(body.endpoint, { ok: false, error: { code, message, ...(detail === undefined ? {} : { detail }) } })
+              return answer(body.endpoint, { ok: false, error: { code: typeof code === 'string' ? code : 'INTERNAL', message, ...(detail === undefined ? {} : { detail }) } })
             }
           },
         })

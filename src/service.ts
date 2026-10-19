@@ -18,7 +18,7 @@ import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
 import { accountOf } from './boot/index.js'
 import type { AccountInput, PasswdEntry } from './boot/index.js'
-import { findEntry, nullGroupRefusal, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, setControl, SERVER_MERGE_KEYS, upsertEntry, writeConfig } from './home-hosted/config-file.js'
+import { findEntry, nullGroupRefusal, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, schemaRefusal, setControl, SERVER_MERGE_KEYS, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
 import type { RawConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
@@ -1832,6 +1832,11 @@ export class HomeHostedService extends Service {
       servers = read.servers
       if (read.error !== null)
         lastError ??= read.error
+      // A config the panel would refuse to boot is reported here, from a read, so the page says
+      // so before a call is attempted. `readConfig` deliberately does not judge the stamp: it also
+      // serves foreign panels, whose entries would otherwise disappear behind one message.
+      const file = readConfig(this.options.home, this.managedWorkspace())
+      lastError ??= schemaRefusal(file.raw?.meta, `servers.config.json in ${this.managedWorkspace()}`, !file.exists)
     }
 
     return {

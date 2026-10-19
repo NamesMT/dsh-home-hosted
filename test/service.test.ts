@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BootMechanism, BootStatus, HomeHostedStatus, InstanceView, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
 import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
+import { panelConfigSchema } from '../src/home-hosted/panel-schema.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { panelConsolePath } from '../src/home-hosted/panel-console.js'
@@ -128,7 +129,7 @@ async function harness(options: {
     const dir = path.join(scratch!.path, name)
     makeHhHome(dir, {
       workspaces: ['default'],
-      servers: { default: { meta: { writtenBy: '0.6.6', schema: 1 }, servers: [{ id: 'web' }] } },
+      servers: { default: { meta: { writtenBy: '0.6.6', schema: panelConfigSchema()! }, servers: [{ id: 'web' }] } },
     })
     return dir
   })
@@ -354,7 +355,7 @@ describe('home-hosted service', () => {
 
     makeHhHome(other, {
       workspaces: ['default'],
-      servers: { default: { meta: { writtenBy: '0.6.6', schema: 1 }, servers: [] } },
+      servers: { default: { meta: { writtenBy: '0.6.6', schema: panelConfigSchema()! }, servers: [] } },
     })
     // Inside the cache window nothing is re-read, so the prompt provider cannot
     // turn a fresh measure into a per-step disk scan.
@@ -839,7 +840,7 @@ describe('the dsh Desktop client', () => {
     const panel = await withPanel()
     const { service, home } = await harness({ panel, surface: 'desktop' })
     writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
-      meta: { writtenBy: '0.6.6', schema: 1 },
+      meta: { writtenBy: '0.6.6', schema: panelConfigSchema()! },
       servers: [{ id: 'gitea', command: 'gitea', autostart: true }],
     })
 
@@ -918,7 +919,7 @@ describe('panel lifecycle from the page', () => {
   it('writes the chosen panel port into .hh/settings.json before starting it', async () => {
     const { home, service, settings } = await harness()
     writeJsonFile(globalSettingsFile(home), {
-      meta: { writtenBy: 'x', schema: 1 },
+      meta: { writtenBy: 'x', schema: panelConfigSchema()! },
       control: { port: 3999, host: '127.0.0.1' },
     })
     settings.update({ panel: { port: 6311 } })
@@ -931,7 +932,7 @@ describe('panel lifecycle from the page', () => {
     expect(written.control.host).toBe('127.0.0.1')
     // The plugin records that it wrote the file, and keeps the schema the file
     // already declared.
-    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 1 })
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: panelConfigSchema() })
     // The listener never lives in a workspace's servers config.
     expect(fs.existsSync(configFile(home))).toBe(false)
   })
@@ -1947,13 +1948,40 @@ describe('a root still on the pre-0.7 layout', () => {
     expect(status.lastError).toContain('latest 0.7.x')
     expect(cliCalls).toHaveLength(0)
   })
+
+  /**
+   * The page must warn before a write is refused, not after: a root the panel cannot boot looked
+   * healthy until the first call failed, which is the worst moment to learn it needs `migrate`.
+   */
+  it('reports a config stamped below the pinned schema from a read, naming migrate', async () => {
+    const { home, service } = await harness()
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      meta: { writtenBy: '0.8.0', schema: panelConfigSchema()! - 1 },
+      servers: [{ id: 'gitea', command: 'gitea' }],
+    })
+
+    const status = await service.status()
+    expect(status.lastError).toContain('home-hosted migrate')
+    // The entries are still listed: the file is readable, it is only un-bootable.
+    expect(status.servers.map(server => server.id)).toContain('gitea')
+  })
+
+  it('says nothing about a config stamped the way the pinned panel reads', async () => {
+    const { home, service } = await harness()
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      meta: { writtenBy: '0.9.2', schema: panelConfigSchema()! },
+      servers: [{ id: 'gitea', command: 'gitea' }],
+    })
+    const status = await service.status()
+    expect(status.lastError).toBeNull()
+  })
 })
 
 describe('entry snapshots across workspaces', () => {
   it('reads a pre-workspace flat file as the `default` workspace', async () => {
     const { home, service, state } = await harness()
     writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
-      meta: { writtenBy: '0.6.6', schema: 1 },
+      meta: { writtenBy: '0.6.6', schema: panelConfigSchema()! },
       servers: [{ id: 'dsh', command: 'sleep', autostart: false, onPortConflict: 'warn' }],
     })
     writeJsonFile(path.join(state, 'snapshots.json'), {
@@ -1971,7 +1999,7 @@ describe('entry snapshots across workspaces', () => {
 
   it('ignores a v2 file that belongs to another workspace', async () => {
     const { home, service, state } = await harness()
-    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), { meta: { writtenBy: '0.6.6', schema: 1 }, servers: [{ id: 'dsh', command: 'sleep' }] })
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), { meta: { writtenBy: '0.6.6', schema: panelConfigSchema()! }, servers: [{ id: 'dsh', command: 'sleep' }] })
     writeJsonFile(path.join(state, 'snapshots.json'), {
       version: 2,
       workspace: 'alpha',
@@ -1986,7 +2014,7 @@ describe('entry snapshots across workspaces', () => {
   it('reads a v2 file for the managed workspace, and saves v2', async () => {
     const { home, service, state } = await harness()
     writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
-      meta: { writtenBy: '0.6.6', schema: 1 },
+      meta: { writtenBy: '0.6.6', schema: panelConfigSchema()! },
       servers: [{ id: 'dsh', command: 'sleep', autostart: false, onPortConflict: 'warn' }],
     })
     writeJsonFile(path.join(state, 'snapshots.json'), {

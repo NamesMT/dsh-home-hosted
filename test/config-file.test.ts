@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConfigLayoutError, CONTROL_MERGE_KEYS, findEntry, patchControl, patchEntry, readConfig, readGlobalSettings, removeEntry, SERVER_MERGE_KEYS, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
+import { ConfigLayoutError, CONTROL_MERGE_KEYS, schemaRefusal, findEntry, patchControl, patchEntry, readConfig, readGlobalSettings, removeEntry, SERVER_MERGE_KEYS, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
 import { globalSettingsFile, serversFile } from '../src/home-hosted/layout.js'
 import { panelConfigSchema, readConfigSchemaFrom, resetPanelConfigSchema } from '../src/home-hosted/panel-schema.js'
 import { makeHhHome, makeLegacyHome } from './helpers/hh.js'
@@ -254,12 +254,13 @@ describe('config file fallback', () => {
 
   it('stamps meta on every write without dropping the schema the file carries', () => {
     const dir = home()
+    // A file this plugin may write: it already declares the schema the pinned panel reads.
     writeConfig(dir, {
-      meta: { writtenBy: '0.4.1', schema: 1 },
+      meta: { writtenBy: '0.4.1', schema: panelConfigSchema()! },
       servers: [],
     }, '0.6.1')
     const written = readConfig(dir).raw!
-    expect(written.meta).toEqual({ writtenBy: '0.6.1', schema: 1 })
+    expect(written.meta).toEqual({ writtenBy: '0.6.1', schema: panelConfigSchema() })
     expect(path.basename(serversFile(dir, 'default'))).toBe('servers.config.json')
     // The write landed in the workspace directory, never at the old root path.
     expect(fs.existsSync(path.join(dir, 'servers.config.json'))).toBe(false)
@@ -315,12 +316,58 @@ describe('meta stamp', () => {
     expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: panelConfigSchema() })
   })
 
-  it('keeps the schema a file already declared', () => {
+  /**
+   * The panel refuses to boot a config whose stamp is not the shape it reads, in **both**
+   * directions, so a write has to refuse too — otherwise this plugin keeps editing a panel that
+   * cannot start while every call reports success. Measured on 0.9.2: schema 1 answers "config
+   * schema 1 needs 1 migration", schema 3 "this release understands schema 2".
+   */
+  it('refuses a file stamped below the pinned schema, naming migrate', () => {
     const root = home()
-    writeJsonFile(serversFile(root, 'default'), { meta: { writtenBy: 'home-hosted', schema: 7 }, servers: [] })
+    const pinned = panelConfigSchema()!
+    writeJsonFile(serversFile(root, 'default'), { meta: { writtenBy: '0.8.0', schema: pinned - 1 }, servers: [] })
+    const before = fs.readFileSync(serversFile(root, 'default'), 'utf8')
+
+    expect(() => writeConfig(root, upsertEntry(readConfig(root).raw ?? {}, { id: 'x', command: 'sleep' })))
+      .toThrow(/home-hosted migrate/)
+    expect(fs.readFileSync(serversFile(root, 'default'), 'utf8')).toBe(before)
+  })
+
+  it('refuses a file stamped above the pinned schema, naming the newer panel', () => {
+    const root = home()
+    const pinned = panelConfigSchema()!
+    writeJsonFile(serversFile(root, 'default'), { meta: { writtenBy: '9.9.9', schema: pinned + 1 }, servers: [] })
+    const before = fs.readFileSync(serversFile(root, 'default'), 'utf8')
+
+    expect(() => writeConfig(root, upsertEntry(readConfig(root).raw ?? {}, { id: 'x', command: 'sleep' })))
+      .toThrow(/newer home-hosted/)
+    expect(fs.readFileSync(serversFile(root, 'default'), 'utf8')).toBe(before)
+  })
+
+  it('keeps the schema a file already declares when it is the one the panel reads', () => {
+    const root = home()
+    writeJsonFile(serversFile(root, 'default'), { meta: { writtenBy: 'home-hosted', schema: panelConfigSchema()! }, servers: [] })
     writeConfig(root, upsertEntry(readConfig(root).raw ?? {}, { id: 'x', command: 'sleep' }))
     const written = JSON.parse(fs.readFileSync(serversFile(root, 'default'), 'utf8'))
-    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 7 })
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: panelConfigSchema() })
+  })
+
+  /**
+   * One rule serves both paths: a write refuses with it, and `status` reports it from a read so
+   * the page warns before a call is attempted. These are its five cases.
+   */
+  it('judges a stamp the way the panel does, and stays silent on a file it is creating', () => {
+    const pinned = panelConfigSchema()!
+
+    // A file being created has no stamp yet, so there is nothing to judge.
+    expect(schemaRefusal(undefined, 'f', true)).toBeNull()
+    // An existing one that names no shape is refused in the direction it has to be lifted.
+    expect(schemaRefusal(undefined, 'f', false)).toContain('home-hosted migrate')
+    expect(schemaRefusal({ schema: pinned - 1 }, 'f', false)).toContain('home-hosted migrate')
+    // Above the pinned schema, the remedy points the other way.
+    expect(schemaRefusal({ schema: pinned + 1 }, 'f', false)).toContain('newer home-hosted')
+    // The one shape the panel reads passes.
+    expect(schemaRefusal({ schema: pinned }, 'f', false)).toBeNull()
   })
 
   it('stamps the panel settings file it creates, not only a workspace config', () => {
@@ -354,7 +401,7 @@ describe('the settings split', () => {
   it('patches `control` into .hh/settings.json and keeps every other global key', () => {
     const dir = home()
     writeJsonFile(globalSettingsFile(dir), {
-      meta: { writtenBy: 'home-hosted', schema: 1 },
+      meta: { writtenBy: 'home-hosted', schema: panelConfigSchema()! },
       control: { port: 3999, host: '127.0.0.1', auth: { enabled: true, sessionTtlMs: 90000 } },
       auth: { enabled: true },
       tls: { mode: 'auto' },
@@ -371,7 +418,7 @@ describe('the settings split', () => {
     expect(written.host).toEqual({ enabled: true })
     expect(written.backups).toEqual({ enabled: false })
     // The schema the file declared survives, and the writer is stamped.
-    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 1 })
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: panelConfigSchema() })
 
     // A nested control group merges the way the panel's own `updateControl` does,
     // so patching one key of `auth` keeps its siblings. The fixture carries a
@@ -432,6 +479,22 @@ describe('a pre-0.7 root', () => {
     expect(fs.readFileSync(old, 'utf8')).toBe(before)
     expect(fs.existsSync(path.join(dir, '.hh'))).toBe(false)
     expect(fs.existsSync(path.join(dir, 'settings.json'))).toBe(false)
+  })
+
+  /**
+   * The RPC layer answers with an error's own `code`, so a refused config has to carry one or it
+   * reaches the page as `INTERNAL` — a message with nothing to key a remedy to.
+   */
+  it('carries a wire code, so a refusal is not reported as INTERNAL', () => {
+    const dir = legacy()
+    try {
+      writeConfig(dir, { servers: [] })
+      expect.unreachable('the write should have been refused')
+    }
+    catch (error) {
+      expect(error).toBeInstanceOf(ConfigLayoutError)
+      expect((error as ConfigLayoutError).code).toBe('CONFIG_UNREADABLE')
+    }
   })
 
   it('is safe to write once the root carries a `.hh`', () => {

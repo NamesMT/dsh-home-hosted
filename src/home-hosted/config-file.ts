@@ -51,11 +51,14 @@ export interface SettingsReadResult {
 /** A write that cannot land where it was asked to: a root still on the old layout. */
 export class ConfigLayoutError extends Error {
   override name = 'ConfigLayoutError'
+  /** The wire code a caller reports; the root's layout is a readable config problem, not a crash. */
+  readonly code = 'CONFIG_UNREADABLE'
 }
 
 /** A patch the panel's own schema would reject, refused rather than written. */
 export class ConfigPatchError extends Error {
   override name = 'ConfigPatchError'
+  readonly code = 'INVALID_PATCH'
 }
 
 /** One workspace's entries. A not-yet-migrated root is reported, never parsed. */
@@ -113,25 +116,75 @@ export function writeConfig(home: string, raw: RawConfig, writtenBy = 'dsh-home-
 }
 
 /**
- * One file's `meta` after this plugin wrote it: the writer recorded, and a schema present
- * whenever the pinned panel's own can be read.
+ * One file's `meta` after this plugin wrote it, or a refusal when the file carries a shape the
+ * pinned panel cannot boot.
  *
- * An existing schema is kept even when it disagrees with the pinned release: that stamp
- * describes bytes this plugin did not produce, and rewriting it would claim a shape the
- * content may not have.
+ * A **new** file is stamped with the pinned panel's own `CONFIG_SCHEMA`, because an absent stamp
+ * reads as the oldest shape rather than the current one.
+ *
+ * An **existing** file has to already declare exactly that schema. Anything else is a config the
+ * panel refuses to start — below it needs `home-hosted migrate`, above it was written by a newer
+ * release — so writing on regardless would keep this plugin editing a panel that cannot boot while
+ * reporting success. Measured on 0.9.2: a schema-1 file answers "config schema 1 needs 1 migration"
+ * and a schema-3 file "this release understands schema 2". Lifting or downgrading a config is the
+ * panel's job, never this plugin's, so the refusal names the remedy for the direction it found.
+ *
+ * When the pinned release's own schema cannot be read, an existing stamp is left alone: this
+ * plugin cannot judge it, and inventing a number would claim more than it knows.
+ *
+ * The stamp is read from the **file**, never from `existing`: a caller may hand in a fresh object
+ * (an `upsertEntry({}, …)`), and judging by that would report a missing stamp for a file that
+ * declares one — the refusal text then named the wrong problem, and a write could overwrite a shape
+ * it never looked at. `existing` only carries `writtenBy` and any key the file does not have.
  */
-function stampedMeta(existing: unknown, writtenBy: string, where: string, file: string): Record<string, unknown> {
-  const meta: Record<string, unknown> = isRecord(existing) ? { ...existing } : {}
-  if (typeof meta.schema !== 'number') {
-    if (fs.existsSync(file)) {
-      throw new ConfigLayoutError(
-        `${where} carries no meta.schema, so its config shape is unknown; run \`home-hosted migrate\` before this plugin writes it`,
-      )
-    }
-    const schema = panelConfigSchema()
-    if (schema !== null)
-      meta.schema = schema
+/**
+ * Why the panel would refuse to boot a file stamped `meta`, or null when it would accept it.
+ *
+ * One rule for both paths: a **write** refuses with it, and `status` reports it through `lastError`
+ * so the page warns before a call is attempted — otherwise a root that needs `home-hosted migrate`
+ * looks healthy until the first write fails, which is the worst moment to learn it.
+ *
+ * Deliberately *not* part of `readConfig`: discovery reads foreign panels too, and reporting one as
+ * unreadable would hide every entry it holds. A read still serves what the file says; only acting on
+ * it is refused.
+ *
+ * Null when the pinned release's schema cannot be read — this plugin cannot judge, and inventing a
+ * comparison would claim more than it knows.
+ */
+export function schemaRefusal(meta: unknown, where: string, creating: boolean): string | null {
+  const pinned = panelConfigSchema()
+  if (pinned === null)
+    return null
+  const declared = isRecord(meta) && typeof meta.schema === 'number' ? meta.schema : null
+  if (declared === null) {
+    return creating
+      ? null
+      : `${where} carries no meta.schema, so its config shape is unknown; run \`home-hosted migrate\` before this plugin writes it`
   }
+  if (declared === pinned)
+    return null
+  return declared < pinned
+    ? `${where} is on config schema ${declared}, which home-hosted ${pinned} refuses to boot; run \`home-hosted migrate\` before this plugin writes it`
+    : `${where} is on config schema ${declared}, written by a newer home-hosted than this plugin's ${pinned}; update home-hosted, or pin this plugin to the release that wrote it`
+}
+
+function stampedMeta(existing: unknown, writtenBy: string, where: string, file: string): Record<string, unknown> {
+  const onDisk = fs.existsSync(file) ? readJson<Record<string, unknown>>(file) : null
+  const diskMeta = isRecord(onDisk) && isRecord(onDisk.meta) ? onDisk.meta : {}
+  const meta: Record<string, unknown> = { ...diskMeta, ...(isRecord(existing) ? existing : {}) }
+
+  if (onDisk === null) {
+    // A file this write creates: name the shape it is being written in.
+    const pinned = panelConfigSchema()
+    if (pinned !== null)
+      meta.schema = pinned
+  }
+  else {
+    const refusal = schemaRefusal(meta, where, false)
+    if (refusal !== null)
+      throw new ConfigLayoutError(refusal)
+  }
+
   meta.writtenBy = writtenBy
   return meta
 }
