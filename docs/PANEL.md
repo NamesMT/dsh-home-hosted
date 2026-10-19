@@ -56,10 +56,40 @@ plus its `.1`, and the 5 MB rotation — is unchanged too, and this plugin's rea
 **0.8.0 stopped relocating an old state root, and this plugin follows it.** A 0.6.x root used to be
 moved into `.hh/` on 0.7's first run; 0.8 refuses it instead, before any command resolves a path into
 it, so a config at the old paths is never read as an empty panel. **Upgrading from 0.7 or earlier? Run
-the latest 0.7.x once first — that release moves the state — then install 0.8.** The plugin's floor is
-`0.8.0` for the same reason, so a 0.7.x panel is reported as unsupported rather than driven. That
-removed the last version-conditional code here: a stop-then-start fallback for a panel without
-`restart <id>`, and `panel.migrate`, whose CLI no longer performs the move.
+the latest 0.7.x once first — that release moves the state — then install 0.8.** That removed the last
+version-conditional code here: a stop-then-start fallback for a panel without `restart <id>`, and
+`panel.migrate`, whose CLI no longer performs the move.
+
+**0.9.0 raised the config schema to 2, and it changed what an unstamped file means.** Schema 2 folds
+the Telegram singleton and the webhook list into one `notifications.destinations` list. The part that
+bites here is the stamp: a file with no `meta.schema` is read as the **oldest** shape, so 0.9's `up`
+refuses to start it — `config schema 1 needs 1 migration`. This plugin writes workspace configs
+directly whenever the panel does not answer, and it used to stamp them with `meta.writtenBy` alone, so
+a config it created before any panel had run was unstartable on 0.9. It now stamps `meta.schema` on
+every file it **creates**, reading the number from the pinned release rather than hard-coding it — a
+fixed `2` would break again at the next bump, from the other side.
+
+A file that already exists **without** a stamp is refused instead of stamped: its content may still
+need lifting, and stamping it would claim a migration that never ran and silently strand what the step
+rewrites. Measured: a schema-2 stamp over an old `notifications.telegram` block makes 0.9 report the
+key as unrecognized and ignore it, so the person's notifications end up silently off. Lifting a config
+is `home-hosted migrate`'s job, and the refusal names it.
+
+The floor is `0.9.0` for the same reason the pin is: a 0.8.x panel reads a schema-2 stamp as a *newer*
+release's file and refuses that in turn, so no stamp satisfies both and there is no version-conditional
+path. A 0.8.x panel is not a lesser-supported copy — it is one this plugin cannot drive.
+
+### Upgrading an existing state root
+
+A root a 0.8-era panel wrote is on config schema 1. Run the panel's own migration once, before letting
+0.9 — or this plugin — write it:
+
+```sh
+home-hosted migrate --dry-run   # print the steps, write nothing
+home-hosted migrate --yes       # keep a .bak beside each rewritten file
+```
+
+Both sides are then on schema 2, and every write stays readable by the release that pinned it.
 
 **0.7.21 widens that nullable set by one field, and it closed a bug here.** Clearing a server's label
 sent an empty string, which the panel accepts and saves — so the entry kept a blank label instead of

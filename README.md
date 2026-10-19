@@ -16,7 +16,7 @@ Ask for a Gitea, a Jellyfin, an FTP server; `dsh-home-hosted` sets up the entrie
 [![CI](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml/badge.svg)](https://github.com/NamesMT/dsh-home-hosted/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-home-hosted?color=green)](./LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![dsh](https://img.shields.io/badge/dsh-%3E%3D0.2.0--rc.1-5b21b6)](https://github.com/deepseek-ai/dsh)
+[![dsh](https://img.shields.io/badge/dsh-0.2.0--rc.1%20%7C%7C%200.2.1--rc.2-5b21b6)](https://github.com/deepseek-ai/dsh)
 
 [🚀 Quick start](#-quick-start) · [🎛️ What the plugin does](#-what-the-plugin-does) · [🤖 Agent tools](#-agent-tools) · [🧩 Depth](#-depth)
 

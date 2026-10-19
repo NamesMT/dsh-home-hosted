@@ -10,11 +10,23 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 range. The page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one
 alone makes it recommend a range the plugin is not built against.
 
-The pin is `^0.8.0`, and `MIN_SUPPORTED_VERSION` is `0.8.0` too: 0.8.0 *refuses* a pre-workspace state
-root instead of relocating it, so a 0.7.x panel is not a lesser-supported copy — it is one this plugin
-cannot drive. The floor and the pin are the same release, so nothing degrades any more. An old root is
-upgraded by running the **latest 0.7.x once**, before installing 0.8 — in the release notes and the
-refusal text, never in code.
+The pin is `^0.9.0`, and `MIN_SUPPORTED_VERSION` is `0.9.0` too: 0.9.0 raised the config schema to 2
+**and** made an unstamped file read as schema 1, so a config this plugin created without a stamp is
+refused by 0.9 ("config schema 1 needs 1 migration") while a schema-2 stamp is refused by 0.8 as a
+newer release's file. No stamp satisfies both gates, so a 0.8.x panel is not a lesser-supported copy —
+it is one this plugin cannot drive, and the floor moved with the pin.
+
+### The schema stamp
+
+**A file this plugin creates carries `meta.schema`, read from the pinned release** (`panel-schema.ts`
+reads `CONFIG_SCHEMA` from the dependency's shipped sourcemap). Hard-coding the number is the defect
+this replaced: `2` would be wrong at the next bump, from the other side, and nothing would say so.
+
+**A file that already exists without a stamp is refused, never stamped.** Its content may still need
+lifting, and writing the current schema over it claims a migration that never ran. Measured on a real
+0.9.2 panel: a `schema: 2` stamp over an old `notifications.telegram` block makes the panel report the
+key as unrecognized and ignore it, so the notifications end up silently off with no error anywhere.
+Only `home-hosted migrate` may lift a config; the refusal names it.
 
 ### Re-checking a bump
 
@@ -79,11 +91,12 @@ to get around it.
 
 ## What an older panel can no longer be
 
-`onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13) and the nullable-`label`
-patch (0.7.21) all predate the floor, so none needs a version check; the version probes and the
-stop-then-start `restart` retry are gone with them. `writeConfig` keeps the panel's `meta` and never
-invents `meta.schema`: an absent schema reads as the panel's current one, while a stale stamp stops
-the panel booting.
+`onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13), the nullable-`label`
+patch (0.7.21) and the relocating pre-workspace root (0.8.0) all predate the floor, so none needs a
+version check; the version probes and the stop-then-start `restart` retry are gone with them.
+`writeConfig` keeps the panel's `meta` and stamps `meta.schema` on a file it creates, read from the
+pinned release: an absent schema reads as the **oldest** shape, while a stamp above what the panel
+understands stops it booting.
 
 ## How to test
 
