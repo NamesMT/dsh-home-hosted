@@ -116,6 +116,9 @@ nobody reads is worse than a long file.
   launcher is only for an image a bare name cannot reach.
 - **A mechanism stays selectable without privilege**: stage the file and return the exact commands
   rather than hiding the option.
+- **A mechanism that works but is worse is opt-in, not auto**: `windows-boot` (SYSTEM, session 0) is
+  installed only when named, because a supervised server needing a desktop breaks there. `recommend()`
+  carries the exclusion (`OPT_IN_ONLY`), so it stays out of Automatic without becoming unavailable.
 - **The client bundle is CJS with only** `react`, `react-dom`, `react/jsx-runtime` external — never
   import `@deepseek-ai/*` into it — and every visible string needs an `en` + `zh` entry (parity is
   enforced, and a literal `t('…')` key that does not exist is a test failure).

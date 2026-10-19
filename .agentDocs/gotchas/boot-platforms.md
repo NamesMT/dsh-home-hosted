@@ -68,7 +68,19 @@ write the artifact.
   to the system mechanism, so a WSL user gets autostart and a working Start/Stop, not a broken page.
   Windows `.exe`s are reachable through interop, which is a *separate* mechanism from `windows-task`:
   the plugin only uses `schtasks.exe` when `process.platform === 'win32'`, never under WSL.
-- **`schtasks /End` is not a stop, and not reliably a kill either — measured.** On Windows 11 through
+- **Windows has three mechanisms because "before login" is a different trade, not a better one.**
+  `windows-task` (logon trigger, `InteractiveToken`) starts only after someone logs in; `windows-boot`
+  (`BootTrigger`, SID `S-1-5-18`) starts at boot but runs in **session 0**, which has no interactive
+  desktop and no loaded user profile. Measured on Windows 11 through WSL interop: the boot task really
+  reports `session=0` while `explorer.exe` is in session 1, and the Task Scheduler accepts the
+  generated XML (`Schedule Type: At system start up`, `Run As User: SYSTEM`). So `windows-boot` is
+  excluded from `recommend()` by `OPT_IN_ONLY` while staying explicitly selectable — the panel itself
+  is fine there (`--no-open`), a supervised GUI server is not.
+- **Two artifacts in one naming space must not share a name.** Both task mechanisms key on
+  `spec.unitName`, so the boot one appends `-boot` (`bootTaskNameOf`); sharing it would make installing
+  one silently replace the other, and a switch between them impossible to undo. Tests assert both
+  names coexist and that uninstalling one leaves the other.
+- **`schtasks /End` is not a stop, and not reliably a kill either — measured.**- **`schtasks /End` is not a stop, and not reliably a kill either — measured.** On Windows 11 through
   WSL interop, `/End` reported "terminated successfully" and `Last Result` 267014 (user-terminated), yet
   a program's own shutdown handler never ran (a PowerShell `trap` stayed cold) and a `ping` child
   survived `/End` by minutes, parent already dead. `RestartOnFailure` did **not** revive the task after

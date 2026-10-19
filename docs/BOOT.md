@@ -92,6 +92,33 @@ stays `available` and its install reports "loads at the next login" instead of r
 `bootstrap`/`enable`/`print` steps need the domain, and they are skipped when it is unreachable. The
 daemon scope still needs root for `/Library/LaunchDaemons`.
 
+## Windows: logon, or boot as SYSTEM (opt-in)
+
+Windows gets three mechanisms, because "starts at login" and "starts before login" are genuinely
+different trades on that platform:
+
+| mechanism | starts | who it runs as | needs |
+| --- | --- | --- | --- |
+| `windows-run` | at login | you, in your session | nothing |
+| `windows-task` | at login | you, in your session | admin |
+| `windows-boot` | at boot, before any login | `SYSTEM` | admin |
+
+`windows-boot` is **never chosen by Automatic**, even though it is the only one that comes up without a
+login. It runs in **session 0**, which has no interactive desktop and no loaded user profile — so a
+supervised server that wants a display, a GUI, or the user's own environment breaks there. The panel
+itself is fine (server rows are launched with `--no-open`, so nothing tries to open a browser), which is
+exactly why this is a per-machine decision rather than a default. Measured on Windows 11: a
+`BootTrigger` task with the SYSTEM SID really does run in session 0, and the Task Scheduler accepts the
+generated XML.
+
+The two task mechanisms register under **different names** — `home-hosted` and `home-hosted-boot` — so
+installing one does not replace the other and you can switch back. Only the boot task carries a boot
+trigger, and only it uses the SYSTEM SID; neither stores a password, because a task that needs a named
+account's credentials would be a credential store, not a boot entry.
+
+Neither mechanism offers a stop: `/End` was measured to deliver no shutdown request and to leave
+orphans behind, so the CLI's `down` remains the only stop that runs the supervised stop policy.
+
 ## Escaping is per setting, not per file
 
 A unit file is read by systemd, not by a shell, and its settings do not share one
@@ -218,7 +245,7 @@ Each mechanism sends it somewhere different, and the status line now names where
 | `systemd-user` / `systemd-system` | the journal — the unit sets no `StandardOutput=`, so the detail names `journalctl --user -u <unit>` or `journalctl -u <unit>` |
 | `launchd-agent` / `launchd-daemon` | `<logDir>/<label>.out.log` and `<label>.err.log`, the two paths the generated plist carries |
 | `xdg-autostart` | nowhere persistent: a `.desktop` entry with `Terminal=false` has its output discarded by the session |
-| `windows-run` / `windows-task` | nowhere persistent either |
+| `windows-run` / `windows-task` / `windows-boot` | nowhere persistent either |
 
 So the hint appears only where a file or a query actually exists — and only once the entry is
 installed, because naming a log for an entry that was never written sends someone to a
