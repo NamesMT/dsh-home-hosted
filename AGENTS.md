@@ -77,9 +77,11 @@ nobody reads is worse than a long file.
   owned key that was absent is recorded as the schema's default, never omitted — restore-versus-delete
   depends on telling those apart.
 - **`writeConfig` keeps the panel's `meta`** and stamps `meta.schema` on a file it **creates**, read
-  from the pinned release: an absent stamp reads as the *oldest* shape, which 0.9 refuses to boot,
-  while a stamp above what the panel understands stops it too. An existing unstamped file is refused,
-  not stamped — that would claim a migration that never ran.
+  from the pinned release. An existing file must already declare exactly that schema: below it needs
+  `home-hosted migrate`, above it came from a newer release, and writing over either leaves the panel
+  unable to boot what this plugin keeps editing. One rule (`schemaRefusal`) both refuses the write and
+  is reported by `status`, so the page warns first; read the stamp from the **file**, never from the
+  caller's object, and give a refused write a wire `code` or the page sees `INTERNAL`.
 - **Writes go through the authenticated panel API when it answers and the token proves itself**,
   otherwise straight to `.hh/<workspace>/servers.config.json` (atomic, schema-shaped). The panel's
   `control` lives in `.hh/settings.json` and is patched there.

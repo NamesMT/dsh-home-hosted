@@ -22,11 +22,29 @@ it is one this plugin cannot drive, and the floor moved with the pin.
 reads `CONFIG_SCHEMA` from the dependency's shipped sourcemap). Hard-coding the number is the defect
 this replaced: `2` would be wrong at the next bump, from the other side, and nothing would say so.
 
-**A file that already exists without a stamp is refused, never stamped.** Its content may still need
-lifting, and writing the current schema over it claims a migration that never ran. Measured on a real
-0.9.2 panel: a `schema: 2` stamp over an old `notifications.telegram` block makes the panel report the
-key as unrecognized and ignore it, so the notifications end up silently off with no error anywhere.
-Only `home-hosted migrate` may lift a config; the refusal names it.
+**A write refuses a file whose stamp is not the pinned schema — either direction, or absent.** Below it
+needs `home-hosted migrate`; above it was written by a newer release than this plugin pins. Writing
+over either claims a migration that never ran, and the panel then refuses to boot what this plugin
+keeps editing. Measured on a real 0.9.2 panel: a `schema: 2` stamp over an old
+`notifications.telegram` block makes the panel report the key as unrecognized and ignore it, so the
+notifications end up silently off with no error anywhere. Only `home-hosted migrate` may lift a
+config; the refusal names it.
+
+**Judge the stamp from the file, not from the caller's object.** `writeConfig` receives whatever the
+caller built, and `upsertEntry({}, …)` hands in a fresh `{}`; reading `raw.meta` then reported "carries
+no meta.schema" for a file that declared one, naming the wrong problem. `stampedMeta` reads the file
+on disk and lets the caller's keys only fill what it does not have.
+
+**A refused write carries a wire `code`.** `rpc.ts` answers with an error's own `code`, so a config
+refusal reported `INTERNAL` until `ConfigLayoutError`/`ConfigPatchError` carried one — a message with
+nothing for the page to key a remedy to.
+
+**One rule, and the read reports it too.** `schemaRefusal` is what a write refuses with and what
+`status` puts in `lastError`, so the page warns before a call is attempted instead of the root looking
+healthy until the first write fails. It is deliberately **not** inside `readConfig`: discovery and
+every foreign-panel call read through that, so judging there made a 0.9-era sibling panel report as
+unreadable and hid the entries it still holds — measured, it broke instance discovery. A read serves
+what the file says; only acting on it is refused.
 
 ### Re-checking a bump
 

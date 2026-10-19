@@ -69,11 +69,17 @@ a config it created before any panel had run was unstartable on 0.9. It now stam
 every file it **creates**, reading the number from the pinned release rather than hard-coding it — a
 fixed `2` would break again at the next bump, from the other side.
 
-A file that already exists **without** a stamp is refused instead of stamped: its content may still
-need lifting, and stamping it would claim a migration that never ran and silently strand what the step
-rewrites. Measured: a schema-2 stamp over an old `notifications.telegram` block makes 0.9 report the
-key as unrecognized and ignore it, so the person's notifications end up silently off. Lifting a config
-is `home-hosted migrate`'s job, and the refusal names it.
+An existing file that does not already declare **the** schema the pinned panel reads is refused, in
+both directions: below it needs `home-hosted migrate`, above it was written by a newer home-hosted
+than this plugin pins. Stamping over either would claim a migration that never ran — measured, a
+schema-2 stamp over an old `notifications.telegram` block makes 0.9 report the key as unrecognized and
+ignore it, so the person's notifications end up silently off — and writing on regardless would leave
+this plugin editing a panel that cannot boot while every call reports success. Lifting or downgrading
+a config is `home-hosted migrate`'s job, and the refusal names the remedy for the direction it found.
+
+The page says so **before** a write is attempted: a config the panel cannot boot is reported as the
+panel's error, so the root is not shown as healthy until the first call fails. The entries are still
+listed — the file is readable, it is only un-bootable — so nothing looks lost while you migrate it.
 
 The floor is `0.9.0` for the same reason the pin is: a 0.8.x panel reads a schema-2 stamp as a *newer*
 release's file and refuses that in turn, so no stamp satisfies both and there is no version-conditional
