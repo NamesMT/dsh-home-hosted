@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.9.1
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.0...v0.9.1)
+
+### 🩹 Fixes
+
+- Refuse a config stamp the panel cannot boot, and report it from a read ([d9b0509](https://github.com/NamesMT/dsh-home-hosted/commit/d9b0509))
+
+### 📖 Documentation
+
+- Correct the stamp rule to both directions and the read-side warning ([e37b33d](https://github.com/NamesMT/dsh-home-hosted/commit/e37b33d))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.0
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.8.1...v0.9.0)
