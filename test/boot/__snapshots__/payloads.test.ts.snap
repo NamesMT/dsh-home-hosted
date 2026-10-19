@@ -95,6 +95,48 @@ WantedBy=default.target
 
 exports[`windows payloads > builds the Register-ScheduledTask script from cmdlets 1`] = `"$action = New-ScheduledTaskAction -Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument 'C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\tester\\.home-hosted' -WorkingDirectory 'C:\\Users\\tester'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Register-ScheduledTask -TaskName 'home-hosted' -Action $action -Trigger $trigger -Settings $settings -Description 'managed-by:dsh-home-hosted' -Force | Out-Null"`;
 
+exports[`windows payloads > registers the boot task with -AtStartup and a SYSTEM principal 1`] = `"$action = New-ScheduledTaskAction -Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument 'C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\tester\\.home-hosted' -WorkingDirectory 'C:\\Users\\tester'; $trigger = New-ScheduledTaskTrigger -AtStartup; $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero); Register-ScheduledTask -TaskName 'home-hosted-boot' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'managed-by:dsh-home-hosted' -Force | Out-Null"`;
+
+exports[`windows payloads > writes a boot task XML that runs as SYSTEM at startup, not at logon 1`] = `
+"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+<RegistrationInfo>
+<Description>managed-by:dsh-home-hosted</Description>
+</RegistrationInfo>
+<Triggers>
+<BootTrigger>
+<Enabled>true</Enabled>
+<Delay>PT15S</Delay>
+</BootTrigger>
+</Triggers>
+<Principals>
+<Principal id="Author">
+<UserId>S-1-5-18</UserId>
+<RunLevel>HighestAvailable</RunLevel>
+</Principal>
+</Principals>
+<Settings>
+<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+<StartWhenAvailable>true</StartWhenAvailable>
+<RestartOnFailure>
+<Interval>PT1M</Interval>
+<Count>3</Count>
+</RestartOnFailure>
+<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+</Settings>
+<Actions Context="Author">
+<Exec>
+<Command>C:\\Program Files\\nodejs\\node.exe</Command>
+<Arguments>C:\\home-hosted\\dist\\cli.js up --foreground --home C:\\Users\\tester\\.home-hosted</Arguments>
+<WorkingDirectory>C:\\Users\\tester</WorkingDirectory>
+</Exec>
+</Actions>
+</Task>
+"
+`;
+
 exports[`windows payloads > writes task XML with the marker, a logon trigger and restart settings 1`] = `
 "<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

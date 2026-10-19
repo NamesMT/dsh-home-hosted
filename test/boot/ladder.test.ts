@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createBootLadder } from '../../src/boot/ladder.js'
 import type { FakeHandler } from './harness.js'
-import { cleanup, fakeRun, spec, tempHome, TEST_PASSWD } from './harness.js'
+import { cleanup, fakeRun, spec, tempHome, TEST_PASSWD, winSpec } from './harness.js'
 
 /** A machine with a working systemd user manager and linger on. */
 function systemdHandler(): FakeHandler {
@@ -51,7 +51,7 @@ describe('ladder selection', () => {
     const darwin = createBootLadder({ platform: 'darwin', home, run: fakeRun().run, exists: () => false })
     expect(darwin.providers.map(provider => provider.mechanism)).toEqual(['launchd-agent', 'launchd-daemon', 'unsupported'])
     const win = createBootLadder({ platform: 'win32', home, run: fakeRun().run, exists: () => false })
-    expect(win.providers.map(provider => provider.mechanism)).toEqual(['windows-run', 'windows-task', 'unsupported'])
+    expect(win.providers.map(provider => provider.mechanism)).toEqual(['windows-run', 'windows-task', 'windows-boot', 'unsupported'])
   })
 
   it('recommends systemd-user on Linux when linger is on', async () => {
@@ -562,5 +562,82 @@ describe('ladder control with more than one entry installed', () => {
     const control = await ladder.control(spec(), 'stop', 'systemd-user')
     expect(control?.mechanism).toBe('systemd-user')
     expect(control?.commands).toEqual([['systemctl', '--user', 'stop', 'home-hosted.service']])
+  })
+})
+
+describe('the boot task is opt-in, never automatic', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => cleanup(home))
+
+  /**
+   * An elevated Windows host where no task is registered yet.
+   *
+   * `/Query` on a missing task exits 1 with empty stdout — measured against the
+   * real `schtasks.exe`; a fixture that returns 0 there makes every task look
+   * registered-but-foreign.
+   */
+  function elevatedWindows() {
+    // Registration is what makes the task appear, so `/Query` answers per task name.
+    let registered: string | null = null
+    const runner = fakeRun((command, args) => {
+      // `Get-Command` is not its own argv element: the code passes one
+      // `'Get-Command Register-ScheduledTask'` string, so `args.includes` misses it
+      // and this probe would fall through to the register branch.
+      if (command === 'powershell.exe' && args.join(' ').includes('Get-Command'))
+        return { code: 0, stdout: 'Register-ScheduledTask\n' }
+      if (command === 'powershell.exe' && args.join(' ').includes('IsInRole'))
+        return { code: 0, stdout: 'True\n' }
+      // After the two probes above: `Get-Command Register-ScheduledTask` also
+      // contains the cmdlet name, so testing that first would register nothing.
+      if (command === 'powershell.exe' && args.join(' ').includes('Register-ScheduledTask')) {
+        registered = /TaskName '([^']+)'/.exec(args.join(' '))?.[1] ?? null
+        return { code: 0 }
+      }
+      if (command === 'schtasks.exe' && args.includes('/Query')) {
+        const want = args[args.indexOf('/TN') + 1]
+        return want === registered ? { code: 0, stdout: '' } : { code: 1, stderr: 'ERROR: The system cannot find the file specified.\n' }
+      }
+      return { code: 0 }
+    })
+    return createBootLadder({
+      platform: 'win32',
+      home,
+      passwd: TEST_PASSWD,
+      env: { USER: 'tester', LOCALAPPDATA: path.join(home, 'AppData', 'Local') },
+      uid: 1000,
+      run: runner.run,
+      sudo: async () => false,
+      exists: () => false,
+    })
+  }
+
+  it('reports itself as boot-capable, because it really does start before login', async () => {
+    const ladder = elevatedWindows()
+    const status = await ladder.status(winSpec(), 'windows-boot')
+    const candidate = status.candidates.find(entry => entry.mechanism === 'windows-boot')
+    // If this were false it would rank below the Run key by accident, which is not
+    // the reason it is excluded from `auto` — the session-0 cost is.
+    expect(candidate?.bootCapable).toBe(true)
+    expect(candidate?.available).toBe(true)
+  })
+
+  it('is never what `auto` recommends, even though it is boot-capable and elevated', async () => {
+    const ladder = elevatedWindows()
+    const status = await ladder.status(winSpec())
+    expect(status.recommended).not.toBe('windows-boot')
+    // The boot task is strictly better on paper (it starts before login), so only an
+    // explicit exclusion keeps it out — the assertion has to name the alternative.
+    expect(['windows-task', 'windows-run']).toContain(status.recommended)
+  })
+
+  it('still installs when named explicitly', async () => {
+    const ladder = elevatedWindows()
+    const result = await ladder.install(winSpec(), 'windows-boot')
+    expect(result.ok).toBe(true)
+    expect(result.mechanism).toBe('windows-boot')
+    // The task must be its own name: sharing the logon task's would make installing
+    // one silently replace the other.
+    expect(result.detail).toContain('home-hosted-boot')
   })
 })

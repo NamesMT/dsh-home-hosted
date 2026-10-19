@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  bootTaskXml,
+  createWindowsBootProvider,
   createWindowsRunProvider,
   createWindowsTaskProvider,
   MARKER_KEY,
@@ -488,5 +490,100 @@ describe('the text rules that read powershell stdout', () => {
     // register a task with no privilege.
     expect(await isElevated('NotTrue\r\n')).toMatch(/needs an elevated process/)
     expect(await isElevated('Trueish\r\n')).toMatch(/needs an elevated process/)
+  })
+})
+
+describe('windows boot task (SYSTEM, before login)', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => cleanup(home))
+
+  /** A task store keyed by task name, so two mechanisms cannot hide each other. */
+  function bootRunner(options: { elevated?: boolean, cmdlet?: boolean } = {}) {
+    const { elevated = true, cmdlet = true } = options
+    const tasks = new Map<string, string>()
+    const handler: FakeHandler = (command, args) => {
+      if (command === 'powershell.exe') {
+        const script = args[2] ?? ''
+        if (script === 'Get-Command Register-ScheduledTask')
+          return cmdlet ? { code: 0, stdout: 'Function        Register-ScheduledTask\r\n' } : { code: 1, stderr: 'The term is not recognized\r\n' }
+        if (script.includes('IsInRole'))
+          return { code: 0, stdout: elevated ? 'True\r\n' : 'False\r\n' }
+        if (script.startsWith('$action =')) {
+          const name = /TaskName '([^']+)'/.exec(script)?.[1]
+          // `-AtStartup` is the boot task; store the XML that matches, or the test
+          // would compare the wrong artifact to the wrong name.
+          if (name !== undefined)
+            tasks.set(name, script.includes('-AtStartup') ? bootTaskXml(winSpec()) : scheduledTaskXml(winSpec()))
+          return { code: 0, stdout: '' }
+        }
+        if (script.startsWith('Unregister-ScheduledTask')) {
+          const name = /TaskName '([^']+)'/.exec(script)?.[1]
+          if (name !== undefined)
+            tasks.delete(name)
+          return { code: 0, stdout: '' }
+        }
+        return { code: 0, stdout: '' }
+      }
+      if (command === 'schtasks.exe') {
+        const name = args[args.indexOf('/TN') + 1] ?? ''
+        if (args[0] === '/Query')
+          return tasks.has(name) ? { code: 0, stdout: tasks.get(name)! } : { code: 1, stderr: 'ERROR: The system cannot find the file specified.\r\n' }
+        if (args[0] === '/Create') {
+          tasks.set(name, fs.readFileSync(args[args.indexOf('/XML') + 1] ?? '', 'utf16le').replace(/^\uFEFF/, ''))
+          return { code: 0, stdout: 'SUCCESS\r\n' }
+        }
+        if (args[0] === '/Delete') {
+          tasks.delete(name)
+          return { code: 0 }
+        }
+      }
+      return { code: 1 }
+    }
+    const runner = fakeRun(handler)
+    const ctx = ctxFor({ home, run: runner.run, platform: 'win32', env: { USER: 'tester', TEMP: home } })
+    return { tasks, boot: createWindowsBootProvider(ctx), logon: createWindowsTaskProvider(ctx) }
+  }
+
+  it('registers under its own name, leaving the logon task untouched', async () => {
+    const { tasks, boot, logon } = bootRunner()
+    expect((await boot.install(winSpec())).ok).toBe(true)
+    expect((await logon.install(winSpec())).ok).toBe(true)
+    // Two artifacts, not one clobbering the other — the whole point of the suffix.
+    expect([...tasks.keys()].sort()).toEqual(['home-hosted', 'home-hosted-boot'])
+    expect(tasks.get('home-hosted')).toContain('<LogonTrigger>')
+    expect(tasks.get('home-hosted-boot')).toContain('<BootTrigger>')
+  })
+
+  it('uninstalling one mechanism leaves the other installed', async () => {
+    const { tasks, boot, logon } = bootRunner()
+    await boot.install(winSpec())
+    await logon.install(winSpec())
+    await boot.uninstall(winSpec())
+    expect([...tasks.keys()]).toEqual(['home-hosted'])
+    await logon.uninstall(winSpec())
+    expect([...tasks.keys()]).toEqual([])
+  })
+
+  it('never deletes a boot task it did not write', async () => {
+    const { tasks, boot } = bootRunner()
+    tasks.set('home-hosted-boot', bootTaskXml(winSpec()).replace('managed-by:dsh-home-hosted', 'someone-else'))
+    const result = await boot.uninstall(winSpec())
+    expect(result.ok).toBe(false)
+    expect(tasks.has('home-hosted-boot')).toBe(true)
+  })
+
+  it('reports the session-0 cost where the user will see it', async () => {
+    const { boot } = bootRunner()
+    const candidate = await boot.detect()
+    expect(candidate.bootCapable).toBe(true)
+    expect(candidate.reason).toMatch(/session 0/i)
+  })
+
+  it('refuses to install without elevation', async () => {
+    const { boot } = bootRunner({ elevated: false })
+    const result = await boot.install(winSpec())
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/elevated/)
   })
 })

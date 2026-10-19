@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { launchdPlist } from '../../src/boot/launchd.js'
 import { systemdSystemUnit, systemdUserUnit } from '../../src/boot/systemd.js'
-import { registerTaskScript, scheduledTaskXml } from '../../src/boot/windows.js'
+import { bootTaskNameOf, bootTaskXml, registerBootTaskScript, registerTaskScript, scheduledTaskXml } from '../../src/boot/windows.js'
 import { xdgDesktopEntry } from '../../src/boot/xdg.js'
 import { spec, winSpec } from './harness.js'
 
@@ -99,6 +99,39 @@ describe('windows payloads', () => {
     expect(xml).toContain('<Count>3</Count>')
     expect(xml).toContain('<Command>C:\\Program Files\\nodejs\\node.exe</Command>')
     expect(xml).toContain('<WorkingDirectory>C:\\Users\\tester</WorkingDirectory>')
+  })
+
+  it('writes a boot task XML that runs as SYSTEM at startup, not at logon', () => {
+    const xml = bootTaskXml(winSpec())
+    expect(xml).toMatchSnapshot()
+    expect(xml).toContain('<BootTrigger>')
+    expect(xml).not.toContain('<LogonTrigger>')
+    // The well-known SYSTEM SID, and never a stored password: a named account would
+    // turn this artifact into a credential store.
+    expect(xml).toContain('<UserId>S-1-5-18</UserId>')
+    expect(xml.toLowerCase()).not.toContain('password')
+    expect(xml).toContain('<RunLevel>HighestAvailable</RunLevel>')
+    // Still the same marker and restart policy as the logon task.
+    expect(xml).toContain('<Description>managed-by:dsh-home-hosted</Description>')
+    expect(xml).toContain('<RestartOnFailure>')
+  })
+
+  it('gives the boot task its own name, so it cannot replace the logon task', () => {
+    // Both mechanisms key their artifact on `unitName`; sharing it would make
+    // installing one silently consume the other.
+    expect(bootTaskNameOf('home-hosted')).toBe('home-hosted-boot')
+    expect(bootTaskNameOf('home-hosted')).not.toBe('home-hosted')
+    // Still a legal task name by the same rule the logon task obeys.
+    expect(bootTaskNameOf('home-hosted-1a2b3c4d')).toBe('home-hosted-1a2b3c4d-boot')
+  })
+
+  it('registers the boot task with -AtStartup and a SYSTEM principal', () => {
+    const script = registerBootTaskScript(winSpec())
+    expect(script).toMatchSnapshot()
+    expect(script).toContain('New-ScheduledTaskTrigger -AtStartup')
+    expect(script).not.toContain('-AtLogOn')
+    expect(script).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount")
+    expect(script).toContain("Register-ScheduledTask -TaskName 'home-hosted-boot'")
   })
 
   it('builds the Register-ScheduledTask script from cmdlets', () => {
