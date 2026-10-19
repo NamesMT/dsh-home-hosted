@@ -140,7 +140,8 @@ be written escaped and searched for raw — and the plugin would call its own en
 ## Once an entry is installed, it owns the panel's start and stop
 
 The page's Start and Stop buttons drive that entry, not the CLI. On systemd that is
-`systemctl start|stop`; a `Restart=always` unit restarts a process that dies *outside* systemd, so
+`systemctl restart|stop` — a restart rather than a start, because the button appears when `/healthz`
+does not answer and a wedged panel is still active to systemd, where a plain `start` is a no-op; a `Restart=always` unit restarts a process that dies *outside* systemd, so
 the CLI's `down` brought the panel back seconds later and the page reported a stop the machine had
 already undone. systemd's own manual is explicit: "When the death of the process is a result of
 systemd operation (e.g. service stop or restart), the service will not be restarted." On launchd it
@@ -180,10 +181,11 @@ whole design:
 4. start the entry;
 5. only then remove the other mechanisms' entries.
 
-The stop is always the CLI's `down`, never the new mechanism's own `restart`: the entry would then be
-starting a *second* panel, which home-hosted refuses while `run.json` names a live pid, so a
+In a handover the stop is the CLI's `down`, never the new mechanism's own `restart`: the entry would
+then be starting a *second* panel, which home-hosted refuses while `run.json` names a live pid, so a
 restart-in-place over an orphan only produces a failed unit. Waiting on the pid matters for the same
-reason.
+reason. This is the one place the CLI is the right stop for a supervised panel — it is the path that
+retires the old entry, so nothing is left to restart it.
 
 Retirement is last, and deliberately not part of `install()`. Switching mechanism has to uninstall the
 old one, but the old entry is often what is currently running the panel: removing it during the install

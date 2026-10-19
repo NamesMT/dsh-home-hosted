@@ -116,8 +116,10 @@ again seconds later, so "Stop the panel" came back on its own: a stop the page r
 did not honour. The mirror is just as wrong: a CLI `up` starts a panel *outside* the entry, which then
 cannot be stopped or observed by it either. Whoever supervises the panel is who may change its state.
 
-So an installed `systemd-user`/`systemd-system` entry answers with `systemctl start|stop`, a
-`launchd-agent`/`launchd-daemon` with `kickstart`/`kill`, and a `windows-task` with `schtasks /Run`.
+So an installed `systemd-user`/`systemd-system` entry answers with `systemctl restart|stop`, a
+`launchd-agent`/`launchd-daemon` with `kickstart -k`/`kill`, and a `windows-task` with
+`schtasks /Run`. Start is a *restart*, not a start: the button only appears when `/healthz` does not
+answer, and such a panel is still active to systemd/launchd, so a plain start would be a no-op.
 Mechanisms that start the panel from outside their own control — a `.desktop` file, a `Run` value, a
 container restart policy — have no stop to offer, so those fall back to the CLI. A Windows scheduled
 task deliberately offers only the start: `schtasks /End` kills the process tree instead of asking the

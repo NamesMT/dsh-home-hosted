@@ -43,6 +43,13 @@ write the artifact.
   `*Commands()` in each provider) and fall back to the CLI only when nothing is installed — the
   services at `test/service.test.ts` ("panel start and stop go through the installed entry") assert
   the CLI is never called, in either direction.
+- **Start must be a restart, or the button cannot fix the case it exists for.** `/healthz` silent is
+  the only condition for showing Start (`section-panel.tsx`), and a wedged panel is still *active* —
+  `systemctl start` on an active unit is a no-op, and plain `launchctl kickstart` leaves a running job
+  alone. So the start step is `systemctl restart` (which also starts a stopped unit —
+  `systemctl(1)`) and `kickstart -k`, matching what `activate()` already did. A `windows-task` is the
+  exception: `/Run` under `MultipleInstancesPolicy=IgnoreNew` is a no-op for a running instance and
+  `schtasks` has no graceful restart, so that path reports "did not answer" rather than recovering.
 - **`schtasks /End` is not a stop.** It kills the task's process tree, so a supervised server dies
   without its stop policy running; a scheduled task offers `startCommands()` and deliberately no stop,
   so the CLI's graceful `down` is what runs. The task's `RestartOnFailure` behaviour after `/End` was
