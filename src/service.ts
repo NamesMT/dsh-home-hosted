@@ -60,11 +60,14 @@ const INSTANCES_CACHE_MS = 10_000
 
 /** Ceiling on the `/healthz` poll after an entry start — not the time a start takes. */
 const PANEL_CONTROL_WAIT_MS = 20_000
-/** Shorter: `systemctl stop` already blocked until the unit was down. */
+/**
+ * Shorter: `systemctl stop` already blocked until the unit was down, and the panel
+ * clears `run.json` first when shutting down, so this usually returns at once.
+ */
 const PANEL_STOP_WAIT_MS = 5_000
 /** Between two `/healthz` probes while waiting. */
 const PANEL_CONTROL_POLL_MS = 250
-/** Above systemd's 90 s `TimeoutStopUSec`, so a stop is not SIGKILLed as it finishes. */
+/** Twice systemd's 90 s `TimeoutStopUSec`, so the `systemctl` client is not killed mid-stop. */
 const PANEL_CONTROL_STEP_TIMEOUT_MS = 180_000
 
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
@@ -86,7 +89,7 @@ export interface BootLadderLike {
   install: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
   uninstall: (spec: BootSpec, mechanism?: BootMechanism) => Promise<BootInstallResult>
   activate: (spec: BootSpec, mechanism?: BootMechanism, from?: BootMechanism | null) => Promise<BootActivation | null>
-  control: (spec: BootSpec, action: 'start' | 'stop') => Promise<BootControlResult | null>
+  control: (spec: BootSpec, action: 'start' | 'stop', mechanism?: BootMechanism | null) => Promise<BootControlResult | null>
 }
 
 export class HomeHostedError extends Error {
@@ -1221,9 +1224,13 @@ export class HomeHostedService extends Service {
         candidates: [],
       }
     }
-    const settings = this.options.settings.get()
-    const requested = mechanism ?? (settings.autostart.mechanism === 'auto' ? undefined : settings.autostart.mechanism)
-    return await this.ladder().status(spec, requested)
+    return await this.ladder().status(spec, mechanism ?? this.requestedMechanism())
+  }
+
+  /** The mechanism the settings name, or `undefined` for `auto`. */
+  private requestedMechanism(): BootMechanism | undefined {
+    const choice = this.options.settings.get().autostart.mechanism
+    return choice === 'auto' ? undefined : choice
   }
 
   async installBoot(mechanism?: BootMechanism): Promise<{ result: BootInstallResult, status: BootStatus }> {
@@ -1439,7 +1446,9 @@ export class HomeHostedService extends Service {
     if (spec === null)
       return null
     try {
-      return await this.ladder().control(spec, action)
+      // The configured mechanism, so the entry that acts is the one the page names;
+      // `control()` reads the status once and reports which entry it used.
+      return await this.ladder().control(spec, action, this.requestedMechanism())
     }
     catch {
       return null
@@ -1448,6 +1457,8 @@ export class HomeHostedService extends Service {
 
   /** Run an entry's steps in order (a daemon's `bootstrap` must precede its `kickstart`). */
   private async runControl(control: BootControlResult, action: 'start' | 'stop'): Promise<PanelControlResult | null> {
+    if (control.commands.length === 0)
+      return { ok: false, detail: `${control.mechanism} produced no command to ${action} the panel` }
     for (const step of control.commands) {
       const [program, ...args] = step
       if (program === undefined)

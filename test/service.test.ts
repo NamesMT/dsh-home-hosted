@@ -1175,8 +1175,8 @@ describe('panel start and stop go through the installed entry', () => {
 
   it('does not claim a stop the entry did not deliver', async () => {
     // A `systemctl stop` that exits 0 but leaves the panel answering means the
-    // panel is not under that unit (a CLI-started one), so the CLI down finishes
-    // it — here the CLI also "fails", and the answer must stay honest.
+    // panel is not under that unit (a CLI-started one), so the CLI's `down` is what
+    // answers instead — and the detail must be the CLI's, not the entry's.
     const panel = await withPanel()
     const { service, cliCalls } = await harness({
       panel,
@@ -1212,6 +1212,31 @@ describe('panel start and stop go through the installed entry', () => {
     const result = await service.stopPanelNow()
     expect(cliCalls.some(call => call.args.includes('down'))).toBe(true)
     expect(result.ok).toBe(true)
+  })
+
+  it('commands the mechanism the page reported, not another installed one', async () => {
+    // The page reads `boot.mechanism`; acting on a different installed entry would
+    // start a second panel beside the real one while naming the wrong entry.
+    const panel = await withPanel()
+    const asked: Array<BootMechanism | null | undefined> = []
+    const ladder = entryLadder('systemd-user', unitSteps)
+    const { service, settings } = await harness({
+      panel,
+      // The settings pin the system entry, so `control` must be asked for that one
+      // rather than the first installed mechanism.
+      ladder: {
+        ...ladder,
+        control: async (_spec: BootSpec, action: 'start' | 'stop', mechanism?: BootMechanism | null) => {
+          asked.push(mechanism ?? null)
+          return { mechanism: 'systemd-system', commands: action === 'stop' ? unitSteps.stop : unitSteps.start, display: [] }
+        },
+      },
+      execControl: async (argv) => ({ command: argv[0]!, args: argv.slice(1), code: 0, signal: null, stdout: '', stderr: '', timedOut: false, error: null }),
+      controlWaitMs: 50,
+    })
+    settings.update({ autostart: { mechanism: 'systemd-system' } })
+    await service.stopPanelNow()
+    expect(asked).toEqual(['systemd-system'])
   })
 
   it('reports the entry\'s refusal instead of claiming the panel stopped', async () => {
