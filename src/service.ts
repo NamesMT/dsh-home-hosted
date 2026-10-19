@@ -58,35 +58,13 @@ const ENTRY_RECOVERY_INTERVAL_MS = 30_000
 /** How long a panel inventory stands before the next read re-scans the disk. */
 const INSTANCES_CACHE_MS = 10_000
 
-/**
- * The *ceiling* on how long `panel.start`/`panel.stop` watch for the panel to come
- * up or go down — not the time a start takes.
- *
- * The wait exists because a service manager reports readiness before the panel
- * does: a `Type=exec` unit (what both systemd providers write) counts as started
- * once `execve` returned, before the panel has bound its port. The poll stops as
- * soon as `/healthz` answers, which is ~1.2 s on this machine; the ceiling only
- * decides how long a panel that never answers is awaited before the call admits
- * it. It matches the CLI's own `waitForStartup` budget.
- */
+/** Ceiling on the `/healthz` poll after an entry start — not the time a start takes. */
 const PANEL_CONTROL_WAIT_MS = 20_000
-/**
- * The ceiling for a stop, shorter because there is less to wait for: `systemctl
- * stop` already blocked until the unit was gone, and launchd's `kill` only needs
- * the panel's own shutdown. It also bounds the fallback when the answering panel
- * turns out not to be the one under the entry.
- */
+/** Shorter: `systemctl stop` already blocked until the unit was down. */
 const PANEL_STOP_WAIT_MS = 5_000
 /** Between two `/healthz` probes while waiting. */
 const PANEL_CONTROL_POLL_MS = 250
-/**
- * How long one entry start/stop step may take.
- *
- * `systemctl stop` blocks until the unit is down, and the default
- * `TimeoutStopUSec` is 90 s — so a timeout at that boundary would SIGKILL the
- * command just as systemd was finishing, reporting a failure for a stop that
- * worked. Stop-policy grace on the panel's own servers can add to that.
- */
+/** Above systemd's 90 s `TimeoutStopUSec`, so a stop is not SIGKILLed as it finishes. */
 const PANEL_CONTROL_STEP_TIMEOUT_MS = 180_000
 
 /** This plugin's own package root, used as a search hint for the pinned CLI. */
@@ -1451,15 +1429,10 @@ export class HomeHostedService extends Service {
   // -------------------------------------------------------------------------
 
   /**
-   * The installed entry's own start or stop, or null when nothing installed can
-   * do it.
+   * The installed entry's own start or stop; null when nothing installed can do it.
    *
-   * This is the whole reason `panel.start`/`panel.stop` ask the ladder first: a
-   * panel supervised by an OS entry has one correct way to change its state, and
-   * it is not the CLI's. `Restart=always`/`KeepAlive` reads the CLI's `down` as an
-   * unexpected death and starts the panel again seconds later — a "stop" that
-   * silently comes back — and a CLI `up` starts a panel outside the entry, which
-   * that entry can no longer stop or observe either.
+   * Whoever supervises the panel may change its state; the reason the CLI is wrong
+   * in both directions is in `.agentDocs/gotchas/boot-platforms.md`.
    */
   private async bootControl(action: 'start' | 'stop'): Promise<BootControlResult | null> {
     const spec = await this.bootSpec()
@@ -1473,13 +1446,7 @@ export class HomeHostedService extends Service {
     }
   }
 
-  /**
-   * Run an entry's start/stop steps **in order**, and report the first refusal.
-   *
-   * Order is load-bearing for the mechanisms that need two steps (a daemon's
-   * `bootstrap` then `kickstart`): running them concurrently would hand the second
-   * one a job the first has not loaded yet.
-   */
+  /** Run an entry's steps in order (a daemon's `bootstrap` must precede its `kickstart`). */
   private async runControl(control: BootControlResult, action: 'start' | 'stop'): Promise<PanelControlResult | null> {
     for (const step of control.commands) {
       const [program, ...args] = step
@@ -1567,13 +1534,11 @@ export class HomeHostedService extends Service {
   /**
    * Stop the panel the plugin drives, and the non-persistent servers it supervises.
    *
-   * Through the installed entry when there is one — see {@link bootControl} — and
-   * through the CLI's `down` otherwise. Deliberately not a replacement for the
-   * takeover guard: stopping is safe to lose (an `autostart` entry comes back),
-   * while replacing is not. A persistent entry survives the panel, so this usually
-   * answers normally; if this process *is* a non-persistent one of those servers
-   * the answer may never arrive, and the page treats a dropped call as "the panel
-   * is stopping" rather than a failure.
+   * Through the installed entry when there is one ({@link bootControl}), else the
+   * CLI's `down`. A persistent entry survives the panel, so this usually answers
+   * normally; if this process *is* a non-persistent one of those servers the answer
+   * may never arrive, and the page treats a dropped call as "the panel is stopping"
+   * rather than a failure.
    */
   async stopPanelNow(): Promise<PanelControlResult> {
     const { resolution } = await this.cli()
