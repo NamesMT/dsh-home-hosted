@@ -3,6 +3,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ConfigLayoutError, CONTROL_MERGE_KEYS, findEntry, patchControl, patchEntry, readConfig, readGlobalSettings, removeEntry, SERVER_MERGE_KEYS, setControl, upsertEntry, writeConfig } from '../src/home-hosted/config-file.js'
 import { globalSettingsFile, serversFile } from '../src/home-hosted/layout.js'
+import { panelConfigSchema, readConfigSchemaFrom, resetPanelConfigSchema } from '../src/home-hosted/panel-schema.js'
 import { makeHhHome, makeLegacyHome } from './helpers/hh.js'
 import { panelMergeKeys } from './helpers/panel-schema.js'
 import { tempDir } from './helpers/temp.js'
@@ -266,15 +267,52 @@ describe('config file fallback', () => {
 })
 
 describe('meta stamp', () => {
-  it('records the writer without inventing a schema', () => {
+  /**
+   * The reader must actually **read** the release: a fixture carrying a different number has to
+   * come back different. A test that only compared the stamp against the pinned value would pass
+   * against a hard-coded constant — which is the defect this reader replaced.
+   */
+  it('reads CONFIG_SCHEMA from the release rather than returning a constant', () => {
+    scratch = tempDir()
+    const pkg = path.join(scratch.path, 'home-hosted')
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true })
+    writeJsonFile(path.join(pkg, 'package.json'), { name: 'home-hosted', version: '9.9.9' })
+    const manifest = path.join(pkg, 'package.json')
+    const asRelease = (schema: number): void => {
+      writeJsonFile(path.join(pkg, 'dist', 'cli.js.map'), {
+        sourcesContent: [`export const CONFIG_SCHEMA = ${String(schema)}\n`],
+      })
+    }
+
+    asRelease(7)
+    expect(readConfigSchemaFrom(manifest)).toBe(7)
+    asRelease(11)
+    expect(readConfigSchemaFrom(manifest)).toBe(11)
+
+    // Unknown is null, never a guess: a caller that cannot name the schema must not stamp one.
+    expect(readConfigSchemaFrom(null)).toBeNull()
+    expect(readConfigSchemaFrom(path.join(pkg, 'absent', 'package.json'))).toBeNull()
+  })
+
+  it('reads the pinned release, so the stamp is not invented here', () => {
+    resetPanelConfigSchema()
+    expect(panelConfigSchema()).toBeTypeOf('number')
+  })
+
+  /**
+   * An absent schema is **not** "the current one": every release reads it as the oldest shape,
+   * so 0.9.0 refuses to boot a file without a stamp ("config schema 1 needs 1 migration"). This
+   * plugin writes such files whenever the panel does not answer, so it must stamp the schema it
+   * wrote in. The number comes from the pinned release, which is what keeps the rule true across
+   * a bump from either side; the literal here is only what that release currently says.
+   */
+  it('stamps a workspace config it creates from nothing, which is the shape that was unstartable', () => {
     const root = home()
-    writeJsonFile(serversFile(root, 'default'), { servers: [] })
-    const read = readConfig(root)
-    writeConfig(root, upsertEntry(read.raw ?? {}, { id: 'x', command: 'sleep' }))
+    // No servers file at all: this is the write that creates the workspace config, and it is the
+    // exact shape 0.9.0 refused to boot ("config schema 1 needs 1 migration").
+    writeConfig(root, upsertEntry({}, { id: 'x', command: 'sleep' }))
     const written = JSON.parse(fs.readFileSync(serversFile(root, 'default'), 'utf8'))
-    // An absent schema reads as the panel's current one; inventing `1` here
-    // would become wrong the day the panel bumps its schema.
-    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted' })
+    expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: panelConfigSchema() })
   })
 
   it('keeps the schema a file already declared', () => {
@@ -283,6 +321,32 @@ describe('meta stamp', () => {
     writeConfig(root, upsertEntry(readConfig(root).raw ?? {}, { id: 'x', command: 'sleep' }))
     const written = JSON.parse(fs.readFileSync(serversFile(root, 'default'), 'utf8'))
     expect(written.meta).toEqual({ writtenBy: 'dsh-home-hosted', schema: 7 })
+  })
+
+  it('stamps the panel settings file it creates, not only a workspace config', () => {
+    const dir = home()
+    setControl(dir, { port: 6311 })
+    const written = JSON.parse(fs.readFileSync(globalSettingsFile(dir), 'utf8'))
+    expect(written.meta.schema).toBe(panelConfigSchema())
+  })
+
+  /**
+   * A file that already exists without a stamp may be a pre-stamp config whose content still
+   * needs lifting. Stamping it would claim a migration that never ran — and lose whatever that
+   * step rewrites, which for schema 2 is the whole notifications block. Only `home-hosted
+   * migrate` may lift a config, so the write refuses and names it.
+   */
+  it('refuses to stamp an existing unstamped file, and names the panel\'s own migrate', () => {
+    const root = home()
+    // An existing servers file with no meta at all: the pre-stamp shape.
+    writeJsonFile(serversFile(root, 'default'), { servers: [], notifications: { telegram: { enabled: true, chatId: '42' } } })
+    const before = fs.readFileSync(serversFile(root, 'default'), 'utf8')
+
+    expect(() => writeConfig(root, upsertEntry(readConfig(root).raw ?? {}, { id: 'x', command: 'sleep' })))
+      .toThrow(/home-hosted migrate/)
+
+    // Nothing was rewritten, so the notification config the migration has to lift is intact.
+    expect(fs.readFileSync(serversFile(root, 'default'), 'utf8')).toBe(before)
   })
 })
 

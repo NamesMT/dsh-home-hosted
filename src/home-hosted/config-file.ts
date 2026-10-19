@@ -17,10 +17,12 @@
  * release that still does.
  */
 import fs from 'node:fs'
+import path from 'node:path'
 import type { ServerEntry, ServerEntryPatch } from '../shared/contracts.js'
 import { isRecord } from '../shared/contracts.js'
 import { readJson, writeFileAtomic } from '../util/fsx.js'
 import { DEFAULT_WORKSPACE, globalSettingsFile, migrationRefusal, serversFile } from './layout.js'
+import { panelConfigSchema } from './panel-schema.js'
 
 export interface RawConfig {
   meta?: Record<string, unknown>
@@ -91,17 +93,47 @@ export function readConfig(home: string, workspace: string = DEFAULT_WORKSPACE):
  * Write one workspace's entries back with home-hosted's own `meta` contract,
  * which records the release that wrote the file and the shape it wrote.
  *
- * `schema` is never invented here: a file that declared one keeps it, and one
- * that did not stays without it — home-hosted reads an absent schema as "the
- * current one", so stamping our own idea of the schema would one day fail its
- * own guard ("this release understands schema N") and stop the panel booting
- * from a file this plugin only patched.
+ * A file that already declares a schema keeps it. One this write **creates** is stamped with
+ * the pinned panel's own `CONFIG_SCHEMA`, because an absent schema does not mean "current":
+ * every release reads it as the oldest shape, so 0.9.0 refuses to boot a file without a stamp
+ * ("config schema 1 needs 1 migration"). Leaving it unstamped is what made a config this
+ * plugin wrote before any panel ran unstartable. The number is read from the pinned release,
+ * never hard-coded — a fixed `2` breaks again at the next bump, from the other side.
+ *
+ * A file that already exists **without** a stamp is refused rather than stamped: it may be a
+ * pre-stamp config whose content still needs lifting, and stamping it would claim a migration
+ * that never ran and lose what the step rewrites. `home-hosted migrate` is the only thing that
+ * may lift a config, so the refusal names it.
  */
 export function writeConfig(home: string, raw: RawConfig, writtenBy = 'dsh-home-hosted', workspace: string = DEFAULT_WORKSPACE): void {
   refuseUnmigrated(home)
-  const meta = { ...(raw.meta ?? {}), writtenBy }
-  const next: RawConfig = { ...raw, meta }
-  writeFileAtomic(serversFile(home, workspace), `${JSON.stringify(next, null, 2)}\n`)
+  const file = serversFile(home, workspace)
+  const next: RawConfig = { ...raw, meta: stampedMeta(raw.meta, writtenBy, `servers.config.json in ${path.dirname(file)}`, file) }
+  writeFileAtomic(file, `${JSON.stringify(next, null, 2)}\n`)
+}
+
+/**
+ * One file's `meta` after this plugin wrote it: the writer recorded, and a schema present
+ * whenever the pinned panel's own can be read.
+ *
+ * An existing schema is kept even when it disagrees with the pinned release: that stamp
+ * describes bytes this plugin did not produce, and rewriting it would claim a shape the
+ * content may not have.
+ */
+function stampedMeta(existing: unknown, writtenBy: string, where: string, file: string): Record<string, unknown> {
+  const meta: Record<string, unknown> = isRecord(existing) ? { ...existing } : {}
+  if (typeof meta.schema !== 'number') {
+    if (fs.existsSync(file)) {
+      throw new ConfigLayoutError(
+        `${where} carries no meta.schema, so its config shape is unknown; run \`home-hosted migrate\` before this plugin writes it`,
+      )
+    }
+    const schema = panelConfigSchema()
+    if (schema !== null)
+      meta.schema = schema
+  }
+  meta.writtenBy = writtenBy
+  return meta
 }
 
 /** The panel's own settings file, where 0.7 keeps `control` (listener, auth, TLS). */
@@ -126,8 +158,9 @@ export function readGlobalSettings(home: string): SettingsReadResult {
 
 export function writeGlobalSettings(home: string, raw: GlobalSettings, writtenBy = 'dsh-home-hosted'): void {
   refuseUnmigrated(home)
-  const meta = { ...(raw.meta ?? {}), writtenBy }
-  writeFileAtomic(globalSettingsFile(home), `${JSON.stringify({ ...raw, meta }, null, 2)}\n`)
+  const file = globalSettingsFile(home)
+  const meta = stampedMeta(raw.meta, writtenBy, 'settings.json in the panel state root', file)
+  writeFileAtomic(file, `${JSON.stringify({ ...raw, meta }, null, 2)}\n`)
 }
 
 /**

@@ -19,15 +19,19 @@ import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
 
 /** The range the plugin ships and is tested against. */
-export const EXPECTED_RANGE = '^0.8.0'
+export const EXPECTED_RANGE = '^0.9.0'
 
 /**
  * Oldest release whose API, config schema and CLI this plugin relies on.
  *
- * 0.8.0 refuses a pre-workspace state root instead of relocating it, so a 0.7.x panel is not a
- * lesser-supported copy — it is one this plugin cannot drive.
+ * 0.9.0 raised the config schema to 2 and made an **unstamped** file read as schema 1, so its
+ * `up` refuses a config written without a stamp — the shape 0.8 wrote, and the shape this
+ * plugin wrote before it stamped one. A 0.8.x panel is not a lesser-supported copy: it reads a
+ * schema-2 stamp as a newer release's file and refuses that in turn, so no stamp satisfies both
+ * and there is no version-conditional path. The remedy for an old root is the panel's own
+ * `home-hosted migrate`, which is what lifts a config; this plugin never does.
  */
-export const MIN_SUPPORTED_VERSION = '0.8.0'
+export const MIN_SUPPORTED_VERSION = '0.9.0'
 
 export type CliPreference = 'pinned' | 'global'
 

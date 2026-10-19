@@ -128,7 +128,7 @@ async function harness(options: {
     const dir = path.join(scratch!.path, name)
     makeHhHome(dir, {
       workspaces: ['default'],
-      servers: { default: { meta: { writtenBy: '0.6.6' }, servers: [{ id: 'web' }] } },
+      servers: { default: { meta: { writtenBy: '0.6.6', schema: 1 }, servers: [{ id: 'web' }] } },
     })
     return dir
   })
@@ -354,7 +354,7 @@ describe('home-hosted service', () => {
 
     makeHhHome(other, {
       workspaces: ['default'],
-      servers: { default: { meta: { writtenBy: '0.6.6' }, servers: [] } },
+      servers: { default: { meta: { writtenBy: '0.6.6', schema: 1 }, servers: [] } },
     })
     // Inside the cache window nothing is re-read, so the prompt provider cannot
     // turn a fresh measure into a per-step disk scan.
@@ -839,7 +839,7 @@ describe('the dsh Desktop client', () => {
     const panel = await withPanel()
     const { service, home } = await harness({ panel, surface: 'desktop' })
     writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
-      meta: { writtenBy: '0.6.6' },
+      meta: { writtenBy: '0.6.6', schema: 1 },
       servers: [{ id: 'gitea', command: 'gitea', autostart: true }],
     })
 
@@ -1953,6 +1953,7 @@ describe('entry snapshots across workspaces', () => {
   it('reads a pre-workspace flat file as the `default` workspace', async () => {
     const { home, service, state } = await harness()
     writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      meta: { writtenBy: '0.6.6', schema: 1 },
       servers: [{ id: 'dsh', command: 'sleep', autostart: false, onPortConflict: 'warn' }],
     })
     writeJsonFile(path.join(state, 'snapshots.json'), {
@@ -1970,7 +1971,7 @@ describe('entry snapshots across workspaces', () => {
 
   it('ignores a v2 file that belongs to another workspace', async () => {
     const { home, service, state } = await harness()
-    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), { servers: [{ id: 'dsh', command: 'sleep' }] })
+    writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), { meta: { writtenBy: '0.6.6', schema: 1 }, servers: [{ id: 'dsh', command: 'sleep' }] })
     writeJsonFile(path.join(state, 'snapshots.json'), {
       version: 2,
       workspace: 'alpha',
@@ -1985,6 +1986,7 @@ describe('entry snapshots across workspaces', () => {
   it('reads a v2 file for the managed workspace, and saves v2', async () => {
     const { home, service, state } = await harness()
     writeJsonFile(serversFile(home, DEFAULT_WORKSPACE), {
+      meta: { writtenBy: '0.6.6', schema: 1 },
       servers: [{ id: 'dsh', command: 'sleep', autostart: false, onPortConflict: 'warn' }],
     })
     writeJsonFile(path.join(state, 'snapshots.json'), {
