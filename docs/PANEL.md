@@ -108,6 +108,22 @@ recreating its own log, an unflushed log batch, a Windows test skip — touch no
 no `.proxy/proxy.json`, `ProxyService`, `terminatePid`, or `DELETE /api/logs`, and `serverSchema`,
 `CONFIG_SCHEMA`, `/_hh` and the CLI are unchanged.
 
+**0.9.4 also needs no adaptation, and that was checked by use.** It adds no command and no required
+field: `PUT /api/servers/:id`, `POST /api/servers/orphans/:id/stop`, presets and restore reporting are
+new routes and UI, none of which this plugin calls; `stoppedByPanel`, `orphans`, `healthRestarts` and
+the action-result `code` are new *optional* fields. `serverSchema`, `editableFields`, the merge keys,
+`CONFIG_SCHEMA` (still 2), the four `/_hh` routes and every CLI subcommand and flag are unchanged, so
+the pin moved and the floor did not. Verified by diffing the published sourcemaps of 0.9.2 and 0.9.4
+(34 changed files) and by driving a real 0.9.4 panel: this plugin's client lists, creates, patches,
+starts, stops and deletes an entry, and reads workspaces and settings, exactly as on 0.9.2.
+
+Two 0.9.4 behaviour changes reach the page without breaking it. `/healthz` now answers 503 for **any**
+crashed server rather than only an `autostart` one — measured, and harmless here because `probePanel`
+asks whether the panel answered at all, not whether it said 200. And the supervisor now bounds health
+force-restarts and then **stops** the entry, reporting it as `stopped` with `stoppedByPanel: true`; the
+page renders that as a plain `stopped`, so it reads like a deliberate stop. That is a fidelity gap in
+the status chip, not a break: the reason is still on the panel's own card and in `lastError`.
+
 That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
 and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it
 matters. So the entry runs a generated launcher in the plugin state dir (`bin/home-hosted.mjs`,

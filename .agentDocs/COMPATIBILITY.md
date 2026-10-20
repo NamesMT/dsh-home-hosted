@@ -10,11 +10,15 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 range. The page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one
 alone makes it recommend a range the plugin is not built against.
 
-The pin is `^0.9.0`, and `MIN_SUPPORTED_VERSION` is `0.9.0` too: 0.9.0 raised the config schema to 2
+The pin is `^0.9.4`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
 **and** made an unstamped file read as schema 1, so a config this plugin created without a stamp is
 refused by 0.9 ("config schema 1 needs 1 migration") while a schema-2 stamp is refused by 0.8 as a
 newer release's file. No stamp satisfies both gates, so a 0.8.x panel is not a lesser-supported copy —
 it is one this plugin cannot drive, and the floor moved with the pin.
+
+The pin moved to 0.9.4 without the floor moving, because that release adds nothing this plugin needs.
+Everything it ships is additive and read as a value, never as a key being present — see
+[PANEL](../docs/PANEL.md#which-home-hosted-runs) for the surfaces checked.
 
 ### The schema stamp
 
