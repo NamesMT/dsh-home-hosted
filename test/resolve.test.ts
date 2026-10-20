@@ -232,6 +232,33 @@ describe('CLI preference', () => {
 })
 
 /**
+ * The **committed bundle** must carry the range too — and it is a third place, not a build detail.
+ *
+ * `lib/` is committed because a local install runs no `prepare` script, so the file that ships is
+ * whatever was last checked in. Bumping `package.json` and `EXPECTED_RANGE` without rebuilding left
+ * the bundle inlining `^0.9.0` while everything else said `^0.9.4`: users were offered the old range,
+ * and the release failed because `release.yml` builds before changelogen and the rebuild dirtied a
+ * tracked file. CI was green throughout — nothing compared the two.
+ *
+ * Compares the *value esbuild inlined*, not the file bytes: a byte comparison would assert esbuild's
+ * output is identical across platforms, which the release gate (macOS) would turn into a false
+ * positive. This only cares that the shipped constant matches the source constant.
+ */
+describe('the committed bundle carries the range the source declares', () => {
+  const bundlePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')
+
+  it('inlines the same EXPECTED_RANGE as resolve.ts', () => {
+    const bundle = fs.readFileSync(bundlePath, 'utf8')
+    // esbuild renames nothing here, but match on the assignment rather than a bare string so an
+    // unrelated `^0.9.4` in a comment cannot satisfy this.
+    const inlined = /var EXPECTED_RANGE = "([^"]+)"/.exec(bundle)?.[1]
+    expect(inlined, 'lib/index.js must inline EXPECTED_RANGE — run `pnpm build`').toBeDefined()
+    expect(inlined, 'lib/index.js is stale — run `pnpm build` and commit it').toBe(EXPECTED_RANGE)
+  })
+
+})
+
+/**
  * `docs/PANEL.md` states that the supported range "is stated twice and both must agree:
  * `dependencies['home-hosted']` in `package.json` and `EXPECTED_RANGE` in `resolve.ts`"
  * — and that bumping one alone makes the page recommend a range the plugin is not built
