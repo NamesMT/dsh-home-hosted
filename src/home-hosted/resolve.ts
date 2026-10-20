@@ -18,8 +18,8 @@ import { run } from '../util/exec.js'
 import type { CliLaunch } from './launch.js'
 import { resolveShimmedCli, which } from './launch.js'
 
-/** The range the plugin ships and is tested against. */
-export const EXPECTED_RANGE = '^0.9.0'
+/** The range the plugin ships and is tested against. `dependencies['home-hosted']` must match. */
+export const EXPECTED_RANGE = '^0.9.4'
 
 /**
  * Oldest release whose API, config schema and CLI this plugin relies on.
