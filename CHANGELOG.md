@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.9.2
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.1...v0.9.2)
+
+### 🩹 Fixes
+
+- **build:** Rebuild the committed host bundle for the 0.9.4 pin ([0c825a7](https://github.com/NamesMT/dsh-home-hosted/commit/0c825a7))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.1
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.0...v0.9.1)
