@@ -1,6 +1,34 @@
 # Changelog
 
 
+## v0.9.3
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.1...v0.9.3)
+
+### 🚀 Enhancements
+
+- **servers:** Tell a panel give-up apart from a deliberate stop ([9831697](https://github.com/NamesMT/dsh-home-hosted/commit/9831697))
+
+### 🩹 Fixes
+
+- **build:** Rebuild the committed host bundle for the 0.9.4 pin ([0c825a7](https://github.com/NamesMT/dsh-home-hosted/commit/0c825a7))
+
+### 📖 Documentation
+
+- Record the surfaces the 0.9.4 bump checked, and the moved pin ([a5e9cc7](https://github.com/NamesMT/dsh-home-hosted/commit/a5e9cc7))
+
+### 🏡 Chore
+
+- **release:** V0.9.2 ([a9226d1](https://github.com/NamesMT/dsh-home-hosted/commit/a9226d1))
+
+### ✅ Tests
+
+- **resolve:** Guard the committed bundle against a stale range ([6467638](https://github.com/NamesMT/dsh-home-hosted/commit/6467638))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.2
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.1...v0.9.2)
