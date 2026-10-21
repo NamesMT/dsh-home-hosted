@@ -117,12 +117,15 @@ the pin moved and the floor did not. Verified by diffing the published sourcemap
 (34 changed files) and by driving a real 0.9.4 panel: this plugin's client lists, creates, patches,
 starts, stops and deletes an entry, and reads workspaces and settings, exactly as on 0.9.2.
 
-Two 0.9.4 behaviour changes reach the page without breaking it. `/healthz` now answers 503 for **any**
-crashed server rather than only an `autostart` one — measured, and harmless here because `probePanel`
-asks whether the panel answered at all, not whether it said 200. And the supervisor now bounds health
-force-restarts and then **stops** the entry, reporting it as `stopped` with `stoppedByPanel: true`; the
-page renders that as a plain `stopped`, so it reads like a deliberate stop. That is a fidelity gap in
-the status chip, not a break: the reason is still on the panel's own card and in `lastError`.
+Two 0.9.4 behaviour changes reach the page. `/healthz` now answers 503 for **any** crashed server
+rather than only an `autostart` one — measured, and harmless here because `probePanel` asks whether
+the panel answered at all, not whether it said 200.
+
+And the supervisor bounds health force-restarts and then **stops** the entry, reporting `stopped` with
+`stoppedByPanel: true`. Both that and a deliberate stop are `stopped`, so the status chip tells them
+apart by the flag: an entry the panel gave up on reads **"Stopped by the panel"** on a warn tone, and
+an operator's stop stays a plain `stopped`. The field is optional, so a 0.9.2 panel still renders the
+plain chip.
 
 That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
 and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it

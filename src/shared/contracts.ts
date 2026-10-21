@@ -281,6 +281,13 @@ export interface ServerEntryView {
   pid: number | null
   url: string | null
   config: ServerEntry
+  /**
+   * The panel stopped this entry because it could not serve, rather than someone asking.
+   *
+   * Both land on `stopped`, so the status alone cannot tell "switched off on purpose" (fine) from
+   * "gave up on it" (a broken service). Optional: an older panel does not send it.
+   */
+  stoppedByPanel?: boolean
 }
 
 export interface ManagedEntryStatus {

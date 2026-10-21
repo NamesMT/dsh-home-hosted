@@ -119,6 +119,24 @@ function ServerActions({ t, workspace, server, run, busy, offline, onEdit, onDel
 }
 
 /** One machine value on a single line; the full text lives in the title. */
+/**
+ * The status chip, with the one distinction the status alone cannot make.
+ *
+ * A entry the panel gave up on is `stopped`, exactly like one switched off on purpose, so the raw
+ * status reported a broken service as a deliberate choice. `stoppedByPanel` separates them; an older
+ * panel does not send it, and then the plain chip is still correct.
+ */
+function StatusChip({ t, server }: { t: ServersSectionProps['t'], server: ServerEntryView }) {
+  if (server.stoppedByPanel === true && server.status === 'stopped') {
+    return (
+      <span title={t('serversStoppedByPanel')}>
+        <Chip tone="warn">{t('serversStopped')}</Chip>
+      </span>
+    )
+  }
+  return <Chip tone={server.status === 'running' ? 'ok' : 'idle'}>{server.status}</Chip>
+}
+
 function OneLine({ text }: { text: string }) {
   if (text.length === 0) return <>{EMPTY}</>
   return <span className="hh-nowrap" title={text}><Code>{text}</Code></span>
@@ -349,7 +367,7 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
                     <article className="hh-card" key={server.id}>
                       <div className="hh-card-head">
                         <span className="hh-item-name">{server.id}</span>
-                        <Chip tone={running ? 'ok' : 'idle'}>{dash(server.status)}</Chip>
+                        <StatusChip t={t} server={server} />
                         {persistent === true
                           ? (
                               <span title={t('serversPersistentHint')}>
@@ -413,7 +431,7 @@ export function ServersSection({ t, status, run, busy, uiStyle, workspace, serve
                     <div className="hh-item">
                       <span className="hh-item-main">
                         <span className="hh-item-name">{server.id}</span>
-                        <Chip tone={running ? 'ok' : 'idle'}>{dash(server.status)}</Chip>
+                        <StatusChip t={t} server={server} />
                         {server.url === null ? null : <Link href={server.url}>{server.url}</Link>}
                       </span>
                       <span className="hh-item-spacer" />
