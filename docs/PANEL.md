@@ -87,15 +87,28 @@ path. A 0.8.x panel is not a lesser-supported copy — it is one this plugin can
 
 ### Upgrading an existing state root
 
-A root a 0.8-era panel wrote is on config schema 1. Run the panel's own migration once, before letting
-0.9 — or this plugin — write it:
+A root a 0.8-era panel wrote is on config schema 1, and 0.9 refuses to boot it.
+
+**This plugin lifts the panel it manages for you.** Both start paths — the page's Start button and the
+generated launcher a boot entry runs — ask the panel's own `migrate --dry-run` after a failed start, and
+when it reports a pending migration they apply `migrate --yes` and retry once. So an upgrade that raised
+the schema heals itself: at boot, with no page open, and without you running anything.
 
 ```sh
-home-hosted migrate --dry-run   # print the steps, write nothing
-home-hosted migrate --yes       # keep a .bak beside each rewritten file
+# what runs for you, in order
+home-hosted migrate --dry-run   # the question: is a migration pending?
+home-hosted migrate --yes       # only if it is; keeps a .bak beside each rewritten file
 ```
 
-Both sides are then on schema 2, and every write stays readable by the release that pinned it.
+The decision is the panel's own printed plan, never the failure text, so a start that failed for another
+reason is left alone and a reworded refusal cannot disable the repair. Nothing here implements a
+migration step: `migrate` keeps the backups, validates its output, and refuses a config it cannot lift —
+that refusal is reported verbatim.
+
+**A root that is not the one this plugin manages is not touched.** Run the two commands by hand against
+it, exactly as above. The same applies when the panel refuses for a reason `migrate` cannot fix (a file
+from a *newer* release, an unreadable config): the start's own error is what you get, with the migration's
+refusal appended.
 
 **0.7.21 widens that nullable set by one field, and it closed a bug here.** Clearing a server's label
 sent an empty string, which the panel accepts and saves — so the entry kept a blank label instead of

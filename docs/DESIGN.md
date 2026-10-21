@@ -42,8 +42,9 @@ stop-then-start pair. Both are gone: it pins `home-hosted@^0.9.x` — 0.9.0 at t
 which refuses an older panel outright, so neither check could ever fire again.
 
 An old state root is upgraded by running the latest 0.7.x **once, before installing 0.8** — its first
-run moves the state into `.hh/`. A root a 0.8-era panel left on config schema 1 needs
-`home-hosted migrate` before this plugin will write it; see [PANEL](PANEL.md#upgrading-an-existing-state-root).
+run moves the state into `.hh/`. A root a 0.8-era panel left on config schema 1 is lifted
+automatically: a failed start makes the plugin run the panel's own `migrate` and retry, at boot and from
+the page alike. See [PANEL](PANEL.md#upgrading-an-existing-state-root).
 
 ## Tests
 

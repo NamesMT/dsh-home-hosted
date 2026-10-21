@@ -82,6 +82,13 @@ nobody reads is worse than a long file.
   unable to boot what this plugin keeps editing. One rule (`schemaRefusal`) both refuses the write and
   is reported by `status`, so the page warns first; read the stamp from the **file**, never from the
   caller's object, and give a refused write a wire `code` or the page sees `INTERNAL`.
+- **A failed start lifts the managed panel's own config, and that is the panel's `migrate`**, never a
+  step of ours: `repairPanelMigration` asks `migrate --dry-run`, applies `migrate --yes` when it names
+  a pending step, and retries once. Both start paths carry it — the page's `startPanel` and the
+  generated launcher, which is the only one alive after a reboot. Decide from the panel's printed plan
+  (`^migrating ` at column 0), never from the failure text or the exit code, and pin the anchor against
+  the pinned release's own source (`test/panel-migrate`). A stop during the migration ends the
+  launcher; it never becomes a start.
 - **Writes go through the authenticated panel API when it answers and the token proves itself**,
   otherwise straight to `.hh/<workspace>/servers.config.json` (atomic, schema-shaped). The panel's
   `control` lives in `.hh/settings.json` and is patched there.

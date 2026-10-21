@@ -34,6 +34,28 @@ keeps editing. Measured on a real 0.9.2 panel: a `schema: 2` stamp over an old
 notifications end up silently off with no error anywhere. Only `home-hosted migrate` may lift a
 config; the refusal names it.
 
+**The lift runs automatically, and it is still the panel's own `migrate`.** A failed start is followed
+by `migrate --dry-run`; when that prints a pending step the plugin applies `migrate --yes` and retries
+once. Two start paths carry it — `startPanel` (`src/home-hosted/panel-control.ts`) and the generated
+launcher (`src/home-hosted/launcher.ts`, interpolated as `MIGRATION_REPAIR`) — because the second is
+the only one that exists after a reboot, when no page can be open. The rule itself is
+`repairPanelMigration` (`src/home-hosted/panel-migrate.ts`); the launcher carries the anchor and the
+policy, never the steps.
+
+**The decision is the panel's answer, not its failure text.** `migrate --dry-run` prints
+``migrating <label>: config schema A → B`` at column 0 per file; `^migrating ` is the discriminator,
+and it is byte-identical from 0.9.0 through 0.9.6. Branching on `refusing to start: config schema 1
+needs 1 migration` instead would be a branch on wording, and the exit code cannot stand in for it:
+pending-with-`--dry-run` and nothing-to-do both exit 0. `test/panel-migrate` reads the pinned release's
+own `migrate` module from the sourcemap and fails if that line's shape moves — an unanchored match
+silently turns the repair off, which reads as "the start failed for another reason" and is reported
+nowhere.
+
+**A stop arriving during the migration is not followed by the retry.** The launcher runs `migrate` with
+its own child so a signal cannot kill the process rewriting the person's config, but a stop is still a
+stop: it ends the launcher instead of starting a panel nothing supervises. A migration it could not
+apply keeps the start's own error and appends the migration's refusal — never a claim of success.
+
 **Judge the stamp from the file, not from the caller's object.** `writeConfig` receives whatever the
 caller built, and `upsertEntry({}, …)` hands in a fresh `{}`; reading `raw.meta` then reported "carries
 no meta.schema" for a file that declared one, naming the wrong problem. `stampedMeta` reads the file
