@@ -163,6 +163,8 @@ const ENTRY_FIELDS: ParameterSchemaSpec = {
   backupPaths: { type: 'array', items: { type: 'string' }, description: 'Paths included in backups for this entry (templates allowed)' },
   logBufferLines: { type: 'number', description: 'Live log lines kept for this entry, 50..100000' },
   backupIgnoreGenerated: { type: 'boolean', description: 'Skip build output and dependency directories (node_modules, dist, caches) inside the declared backup paths' },
+  dump: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }], description: 'Backup hook run before this entry\'s data is captured: command, args, env, timeoutMs. Write into {dumpDir}; a failed dump refuses the backup — or null' },
+  load: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }], description: 'Restore hook run on this entry\'s next start, once its port answers: command, args, env, timeoutMs, waitMs. Read from {dumpDir} — or null' },
 }
 const ENTRY_PARAM = {
   type: 'object',

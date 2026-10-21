@@ -32,6 +32,11 @@ export const OUT_OF_SCOPE_FIELDS = [
   'health',
   'restart',
   'stop',
+  // Dump/load hooks are a backup-engine concern with two commands, argument lists and timeouts each.
+  // The panel's own editor has them; this one stays a small form, and a hook set here would be a
+  // half-written backup pipeline — the failure it causes is a refused backup, not a bad form.
+  'dump',
+  'load',
 ] as const
 
 /**
