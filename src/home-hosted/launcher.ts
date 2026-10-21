@@ -16,6 +16,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { run } from '../util/exec.js'
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../util/fsx.js'
+import { MIGRATION_STEP_SOURCE } from './panel-migrate.js'
 import { compareVersions, parseVersion } from './resolve.js'
 
 /** A package-manager shim's real target, as the shim itself records it. */
@@ -62,15 +63,99 @@ export function launcherPath(stateDir: string): string {
  * on or the panel is orphaned while the unit exits (and `Restart=always` then loops
  * on "already running"). Forwarding the signal and waiting for the child is what
  * makes the stop reach the panel; the exit code carries the child's outcome.
+ *
+ * A promise rather than an exit inside the callback, because the home-hosted launcher
+ * may have to run the child more than once (see the migration repair). `current` is what
+ * a stop signal is forwarded to: a child that must not be interrupted — the migration
+ * writer — is run with `current` cleared, and `stopping` then reports the pending stop.
  */
-const LAUNCH_CHILD = `function launchChild(program, argv, useShell) {
-  const child = spawn(program, argv, { stdio: 'inherit', shell: useShell })
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGQUIT', 'SIGHUP'])
-    process.on(signal, () => { try { child.kill(signal) } catch {} })
-  child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)))
-  child.on('error', (error) => {
-    console.error('[dsh-home-hosted] could not start ' + program + ': ' + error.message)
-    process.exit(1)
+const LAUNCH_CHILD = `let current = null
+let stopping = false
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGQUIT', 'SIGHUP'])
+  process.on(signal, () => { stopping = true; try { current.kill(signal) } catch {} })
+
+/** Run a child with this process's own stdio; resolves with how it ended. */
+function launchChild(program, argv, useShell) {
+  return new Promise((resolve) => {
+    const child = spawn(program, argv, { stdio: 'inherit', shell: useShell })
+    current = child
+    child.on('exit', (code, signal) => resolve({ code, signal }))
+    child.on('error', (error) => {
+      console.error('[dsh-home-hosted] could not start ' + program + ': ' + error.message)
+      // A child that never started is a failure, and exitWith reads a null code with no signal as
+      // success — which would report a launcher that started nothing as having exited cleanly.
+      resolve({ code: 1, signal: null })
+    })
+  })
+}
+
+/** The exit code a launcher reports for a child's outcome, as before. */
+function exitWith(result) {
+  process.exit(result.code ?? (result.signal ? 1 : 0))
+}`
+
+/**
+ * The migration repair the **generated home-hosted launcher** runs after a failed start.
+ *
+ * This is the only place the repair can happen at boot: the entry runs this script, and a config
+ * stamped below the release's `CONFIG_SCHEMA` makes every `up` fail — so a machine whose panel was
+ * upgraded under it never comes back, and no page is left open to click.
+ *
+ * It is a fragment rather than an import because the script must stay self-contained (the test
+ * asserts it carries no relative imports). The rule it encodes is the one in `panel-migrate.ts`
+ * (`repairPanelMigration`), and `test/panel-migrate` pins the anchor below against the pinned
+ * release's own `migrate` module, so reworded output fails a test instead of silently disabling it.
+ *
+ * `program` and `prefix` are how this launcher already runs the CLI: an entry script is run by node
+ * (`[execPath, entry]`), while a shim or a global executable *is* the program (`[entry]`). Taking the
+ * prefix rather than the entry is what makes the migrate call the same invocation the entry uses.
+ */
+const MIGRATION_REPAIR = `/**
+ * Ask the panel's own migrate whether this root needs lifting, apply it if so, and say
+ * whether a retry is worthwhile (null means "no, the original failure stands").
+ *
+ * Only this script's own '--foreground' daemon run is repaired. The boot entry passes it, so a
+ * failure there is the one nothing else can heal; a 'down' or a one-off command that failed is
+ * left alone, because lifting a config is not what a person asked those for.
+ */
+async function repairMigration(program, prefix, args) {
+  if (!args.includes('--foreground')) return null
+  const dirs = []
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === '--home' && args[index + 1] !== undefined) dirs.push('--home', args[index + 1])
+    if (args[index] === '--project' && args[index + 1] !== undefined) dirs.push('--project', args[index + 1])
+  }
+
+  // The decision is the panel's answer, never its failure text: one 'migrating ...' line per
+  // file it would lift, at column 0. A failed start for any other reason prints none.
+  const plan = await runQuiet(program, [...prefix, 'migrate', '--dry-run', ...dirs])
+  const anchor = new RegExp(${JSON.stringify(MIGRATION_STEP_SOURCE)}, 'm')
+  if (!anchor.test(plan.output))
+    return null
+
+  console.error('[dsh-home-hosted] the panel config is on an older schema, which this panel refuses to boot; lifting it with \`home-hosted migrate --yes\` (a .bak is kept beside each file)')
+  // Not through launchChild: a stop signal must not kill the process that is rewriting the
+  // person's config, so 'current' stays null and a pending stop waits for this to finish.
+  const applied = await runQuiet(program, [...prefix, 'migrate', '--yes', ...dirs])
+  if (applied.code !== 0) {
+    console.error('[dsh-home-hosted] the migration did not succeed: ' + applied.output)
+    return null
+  }
+  console.error('[dsh-home-hosted] migrated; starting the panel again')
+  return true
+}
+
+/** Run the CLI with its output captured (both streams), for a question rather than a daemon. */
+function runQuiet(program, argv) {
+  return new Promise((resolve) => {
+    const child = spawn(program, argv, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    const collect = (chunk) => { output = (output + chunk).slice(-65536) }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+    child.on('exit', code => resolve({ code, output }))
+    // A child that never started cannot have applied anything, and a null code reads as success.
+    child.on('error', error => resolve({ code: 1, output: String(error && error.message) }))
   })
 }`
 
@@ -296,12 +381,30 @@ if (entry === null) {
   process.exit(1)
 }
 
+${MIGRATION_REPAIR}
+
 const args = process.argv.slice(2)
 const isScript = /\\.(mjs|cjs|js)$/.test(entry)
-if (isScript)
-  launchChild(process.execPath, [entry, ...args], false)
-else
-  launchChild(entry, args, process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry))
+const program = isScript ? process.execPath : entry
+const useShell = !isScript && process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry)
+
+// What precedes the command word: node runs an entry script, and a shim or global executable is
+// itself the program.
+const prefix = isScript ? [entry] : []
+const argv = [...prefix, ...args]
+
+const first = await launchChild(program, argv, useShell)
+if (first.code === 0 || stopping) exitWith(first)
+
+// The panel refused to start, and at boot nothing else can repair it: this launcher is
+// what the entry runs, and a config on an older schema fails here forever. Ask the
+// panel's own migrate whether that is the reason, lift it if so, and retry once.
+const repaired = await repairMigration(program, prefix, args)
+// A stop that arrived while the migration ran has already reported its outcome: starting the
+// panel now would undo it, and a unit stopping while its launcher starts a daemon is the
+// orphaned-panel case this launcher exists to prevent.
+if (repaired === null || stopping) exitWith(first)
+exitWith(await launchChild(program, argv, useShell))
 `
 }
 
@@ -647,10 +750,13 @@ if (entry === null) {
 }
 
 const args = process.argv.slice(2)
-if (/\\.(mjs|cjs|js)$/.test(entry))
-  launchChild(process.execPath, [entry, ...args], false)
-else
-  launchChild(entry, args, process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry))
+const isScript = /\\.(mjs|cjs|js)$/.test(entry)
+const program = isScript ? process.execPath : entry
+const argv = isScript ? [entry, ...args] : args
+// .then rather than top-level await: this launcher ships as CommonJS too (a .cjs entry gets a
+// .cjs launcher), where top-level await is a syntax error — and a launcher that cannot parse is a
+// boot entry that starts nothing.
+launchChild(program, argv, !isScript && process.platform === 'win32' && /\\.(cmd|bat)$/i.test(entry)).then(exitWith)
 `
 }
 

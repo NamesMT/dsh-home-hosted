@@ -18,6 +18,7 @@ import type { RunResult } from '../util/exec.js'
 import { writeFileAtomic } from '../util/fsx.js'
 import type { CliLaunch } from './launch.js'
 import { launcherDir } from './launcher.js'
+import { repairPanelMigration } from './panel-migrate.js'
 
 /** How the panel's CLI is run: the resolved argv plus an environment. */
 export type PanelCliExec = (args: string[], env: Record<string, string | undefined>) => Promise<RunResult>
@@ -35,35 +36,62 @@ export interface PanelControlDeps {
   exec?: PanelCliExec
 }
 
-function cliArgs(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): string[] {
-  const args = [...(deps.launch?.args ?? []), command, '--home', deps.home]
+/**
+ * The words a CLI command runs with, aimed at this panel: its state root, and the project relative
+ * entry paths resolve against.
+ */
+function cliArgs(deps: PanelControlDeps, words: string[]): string[] {
+  const args = [...(deps.launch?.args ?? []), ...words, '--home', deps.home]
   if (deps.projectDir)
     args.push('--project', deps.projectDir)
   return args
 }
 
-async function runCli(deps: PanelControlDeps, command: 'up' | 'down' | 'restart'): Promise<{ code: number | null, stdout: string, stderr: string, error: string | null }> {
-  const args = cliArgs(deps, command)
+/** Run the resolved CLI with this panel's argv; one seam for every command. */
+async function runCliArgs(deps: PanelControlDeps, words: string[]): Promise<RunResult> {
+  const args = cliArgs(deps, words)
   if (deps.exec !== undefined)
     return await deps.exec(args, deps.env)
   const launch = deps.launch
   if (launch === null)
-    return { code: null, stdout: '', stderr: 'no home-hosted CLI is available', error: null }
+    return { command: '', args, code: null, signal: null, stdout: '', stderr: 'no home-hosted CLI is available', timedOut: false, error: null }
   return await run(launch.program, args, {
     env: deps.env,
     timeoutMs: deps.timeoutMs ?? 90_000,
   })
 }
 
-/** Start the preferred CLI as a detached panel; the CLI itself does the detaching. */
+/**
+ * Start the preferred CLI as a detached panel; the CLI itself does the detaching.
+ *
+ * A failed `up` is asked one question before it is reported: does the panel's own `migrate` say a
+ * migration is pending? An upgrade that raised the config schema leaves exactly that — a panel that
+ * refuses to start on every attempt, with the only remedy a command this page cannot run — so the
+ * repair is applied and the start retried once. The rule is `repairPanelMigration`, shared with the
+ * generated launcher, which runs the same at boot with no page open.
+ */
 export async function startPanel(deps: PanelControlDeps): Promise<PanelControlResult> {
-  const result = await runCli(deps, 'up')
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim() || `the CLI exited ${String(result.code)}`
-    return { ok: false, detail }
+  const result = await runCliArgs(deps, ['up'])
+  if (result.code === 0) {
+    const match = /https?:\/\/[^\s]+/.exec(result.stdout)
+    return { ok: true, detail: 'the panel is answering', url: match?.[0] ?? null }
   }
-  const match = /https?:\/\/[^\s]+/.exec(result.stdout)
-  return { ok: true, detail: 'the panel is answering', url: match?.[0] ?? null }
+
+  const failed = result.stderr.trim() || result.stdout.trim() || `the CLI exited ${String(result.code)}`
+  const migration = await repairPanelMigration(words => runCliArgs(deps, words))
+  if (migration.failure !== null)
+    return { ok: false, detail: `${failed}; the panel config needs a migration and it did not apply: ${migration.failure}` }
+  if (migration.note === null)
+    return { ok: false, detail: failed }
+
+  // The same `up` that just failed, now on a config the panel can boot.
+  const retried = await runCliArgs(deps, ['up'])
+  if (retried.code !== 0) {
+    const again = retried.stderr.trim() || retried.stdout.trim() || `the CLI exited ${String(retried.code)}`
+    return { ok: false, detail: `${migration.note}, but the panel still did not start: ${again}` }
+  }
+  const match = /https?:\/\/[^\s]+/.exec(retried.stdout)
+  return { ok: true, detail: `${migration.note}; the panel is answering`, url: match?.[0] ?? null }
 }
 
 /**
@@ -76,7 +104,7 @@ export async function startPanel(deps: PanelControlDeps): Promise<PanelControlRe
  * panel start; it is not restarted here.
  */
 export async function stopPanel(deps: PanelControlDeps): Promise<PanelControlResult> {
-  const result = await runCli(deps, 'down')
+  const result = await runCliArgs(deps, ['down'])
   if (result.code !== 0) {
     const detail = result.error ?? (result.stderr.trim() || result.stdout.trim() || `the CLI exited ${String(result.code)}`)
     return { ok: false, detail: `the panel did not stop: ${detail}` }

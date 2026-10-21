@@ -29,6 +29,16 @@ afterEach(() => {
   scratch = null
 })
 
+/**
+ * The command word in a resolved CLI argv.
+ *
+ * `deps()` resolves a CLI *entry* (`[<entry>, <command>, …]`), which is what a real launch looks
+ * like, so the command is the first token that is not the program itself.
+ */
+function commandOf(args: string[]): string {
+  return args.find(arg => !arg.includes('/') && !arg.endsWith('.mjs')) ?? args[0] ?? ''
+}
+
 function ok(stdout = '', stderr = ''): RunResult {
   return { command: 'fake', args: [], code: 0, signal: null, stdout, stderr, timedOut: false, error: null }
 }
@@ -65,6 +75,66 @@ describe('panel control', () => {
     const result = await startPanel(d)
     expect(result.ok).toBe(false)
     expect(result.detail).toContain('no home-hosted CLI')
+  })
+
+  /**
+   * The bug this exists for: an upgrade raised the config schema, and every `up` then refuses with
+   * `config schema 1 needs 1 migration` — a panel that can never start and a remedy (`home-hosted
+   * migrate`) the person has to run by hand. The page's start path now lifts it and retries once.
+   *
+   * The fake CLI answers exactly like the pinned 0.9.6 (`migrate --dry-run` prints `migrating …`,
+   * `--yes` succeeds, `up` refuses until the schema is current), so a wrong anchor or a missing
+   * retry fails here.
+   */
+  it('lifts a config the panel refuses to boot, then starts it', async () => {
+    const { deps: d } = deps()
+    let schema = 1
+    const calls: string[][] = []
+    d.exec = async (args): Promise<RunResult> => {
+      calls.push(args)
+      if (commandOf(args) === 'migrate') {
+        if (args.includes('--dry-run'))
+          return ok(schema < 2 ? 'migrating global settings: config schema 1 → 2\n  1. notifications: fold\nnothing was written (--dry-run)' : 'nothing was written (--dry-run)')
+        schema = 2
+        return ok('migrated global settings to schema 2')
+      }
+      if (commandOf(args) === 'up')
+        return schema < 2 ? { ...ok(), code: 1, stderr: 'refusing to start: config schema 1 needs 1 migration before this release can use it' } : ok('home-hosted: http://127.0.0.1:6399/')
+      return ok()
+    }
+    const result = await startPanel(d)
+    expect(result.ok).toBe(true)
+    expect(result.url).toBe('http://127.0.0.1:6399/')
+    // One question, one migration, one retried start — and the report says what was lifted.
+    expect(calls.map(commandOf)).toEqual(['up', 'migrate', 'migrate', 'up'])
+    expect(result.detail).toContain('config schema 1 → 2')
+    expect(result.detail).toContain('.bak')
+  })
+
+  it('leaves a failed start alone when the panel says no migration is pending', async () => {
+    const { deps: d } = deps()
+    const calls: string[][] = []
+    d.exec = async (args): Promise<RunResult> => {
+      calls.push(args)
+      if (commandOf(args) === 'migrate') return ok('nothing was written (--dry-run)')
+      return { ...ok(), code: 1, stderr: 'error control port 3999 is already in use' }
+    }
+    const result = await startPanel(d)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('already in use')
+    // Asked, never applied, never retried.
+    expect(calls.map(commandOf)).toEqual(['up', 'migrate'])
+  })
+
+  it('reports a migration that could not be applied, keeping the start\'s own failure', async () => {
+    const { deps: d } = deps()
+    d.exec = async (args): Promise<RunResult> => commandOf(args) === 'migrate'
+      ? (args.includes('--dry-run') ? ok('migrating global settings: config schema 3 → 2') : { ...ok(), code: 1, stderr: 'error written by a newer release' })
+      : { ...ok(), code: 1, stderr: 'refusing to start: config schema 3' }
+    const result = await startPanel(d)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('refusing to start')
+    expect(result.detail).toContain('written by a newer release')
   })
 
   it('stops the panel through the CLI down command', async () => {
