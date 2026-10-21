@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.9.5
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.4...v0.9.5)
+
+### 🩹 Fixes
+
+- **panel:** Lift a config the panel refuses to boot, then start it ([e0e5295](https://github.com/NamesMT/dsh-home-hosted/commit/e0e5295))
+
+### 📖 Documentation
+
+- The panel now lifts its own older config ([de0e62e](https://github.com/NamesMT/dsh-home-hosted/commit/de0e62e))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.4
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.3...v0.9.4)
