@@ -74,7 +74,7 @@ describe('the migration anchor', () => {
   })
 
   it('reads nothing pending from the panel\'s own healthy answer', () => {
-    // What 0.9.6 prints when every file is already current — and what a root with no state prints
+    // What 0.10.2 prints when every file is already current — and what a root with no state prints
     // on stderr with exit 1. Neither is a migration.
     expect(migrationSteps(answer('nothing was written (--dry-run)\n'))).toEqual([])
     expect(migrationSteps(answer('', 'error no home-hosted state to migrate\n', 1))).toEqual([])

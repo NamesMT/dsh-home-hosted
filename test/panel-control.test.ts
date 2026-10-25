@@ -82,7 +82,7 @@ describe('panel control', () => {
    * `config schema 1 needs 1 migration` — a panel that can never start and a remedy (`home-hosted
    * migrate`) the person has to run by hand. The page's start path now lifts it and retries once.
    *
-   * The fake CLI answers exactly like the pinned 0.9.6 (`migrate --dry-run` prints `migrating …`,
+   * The fake CLI answers exactly like the pinned 0.10.2 (`migrate --dry-run` prints `migrating …`,
    * `--yes` succeeds, `up` refuses until the schema is current), so a wrong anchor or a missing
    * retry fails here.
    */

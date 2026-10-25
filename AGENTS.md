@@ -135,8 +135,9 @@ nobody reads is worse than a long file.
   enforced, and a literal `t('…')` key that does not exist is a test failure).
 - **A refused mutation is `ok: false` inside a successful envelope**: read the payload, not just
   `envelope.ok`, and surface it.
-- **Only `home-hosted@^0.9.0` is supported**, and the floor is that same release — a 0.8.x panel is one
-  this plugin cannot drive, not a lesser-supported one (0.8's schema gate and 0.9's exclude each other).
+- **Only `home-hosted@^0.10.0` is supported**, and the floor is `0.9.0` — a 0.8.x panel is one this
+  plugin cannot drive, not a lesser-supported one (0.8's schema gate and 0.9's exclude each other).
+  The pin is `^0.10.2`; the floor does not move with it.
   See [COMPATIBILITY](.agentDocs/COMPATIBILITY.md).
 - **The panel console is a first-class diagnostic** (`panel.console`): read from disk, so it needs no
   session, no token and no answering panel, and matches `home-hosted logs` line for line.

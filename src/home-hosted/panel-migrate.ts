@@ -39,7 +39,7 @@ export type MigrationCli = (words: string[]) => Promise<CliAnswer>
 /**
  * A step line `migrate --dry-run` prints for one file, anchored at column 0.
  *
- * Byte-identical from 0.9.0 through 0.9.6 (`src/cli/migrate.ts`:
+ * Byte-identical from 0.9.0 through 0.10.2 (`src/cli/migrate.ts`:
  * ``process.stdout.write(`migrating ${target.label}: config schema ${from} → ${plan.to}\n`)``).
  * The step lines under it are indented, so only this header line matches.
  */

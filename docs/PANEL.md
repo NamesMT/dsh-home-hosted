@@ -121,12 +121,37 @@ recreating its own log, an unflushed log batch, a Windows test skip — touch no
 no `.proxy/proxy.json`, `ProxyService`, `terminatePid`, or `DELETE /api/logs`, and `serverSchema`,
 `CONFIG_SCHEMA`, `/_hh` and the CLI are unchanged.
 
+**0.10.2 is a semver minor with two changes outside the config, and neither reaches this plugin.**
+Two `/api/metrics` series were renamed (`hh_server_restarts_total` → `hh_server_restarts`,
+`hh_servers_total` → `hh_servers`); this plugin scrapes no metrics. Clearing the panel password,
+switching authentication off, and restoring an archive carrying `global:secrets` each now answer
+`403 SESSION_REQUIRED` unless the caller signed in; this plugin calls none of the three, and its own
+credential work is `set-token`, which still takes a token on the local channel. `CONFIG_SCHEMA` is
+still 2 with the same single 1→2 step, so no config this plugin wrote needs lifting, and `0.9.x`
+panels keep booting the files it writes.
+
+Checked by use against the published sourcemaps of 0.9.7 and 0.10.2: `serverSchema` (still 25
+fields) and `editableFields` (still 24), the merge keys (`restart`/`health`/`stop`, `auth`/`tls`),
+`controlPatchSchema`, `settingsPatchSchema`, the workspace and server-view schemas, and every CLI
+subcommand and flag this plugin drives are unchanged. The `^migrating ` anchor moved
+source line only. Two upstream changes were adopted here rather than merely noted: the state-file
+reader now tolerates the byte-order mark a Windows editor writes (upstream `readStateFile`), since
+the two read the same files and disagreeing reported a healthy config as unparseable; and
+`installedUiRecordFile` now names `.hh/.ui/ui.json`, where every release since 0.7 writes it — the
+plugin had read `<root>/.ui/ui.json`, one directory above `.hh`, so a custom UI reported as the
+stock one and nothing failed.
+
+`0.10.1` also added `down --with-persistent`, `restart --with-persistent` and `free-port`; none is
+needed here. `panel.stop` runs `down`, and the entry this plugin writes is `persistent`, which is
+exactly the thing `down` leaves running by default and what this plugin wants — passing the flag
+would stop the dsh serving the page.
+
 **0.9.4 also needs no adaptation, and that was checked by use.** It adds no command and no required
 field: `PUT /api/servers/:id`, `POST /api/servers/orphans/:id/stop`, presets and restore reporting are
 new routes and UI, none of which this plugin calls; `stoppedByPanel`, `orphans`, `healthRestarts` and
 the action-result `code` are new *optional* fields. `serverSchema`, `editableFields`, the merge keys,
-`CONFIG_SCHEMA` (still 2), the four `/_hh` routes and every CLI subcommand and flag are unchanged, so
-the pin moved and the floor did not. Verified by diffing the published sourcemaps of 0.9.2 and 0.9.4
+`CONFIG_SCHEMA` (still 2), the four lifecycle `/_hh` routes and every CLI subcommand and flag are
+unchanged, so the pin moved and the floor did not. Verified by diffing the published sourcemaps of 0.9.2 and 0.9.4
 (34 changed files) and by driving a real 0.9.4 panel: this plugin's client lists, creates, patches,
 starts, stops and deletes an entry, and reads workspaces and settings, exactly as on 0.9.2.
 
@@ -253,15 +278,20 @@ selection, so the page's checkbox is how it is chosen.
 
 ## What `/_hh` does not offer, deliberately
 
-`/_hh` is the one unauthenticated surface a local caller can use, and it is deliberately tiny. Read
-out of `src/api/control.ts` (mounted before the `/api/*` guard in `src/app.ts`), it registers exactly
-**four** routes: `POST /shutdown`, and `POST /servers/:id/{start,stop,restart}`. Every one needs the
-token from `run.json` plus a loopback peer, which is the whole point — a local `down` needs no session,
-password or API token.
+`/_hh` is the one unauthenticated surface a local caller can use, and it is deliberately small. Read
+out of `src/api/control.ts` (mounted before the `/api/*` guard in `src/app.ts`) at the pinned release,
+it registers **seven** routes: `POST /shutdown`; `POST /servers/:id/{start,stop,restart,free-port}`;
+and `GET /backups`, `POST /backups`, `POST /backups/restore`. Every one needs the token from
+`run.json` plus a loopback peer, which is the whole point — a local `down` needs no session, password
+or API token. (The three backup routes arrived in 0.9.5; this page said "exactly four" long after
+that stopped being true, which is why the count is now quoted per release rather than as an idea.)
 
-There is **no local-token path to the reverse proxy, backups, TLS, notifications or the config**. Those
-live behind `/api/*` and a real credential. So a plugin capability over any of them would have to mint
-a token and speak `/api`, and it must not add an unauthenticated `/api` route of its own to avoid that
+`free-port` and `restart` are the two this plugin uses, both through the CLI rather than by calling
+`/_hh` itself.
+
+There is **no local-token path to the reverse proxy, TLS, notifications or the config** — those live
+behind `/api/*` and a real credential. So a plugin capability over any of them would have to mint a
+token and speak `/api`, and it must not add an unauthenticated `/api` route of its own to avoid that
 — that is the rule the plugin is built on (the CLI drives a running panel through `/_hh`, never
 `/api`). `_acme` is the only other route outside the guard (loopback-only, credentials the panel
 generates, a single `/:action` for DNS-01); this plugin never touches it.
