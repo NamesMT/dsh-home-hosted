@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.9.7
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.6...v0.9.7)
+
+### 🚀 Enhancements
+
+- Give the plugin its own artwork in dsh's Plugins page ([cfdf274](https://github.com/NamesMT/dsh-home-hosted/commit/cfdf274))
+
+### 🩹 Fixes
+
+- **panel:** Replace a panel through its entry, and stop refusing one it did not spawn ([a378275](https://github.com/NamesMT/dsh-home-hosted/commit/a378275))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.6
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.5...v0.9.6)
