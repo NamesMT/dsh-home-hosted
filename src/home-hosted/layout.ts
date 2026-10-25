@@ -7,6 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DEFAULT_WORKSPACE, isRecord, isWorkspaceId } from '../shared/contracts.js'
+import { readStateFile } from '../util/fsx.js'
 
 export { DEFAULT_WORKSPACE }
 
@@ -32,6 +33,17 @@ export function secretsFile(home: string): string {
 /** The live daemon's identity: pid, url, token. */
 export function runFile(home: string): string {
   return path.join(hhDir(home), 'run.json')
+}
+
+/**
+ * The record the panel writes for an installed UI: name, version, repo, tag.
+ *
+ * Under `.hh`, with every other release's state — the panel owns it via `uiDir`
+ * (`helpers/paths.ts`), and `UiService.directory` is `dataRoot/.ui` with `dataRoot` set to
+ * `hhDir`. Reading `<root>/.ui` found nothing, so a custom UI reported as the stock one.
+ */
+export function installedUiRecordFile(home: string): string {
+  return path.join(hhDir(home), '.ui', 'ui.json')
 }
 
 /**
@@ -87,7 +99,12 @@ export function readWorkspaces(home: string): WorkspacesRead {
     return { workspaces: [], error: null }
   let parsed: unknown
   try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+    // Through the BOM-tolerant reader: the panel writes this file, but a person may hand-edit
+    // it, and a Windows editor's BOM would otherwise report their registry as unparseable.
+    const text = readStateFile(file)
+    if (text === null)
+      throw new Error('unreadable')
+    parsed = JSON.parse(text)
   }
   catch {
     return { workspaces: [], error: `${path.relative(home, file)} could not be parsed` }

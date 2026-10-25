@@ -393,16 +393,20 @@ export interface PanelControlResult {
 }
 
 /**
- * What the panel's own `free-port` reports. The pids are the panel's business;
- * the page only needs which port ended up free and which listeners it refused to
- * touch. `stopped` is what the panel actually answers today, so both are read.
+ * What the panel's own `free-port` reports (`freePortResultSchema` in the pinned release).
+ *
+ * `terminated`/`forced` are the pids it signalled, and `skipped` the listeners it refused to
+ * touch because this panel supervises them; the page only needs whether the port came free.
+ * `stopped` was declared here instead and is not a field the panel ever sends — the stub
+ * answered it, so the tests confirmed a shape no real panel produces.
  */
 export interface FreePortResult {
   ok?: boolean
   port?: number | null
   free?: boolean
   skipped?: number[]
-  stopped?: number[]
+  terminated?: number[]
+  forced?: number[]
 }
 
 export interface CliStatus {

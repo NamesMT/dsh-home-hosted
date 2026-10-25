@@ -199,7 +199,7 @@ export async function startStubPanel(options: { token?: string, acceptAnyToken?:
             found.status = 'running'
           if (action === 'stop')
             found.status = 'stopped'
-          send(200, action === 'free-port' ? { stopped: [] } : { ok: true })
+          send(200, action === 'free-port' ? { ok: true, port: null, terminated: [], forced: [], skipped: [], free: true } : { ok: true })
           return
         }
       }

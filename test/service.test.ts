@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BootMechanism, BootStatus, HomeHostedStatus, InstanceView, ServerEntryView, WorkspaceSummary } from '../src/shared/contracts.js'
 import { findEntry, readConfig } from '../src/home-hosted/config-file.js'
 import { panelConfigSchema } from '../src/home-hosted/panel-schema.js'
-import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
+import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, installedUiRecordFile, runFile, secretsFile, serversFile } from '../src/home-hosted/layout.js'
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { panelConsolePath } from '../src/home-hosted/panel-console.js'
 import { EXPECTED_RANGE } from '../src/home-hosted/resolve.js'
@@ -668,7 +668,9 @@ describe('home-hosted service', () => {
     expect(panel.servers[0]!.status).toBe('running')
     await service.call('servers.stop', { id: 'other' })
     expect(panel.servers[0]!.status).toBe('stopped')
-    expect(await service.call('servers.freePort', { id: 'other' })).toEqual({ stopped: [] })
+    // The answer is the panel's own `freePortResultSchema` shape. This used to assert
+    // `{ stopped: [] }`, a field no release sends, so the test pinned a fiction.
+    expect(await service.call('servers.freePort', { id: 'other' })).toMatchObject({ free: true, skipped: [] })
   })
 
   it('falls back to an atomic config write when the panel is not running', async () => {
@@ -950,6 +952,30 @@ describe('panel lifecycle from the page', () => {
     settings.update({ panel: { port: 3999.5 } })
     await service.startPanelNow()
     expect(JSON.parse(fs.readFileSync(globalSettingsFile(home), 'utf8')).control.port).toBe(3999)
+  })
+
+  /**
+   * The UI record is read from the root the panel writes it in.
+   *
+   * `uiManage('status')` had no test at all, and the path it read was one directory above
+   * `.hh` — a missing file is a legitimate answer there ("no custom UI"), so a custom UI
+   * reported as the stock one with nothing failing. Driven through the service rather than
+   * asserted on the path, because the path helper being right says nothing about which
+   * function the service calls.
+   */
+  it('reports the UI an installed one through the record the panel actually wrote', async () => {
+    const { home, service } = await harness()
+    writeJsonFile(installedUiRecordFile(home), { name: 'noc-console', version: '1.2.3', repo: 'acme/console', tag: 'v1.2.3' })
+    const result = await service.uiManage('status')
+    expect(result.ui).toEqual({ name: 'noc-console', version: '1.2.3', repo: 'acme/console', tag: 'v1.2.3' })
+    expect(result.detail).toContain('noc-console')
+  })
+
+  it('says the stock UI is in use when no record exists', async () => {
+    const { service } = await harness()
+    const result = await service.uiManage('status')
+    expect(result.ui).toBeNull()
+    expect(result.detail).toBe('the panel is using its stock UI')
   })
 
   it('says why a panel CLI could not be run instead of only that it failed', async () => {

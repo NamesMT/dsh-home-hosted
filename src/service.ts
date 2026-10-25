@@ -19,7 +19,7 @@ import { createBootLadder } from './boot/index.js'
 import { accountOf } from './boot/index.js'
 import type { AccountInput, PasswdEntry } from './boot/index.js'
 import { findEntry, nullGroupRefusal, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, schemaRefusal, setControl, SERVER_MERGE_KEYS, upsertEntry, writeConfig } from './home-hosted/config-file.js'
-import { DEFAULT_WORKSPACE, defaultWorkspace, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
+import { DEFAULT_WORKSPACE, defaultWorkspace, installedUiRecordFile, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
 import type { RawConfig } from './home-hosted/config-file.js'
 import { buildDshEntry, detectProfile, launcherRepair, needsLauncherRepair, resolveDshLaunch } from './home-hosted/dsh-entry.js'
 import type { DshLaunch } from './home-hosted/dsh-entry.js'
@@ -1029,7 +1029,7 @@ export class HomeHostedService extends Service {
 
     interface ActiveUi { name: string | null, version: string | null, repo: string | null, tag: string | null }
     const active = (): ActiveUi | null => {
-      const meta = readJson<{ name?: string, version?: string | null, repo?: string, tag?: string }>(path.join(home, '.ui', 'ui.json'))
+      const meta = readJson<{ name?: string, version?: string | null, repo?: string, tag?: string }>(installedUiRecordFile(home))
       return meta === null ? null : { name: meta.name ?? null, version: meta.version ?? null, repo: meta.repo ?? null, tag: meta.tag ?? null }
     }
 

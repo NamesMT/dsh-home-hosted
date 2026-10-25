@@ -6,6 +6,7 @@ import {
   defaultWorkspace,
   globalSettingsFile,
   hhDir,
+  installedUiRecordFile,
   isHhRoot,
   isLegacyRoot,
   migrationRefusal,
@@ -245,5 +246,68 @@ describe('the migration refusal', () => {
     fs.writeFileSync(path.join(root, '.control-secrets.json'), '{}\n', 'utf8')
     expect(isLegacyRoot(root)).toBe(true)
     expect(migrationRefusal(root)).not.toBeNull()
+  })
+})
+
+/**
+ * Where the panel keeps the record of the UI it installed.
+ *
+ * This was read from `<root>/.ui/ui.json`, one directory **above** `.hh`. Every release since
+ * 0.7 derives it from `hhDir` (`uiDir = path.join(hhDir, '.ui')`) and builds `UiService` with
+ * `dataRoot: hhDir`, so the file is at `<root>/.hh/.ui/ui.json` and the wrong path always missed:
+ * `ui.status` reported "the panel is using its stock UI" for a custom UI, and `repo`/`tag` were
+ * null forever. Nothing caught it — the read returns null as for a panel with no UI, which is a
+ * legitimate answer, so silence was indistinguishable from correctness.
+ */
+describe('the installed-UI record', () => {
+  it('sits under .hh, beside the rest of the panel state', () => {
+    const root = home()
+    expect(installedUiRecordFile(root)).toBe(path.join(hhDir(root), '.ui', 'ui.json'))
+    // The regression this pins: a sibling of `.hh`, which is where 0.7 kept it before the move.
+    expect(installedUiRecordFile(root)).not.toBe(path.join(root, '.ui', 'ui.json'))
+  })
+})
+
+/**
+ * A hand-edited state file saves with the editor's byte-order mark, and `JSON.parse` refuses one.
+ *
+ * The panel's own reader strips it (`decodeStateFile` in `helpers/config-text.ts`), so a config
+ * it accepts as healthy was one this plugin reported as unparseable — the read paths have to
+ * agree or the plugin names a problem the panel does not have.
+ */
+describe('reading a state file a Windows editor saved', () => {
+  const registry = { workspaces: [{ id: 'default', label: 'Home' }] }
+
+  it('reads a UTF-8 file that carries a leading BOM', () => {
+    const root = home()
+    fs.mkdirSync(hhDir(root), { recursive: true })
+    fs.writeFileSync(workspacesFile(root), `\uFEFF${JSON.stringify(registry)}`, 'utf8')
+    expect(readWorkspaces(root)).toEqual({ workspaces: [{ id: 'default', label: 'Home' }], error: null })
+  })
+
+  it('reads a UTF-16LE file, which is what PowerShell > produces', () => {
+    const root = home()
+    fs.mkdirSync(hhDir(root), { recursive: true })
+    fs.writeFileSync(workspacesFile(root), Buffer.concat([
+      Buffer.from([0xFF, 0xFE]),
+      Buffer.from(JSON.stringify(registry), 'utf16le'),
+    ]))
+    expect(readWorkspaces(root)).toEqual({ workspaces: [{ id: 'default', label: 'Home' }], error: null })
+  })
+
+  it('reads a UTF-16BE file, whose bytes must be swapped before Node can decode them', () => {
+    const root = home()
+    fs.mkdirSync(hhDir(root), { recursive: true })
+    const body = Buffer.from(JSON.stringify(registry), 'utf16le')
+    body.swap16()
+    fs.writeFileSync(workspacesFile(root), Buffer.concat([Buffer.from([0xFE, 0xFF]), body]))
+    expect(readWorkspaces(root)).toEqual({ workspaces: [{ id: 'default', label: 'Home' }], error: null })
+  })
+
+  it('still reports genuinely broken JSON, so tolerance is not blindness', () => {
+    const root = home()
+    fs.mkdirSync(hhDir(root), { recursive: true })
+    fs.writeFileSync(workspacesFile(root), '\uFEFF{ nope', 'utf8')
+    expect(readWorkspaces(root)).toMatchObject({ workspaces: [], error: expect.stringContaining('could not be parsed') })
   })
 })
