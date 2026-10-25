@@ -24,3 +24,14 @@ Read before touching the settings page's state, or a sentence the host sends the
   literal `"would use undefined"` against a panel that omits it — a real case, because the page is
   bundled separately from the host. Check `typeof value === 'string' && length > 0` and fall back;
   the same guard covers an explicit `null` (`src/client/section-boot.tsx`).
+- **Package artwork is a manifest field, and every way of getting it wrong is silent.** The Plugins
+  page inlines `package.json#icon` as a data URL — a **relative** path inside the package, one of
+  `.svg`/`.png`/`.jpg`/`.jpeg`/`.webp`, a regular file, ≤256 KiB (`iconOf` in `dsh-app-boot`). It
+  refuses an absolute path, a URL scheme, an unknown extension, a file that escapes the package, or
+  one over the cap — and a refusal renders the generic default mark with a `error` string in a field
+  the page never displays, so the plugin simply looks unbranded. The field is also outside
+  `package.json#files` unless added, which fails one release later on the installed copy only.
+  `test/resolve` ("the package artwork") checks all three, because none of them shows up any other
+  way. The artwork itself is upstream's `docs/branding/logo-mark.svg` — the 16px mark, not the 512
+  grid one: at the 30–36px slot the page renders, the full mark's three rack units and nine vent
+  slots fall below a pixel and smear.

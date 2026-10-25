@@ -281,3 +281,47 @@ describe('the pinned range is stated in two places and they agree', () => {
     expect(compareVersions(MIN_SUPPORTED_VERSION, EXPECTED_RANGE.replace(/^[^0-9]*/, ''))).toBeLessThanOrEqual(0)
   })
 })
+
+/**
+ * The Plugins page's artwork, which fails silently when it is wrong.
+ *
+ * dsh reads `package.json#icon` as a **relative path inside the package** and inlines it as a
+ * data URL (`iconOf` in `dsh-app-boot`); anything it refuses — an absolute path, an extension it
+ * does not know, a file over 256 KiB, one that escapes the package — renders the generic default
+ * mark with only a `error` string in a field nothing displays. So the three ways to get this
+ * wrong are checked here: the field resolves, the file ships, and it is one of the four types.
+ *
+ * `files` is what `pnpm pack` publishes, so an icon outside it exists in the repo and not in what
+ * users install — the same failure, one release later.
+ */
+describe('the package artwork', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { icon?: string, files?: string[] }
+
+  it('names a relative path inside the package, as the resolver demands', () => {
+    expect(manifest.icon, 'package.json needs an icon for the Plugins page').toBeDefined()
+    const icon = manifest.icon!
+    // `iconOf` rejects these three outright: absolute POSIX, absolute Windows, or a URL scheme.
+    expect(path.isAbsolute(icon), 'the icon must be a relative path').toBe(false)
+    expect(/^[A-Za-z][A-Za-z\d+.-]*:/u.test(icon), 'the icon must not be a URL').toBe(false)
+    const target = path.resolve(root, icon)
+    const relative = path.relative(root, target)
+    expect(relative.startsWith('..') || path.isAbsolute(relative), 'the icon must stay inside the package').toBe(false)
+  })
+
+  it('ships a real file the resolver will inline', () => {
+    const icon = manifest.icon!
+    const target = path.resolve(root, icon)
+    expect(fs.existsSync(target), `${icon} is declared but missing`).toBe(true)
+    // The four types `ICON_MEDIA_TYPES` maps; anything else throws and shows the default mark.
+    expect(['.svg', '.png', '.jpg', '.jpeg', '.webp']).toContain(path.extname(target).toLowerCase())
+    expect(fs.statSync(target).size, 'the resolver refuses an icon over 256 KiB').toBeLessThanOrEqual(256 * 1024)
+  })
+
+  it('publishes the icon, so the installed copy is not the one without it', () => {
+    const icon = manifest.icon!.replace(/^\.\//, '')
+    // `files` entries are prefixes of published paths (`lib` covers `lib/index.js`).
+    const published = (manifest.files ?? []).some(entry => icon === entry || icon.startsWith(`${entry.replace(/\/$/, '')}/`))
+    expect(published, `package.json#files must include ${icon}`).toBe(true)
+  })
+})

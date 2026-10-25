@@ -53,9 +53,11 @@
     },
     "./package.json": "./package.json"
   },
+  "icon": "./icon.svg",
   "files": [
     "lib",
     "cordis.patch.yml",
+    "icon.svg",
     "README.md",
     "docs",
     "LICENSE"
