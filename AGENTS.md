@@ -116,12 +116,13 @@ nobody reads is worse than a long file.
   the page shows it web-only; every other server entry is managed exactly as on web.
 - **Boot entries point at a generated stable launcher**, never at a pnpm path; the marker proves
   ownership and uninstall/disable refuses an artifact this plugin did not write.
-- **Whoever supervises the panel may change its state**: `panel.start`/`panel.stop` go through the
-  installed entry (`systemctl start|restart|stop`, `kickstart [-k]`/`kill`, `schtasks /Run`) and use
-  the CLI only when nothing is installed. A `Restart=always`/`KeepAlive` entry undoes a CLI `down`
-  seconds later, and a CLI `up` starts a panel that entry can no longer stop. The start verb follows
-  the entry's own state — `restart` only when it is already active, never on the 2 s health probe
-  alone — and only a unit carrying the plugin's marker is commanded at all.
+- **Whoever supervises the panel may change its state**: `panel.start`, `panel.stop` and
+  `panel.takeover` go through the installed entry (`systemctl start|restart|stop`, `kickstart
+  [-k]`/`kill`, `schtasks /Run`) and use the CLI only when nothing is installed. A
+  `Restart=always`/`KeepAlive` entry undoes a CLI `down` seconds later, and a CLI `up` starts a
+  panel that entry can no longer stop. The start verb follows the entry's own state — `restart`
+  only when it is already active, never on the 2 s health probe alone — and only a unit carrying
+  the plugin's marker is commanded at all.
 - **The `dsh` entry stays a bare `dsh`** when the project declares dsh: home-hosted resolves a bare
   command through the row's cwd and its project dir (`node_modules/.bin`) before PATH, so the
   launcher is only for an image a bare name cannot reach.

@@ -45,6 +45,18 @@ write the artifact.
   start and stop go through the installed entry") the entry branch asserts the CLI is never called;
   sibling tests assert the opposite on the paths that *should* reach it (no entry installed, a refused
   step, an unreachable ladder).
+- **`panel.takeover` is a start *and* a stop, and it was the one path that forgot.** It stopped and
+  started through the CLI while `panel.start`/`panel.stop` had already been taught to go through the
+  entry, so replacing a supervised panel left the unit reporting a run that never started the
+  answering process: `enabled-failing` beside a healthy panel, permanently, because nothing later
+  gives that unit a successful start. `bootControl('stop')` and `bootControl('start')` now supply the
+  helper's steps. The mirror is the guard's witness: it asked `selfEntryId()` — "did the answering
+  panel spawn this process?" — and so refused whenever the panel came from anywhere else, which is
+  exactly when two copies disagree and the button is needed. The question it meant is "would the
+  **managed** entry start a panel again"; `selfEntryId()` belongs only in the second question, "would
+  this session survive a `down`". `test/panel-control.test.ts` drives the generated helper against a
+  fake `systemctl` on PATH and asserts the CLI never ran — a string assertion on the source would
+  pass for a helper that carries the steps and takes the other branch.
 - **The start verb comes from the entry's own state, not from the health probe.** `/healthz` silent is
   the only condition for showing Start (`section-panel.tsx`), and that probe times out after 2 s — so a
   *healthy but slow* panel looks identical to a wedged one. A wedged panel is still active, where

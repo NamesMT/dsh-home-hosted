@@ -1589,11 +1589,14 @@ export class HomeHostedService extends Service {
   /**
    * Replace an answering panel with the preferred copy.
    *
-   * The stop takes the panel down, and only an `autostart` entry brings one back —
-   * so the guard demands one, and the work goes to a detached helper that survives
-   * this process if it happens to be a non-persistent entry itself. A persistent
-   * entry (what this plugin writes) is left running by `down`, so the session and
-   * the page normally survive the swap.
+   * Two questions have to be answered, and they are not the same one:
+   *
+   * *Does a panel come back?* Only an `autostart` entry starts one, and the entry that does it
+   * is the managed one. *Does this session survive?* `down` stops every non-persistent server,
+   * so a session the panel spawned without `persistent` would not be there to see it.
+   *
+   * The work goes to a detached helper that outlives this process, and it stops and starts the
+   * panel **through the installed entry** when one supervises it — see `spawnTakeover`.
    */
   async takeoverPanel(force = false): Promise<PanelControlResult> {
     const { resolution } = await this.cli()
@@ -1609,19 +1612,47 @@ export class HomeHostedService extends Service {
       return { ok: true, detail: `the answering panel is already ${runtime.version}`, url: runtime.url, version: runtime.version }
     }
 
+    const live = await this.liveEntries()
+    // Asked of the **managed** entry, never of `selfEntryId()`. The old guard tested whether the
+    // answering panel had spawned *this* process, so a panel started by anything else — a
+    // hand-run `up`, a distro unit, another supervisor — refused every replacement with
+    // `TAKEOVER_UNSAFE`, which is exactly the case the page is most needed for: two copies
+    // disagreeing.
+    const managed = live.get(this.options.defaultEntryId) ?? null
+    const managedStartsAtBoot = managed !== null && managed.config.autostart === true
+
     if (!force) {
-      const id = this.selfEntryId()
-      const live = id === null ? null : (await this.liveEntries()).get(id) ?? null
-      if (id === null || live === null || live.config.autostart !== true) {
+      if (!managedStartsAtBoot) {
         throw new HomeHostedError(
-          'replacing the panel stops the servers it supervises, and a non-persistent entry among them — this session, if it is one — would not come back on its own: '
-          + 'adopt this entry with autostart first, or pass force',
+          `replacing the panel stops it, and only an autostart entry starts one again: adopt the "${this.options.defaultEntryId}" entry with autostart first, or pass force`,
+          'TAKEOVER_UNSAFE',
+        )
+      }
+      // Only a fact when the panel really spawned us: then `down` is the command that decides
+      // whether this session outlives the swap.
+      const selfId = this.selfEntryId()
+      const self = selfId === null ? null : live.get(selfId) ?? null
+      if (selfId !== null && (self?.config.persistent ?? false) !== true) {
+        throw new HomeHostedError(
+          `this session runs as the panel's "${selfId}" server and is not persistent, so replacing the panel would stop it: make that entry persistent first, or pass force`,
           'TAKEOVER_UNSAFE',
         )
       }
     }
 
-    return spawnTakeover(deps, runtime.pid)
+    // An installed entry is the only thing that may change the panel's state: `Restart=always`
+    // turns the CLI's `down` into a restart, and a CLI `up` beside an installed entry leaves the
+    // unit reporting `enabled-failing` while a panel answers. Both halves come from the entry
+    // when it offers them, so the helper never races its own mechanism.
+    const stop = await this.bootControl('stop')
+    const start = await this.bootControl('start')
+    const control = stop !== null && start !== null
+      ? { mechanism: stop.mechanism, stop: stop.commands, start: start.commands }
+      : null
+    const result = spawnTakeover(deps, runtime.pid, { control })
+    this.clientCache = null
+    this.tokenProof = null
+    return result
   }
 
   /**

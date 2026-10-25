@@ -272,13 +272,34 @@ log('the autostart entry was told to start the panel')
 `
 }
 
+/**
+ * How the installed entry changes the panel's state, when one offers both halves.
+ *
+ * An entry with a restart policy (`Restart=always`, `KeepAlive`) treats the CLI's `down` as an
+ * unexpected death and revives the panel seconds later, and a CLI `up` beside an installed entry
+ * starts a panel the entry cannot stop — so the unit goes on reporting `enabled-failing` while
+ * one answers. Whoever supervises the panel is who may change its state.
+ */
+export interface TakeoverControl {
+  mechanism: string
+  /** Steps that stop the panel this entry supervises, in order. */
+  stop: string[][]
+  /** Steps that start it again, in order. */
+  start: string[][]
+}
+
 /** The generated helper's source; exported so a test can inspect it. */
-export function buildTakeoverSource(deps: PanelControlDeps, oldPid: number | null, marker = 'managed by dsh-home-hosted'): string {
+export function buildTakeoverSource(deps: PanelControlDeps, oldPid: number | null, control: TakeoverControl | null = null, marker = 'managed by dsh-home-hosted'): string {
   const program = deps.launch?.program ?? process.execPath
   const args = deps.launch === null
     ? []
     : [...deps.launch.args, 'up', '--home', deps.home, ...(deps.projectDir ? ['--project', deps.projectDir] : [])]
   const downArgs = [...(deps.launch?.args ?? []), 'down', '--home', deps.home]
+  // The entry's own steps when it has them, the CLI otherwise. `null` is "nothing installed", not
+  // "fall back silently": the helper logs which path it took, because the two leave the machine
+  // in different states.
+  const stopSteps = control === null ? null : control.stop
+  const startSteps = control === null ? null : control.start
   return `#!/usr/bin/env node
 // ${marker} — replaces the panel; do not edit.
 import fs from 'node:fs'
@@ -290,6 +311,8 @@ const PROGRAM = ${JSON.stringify(program)}
 const ARGS = ${JSON.stringify(args)}
 const ENV = ${JSON.stringify(deps.env)}
 const LOG = ${JSON.stringify(takeoverLogPath(deps.stateDir))}
+const ENTRY_STOP = ${JSON.stringify(stopSteps)}
+const ENTRY_START = ${JSON.stringify(startSteps)}
 
 function log(line) {
   try { fs.appendFileSync(LOG, new Date().toISOString() + ' ' + line + '\\n') } catch {}
@@ -302,38 +325,86 @@ function alive(pid) {
   try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
 }
 
+function runSteps(steps) {
+  for (const step of steps) {
+    log('running ' + step.join(' '))
+    const result = spawnSync(step[0], step.slice(1), { stdio: 'ignore' })
+    log('exited ' + String(result.status ?? result.error))
+    if (result.error || result.status !== 0)
+      return result
+  }
+  return { status: 0 }
+}
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-log('stopping the answering panel: ' + PROGRAM + ' ' + DOWN_ARGS.join(' '))
-const down = spawnSync(PROGRAM, DOWN_ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
-log('down exited ' + String(down.status))
+/**
+ * The stop goes through the entry when one supervises the panel, the CLI otherwise.
+ *
+ * A CLI 'down' under an entry with 'Restart=always' is a death the entry did not cause, so systemd
+ * revives the panel seconds later: the swap races its own mechanism and the unit reports a run
+ * that never started the answering process. Only the entry may stop what it supervises.
+ */
+let stopped = { status: 0 }
+if (ENTRY_STOP === null) {
+  log('stopping the answering panel through the CLI: ' + PROGRAM + ' ' + DOWN_ARGS.join(' '))
+  stopped = spawnSync(PROGRAM, DOWN_ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
+}
+else {
+  log('stopping the answering panel through its autostart entry')
+  stopped = runSteps(ENTRY_STOP)
+  // An entry can be installed and enabled while the answering panel came from somewhere else —
+  // a hand-run 'up', another supervisor. Its stop then returns 0 having stopped nothing, and
+  // starting over a live panel leaves the entry failed while the old one keeps the port. The
+  // CLI's 'down' is the only thing that ends a panel no entry supervises.
+  let waited = 0
+  while (waited < 40 && alive(OLD_PID)) {
+    await sleep(250)
+    waited += 1
+  }
+  if (alive(OLD_PID)) {
+    log('the entry stopped nothing this helper can see, so the answering panel is not the one it supervises; stopping it through the CLI')
+    stopped = spawnSync(PROGRAM, DOWN_ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
+  }
+}
+log('stop exited ' + String(stopped.status))
 
 /**
  * Never signal OLD_PID from here — see the same guard in the activation helper.
  *
- * 'down' is the only thing that may stop the panel, and it escalates for a panel it can prove is
- * alive. This helper has no birth time, so "the pid answers" cannot tell the panel from a stranger
- * that inherited the number; signalling on it SIGTERMs an unrelated process.
- *
- * A takeover of a live panel ends with the panel stopped either way: 'down' stops it, and it
- * escalates itself when the panel ignores SIGTERM. A pid that is still alive after a successful
- * 'down' is therefore not the panel, and the start below must not race it.
+ * The stop is the only thing that may end the panel, and the CLI's own 'down' escalates for a
+ * panel it can prove is alive. This helper has no birth time, so "the pid answers" cannot tell
+ * the panel from a stranger that inherited the number; signalling on it SIGTERMs an unrelated
+ * process. A pid still alive after a successful stop is therefore not the panel.
  */
-for (let i = 0; i < 40 && down.status !== 0 && alive(OLD_PID); i += 1)
+for (let i = 0; i < 40 && stopped.status !== 0 && alive(OLD_PID); i += 1)
   await sleep(250)
 
-if (down.status !== 0 && alive(OLD_PID))
-  log('down did not report success and the recorded pid is still alive; NOT signalling it — it may not be the panel any more')
+if (stopped.status !== 0 && alive(OLD_PID))
+  log('the stop did not report success and the recorded pid is still alive; NOT signalling it — it may not be the panel any more')
 
-log('starting ' + PROGRAM + ' ' + ARGS.join(' '))
-const result = spawnSync(PROGRAM, ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
-log('started with exit ' + String(result.status))
+/**
+ * Start: the entry when there is one, the CLI otherwise.
+ *
+ * An entry whose stop was just run also starts the panel itself, so the start must be asked of it
+ * rather than racing a CLI 'up' against its own restart policy.
+ */
+let started = { status: 0 }
+if (ENTRY_START === null) {
+  log('starting through the CLI: ' + PROGRAM + ' ' + ARGS.join(' '))
+  started = spawnSync(PROGRAM, ARGS, { env: { ...process.env, ...ENV }, stdio: 'ignore' })
+}
+else {
+  log('starting through its autostart entry')
+  started = runSteps(ENTRY_START)
+}
+log('started with exit ' + String(started.status))
 `
 }
 
-export function writeTakeoverHelper(deps: PanelControlDeps, oldPid: number | null): string {
+export function writeTakeoverHelper(deps: PanelControlDeps, oldPid: number | null, control: TakeoverControl | null = null): string {
   const file = takeoverHelperPath(deps.stateDir)
-  writeFileAtomic(file, buildTakeoverSource(deps, oldPid), 0o755)
+  writeFileAtomic(file, buildTakeoverSource(deps, oldPid, control), 0o755)
   fs.chmodSync(file, 0o755)
   return file
 }
@@ -381,8 +452,14 @@ function spawnDetached(program: string, args: string[]): ChildProcess {
  * Spawn the helper detached and return immediately: the old panel's shutdown is
  * about to stop this very process, so waiting for the result would lose it.
  */
-export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, spawnChild: SpawnDetached = spawnDetached): PanelControlResult {
-  const helper = writeTakeoverHelper(deps, oldPid)
+export interface TakeoverOptions {
+  /** The installed entry's own stop and start; null when nothing supervises the panel. */
+  control?: TakeoverControl | null
+}
+
+export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, options: TakeoverOptions = {}, spawnChild: SpawnDetached = spawnDetached): PanelControlResult {
+  const control = options.control ?? null
+  const helper = writeTakeoverHelper(deps, oldPid, control)
   let child: ChildProcess
   try {
     child = spawnChild(process.execPath, [helper])
@@ -396,7 +473,9 @@ export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, spa
   child.unref()
   return {
     ok: true,
-    detail: 'replacing the panel now; the page shows the panel again under the preferred copy once it answers',
+    detail: control === null
+      ? 'replacing the panel now; the page shows the panel again under the preferred copy once it answers'
+      : `replacing the panel through its ${control.mechanism} entry now; the page shows it again once it answers`,
   }
 }
 

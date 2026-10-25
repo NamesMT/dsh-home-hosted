@@ -182,6 +182,116 @@ describe('panel control', () => {
     expect(source).toContain('"down"')
   })
 
+  /**
+   * The helper stops and starts through the installed entry when one supervises the panel.
+   *
+   * Everything else about a replacement is identical either way — the same detached helper,
+   * the same old pid — but under `Restart=always` a CLI `down` is an unexpected death: systemd
+   * revives the panel behind the swap, so the unit reports a failed run while a panel answers,
+   * and it keeps reporting it. Only the entry may stop what it supervises.
+   */
+  it('carries the entry\'s own stop and start when a mechanism supervises the panel', () => {
+    const { deps: d } = deps()
+    const source = buildTakeoverSource(d, 4242, {
+      mechanism: 'systemd-user',
+      stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+      start: [['systemctl', '--user', 'start', 'home-hosted.service']],
+    })
+    expect(source).toContain('const ENTRY_STOP = [["systemctl"')
+    expect(source).toContain('systemctl')
+    expect(source).toContain('home-hosted.service')
+    // The CLI's stop stays in the file as the no-entry branch, and the helper must not
+    // reach it while ENTRY_STOP is set.
+    expect(source).toContain('ENTRY_STOP === null')
+  })
+
+  it('falls back to the CLI stop and start when nothing is installed', () => {
+    const { deps: d } = deps()
+    const source = buildTakeoverSource(d, 4242)
+    expect(source).toContain('const ENTRY_STOP = null')
+    expect(source).toContain('const ENTRY_START = null')
+    expect(source).toContain('DOWN_ARGS')
+  })
+
+  /**
+   * Driven, not just inspected: the helper is a script, and a string assertion cannot show that
+   * the entry branch is the one that runs. A fake `systemctl` on PATH records its argv, and the
+   * CLI is a script that would leave a marker — so "the entry ran and the CLI did not" is a fact
+   * about what executed, not about what the source says.
+   */
+  it('runs the entry steps, and never the CLI, when a mechanism supervises the panel', async () => {
+    const { deps: d, log } = deps()
+    const bin = path.join(d.stateDir, 'fake-bin')
+    fs.mkdirSync(bin, { recursive: true })
+    const calls: string[] = []
+    const recorder = path.join(bin, 'systemctl')
+    fs.writeFileSync(recorder, `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(d.stateDir, 'calls.txt'))}\n`, { mode: 0o755 })
+    const cliMarker = path.join(d.stateDir, 'cli-ran.txt')
+    d.launch = { program: process.execPath, args: [path.join(bin, 'fake-cli.mjs')] } as never
+    fs.writeFileSync(path.join(bin, 'fake-cli.mjs'), `#!/usr/bin/env node\nimport fs from 'node:fs'\nfs.writeFileSync(${JSON.stringify(cliMarker)}, 'ran')\n`)
+
+    const helper = writeTakeoverHelper(d, null, {
+      mechanism: 'systemd-user',
+      stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+      start: [['systemctl', '--user', 'start', 'home-hosted.service']],
+    })
+    const { spawnSync } = await import('node:child_process')
+    const run = spawnSync(process.execPath, [helper], {
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+      encoding: 'utf8',
+    })
+    expect(run.status, run.stderr).toBe(0)
+
+    const helperLog = path.join(d.stateDir, 'bin', 'panel-takeover.log')
+    const text = fs.readFileSync(helperLog, 'utf8')
+    // The CLI's own `down`/`up` never ran: under `Restart=always` they race the unit.
+    expect(fs.existsSync(cliMarker)).toBe(false)
+    expect(text).toContain('through its autostart entry')
+    expect(text).toContain('stopping the answering panel through its autostart entry')
+    expect(text).toContain('starting through its autostart entry')
+    void log
+  })
+
+  /**
+   * An entry can be installed and enabled while the answering panel came from somewhere else.
+   *
+   * Then its stop returns 0 having stopped nothing, and a start over the live panel leaves the
+   * entry failed while the old panel keeps the port — the same `enabled-failing` symptom, reached
+   * from the other side. The helper has to notice and fall back to the CLI's `down`.
+   */
+  it('falls back to the CLI stop when the entry stops nothing and the panel is still there', async () => {
+    const { deps: d } = deps()
+    const bin = path.join(d.stateDir, 'fake-bin')
+    fs.mkdirSync(bin, { recursive: true })
+    // A `systemctl` that succeeds without stopping anything, as a unit does for a panel it did
+    // not start. The CLI script records that it ran.
+    fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const cliMarker = path.join(d.stateDir, 'cli-ran.txt')
+    const cli = path.join(bin, 'fake-cli.mjs')
+    fs.writeFileSync(cli, `#!/usr/bin/env node\nimport fs from 'node:fs'\nfs.appendFileSync(${JSON.stringify(cliMarker)}, process.argv.slice(2).join(' ') + '\\n')\n`)
+    d.launch = { program: process.execPath, args: [cli] } as never
+
+    // A pid that stays alive for the whole wait: this process, which the helper must never signal.
+    const helper = writeTakeoverHelper(d, process.pid, {
+      mechanism: 'systemd-user',
+      stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+      start: [['systemctl', '--user', 'start', 'home-hosted.service']],
+    })
+    const { spawnSync } = await import('node:child_process')
+    const run = spawnSync(process.execPath, [helper], {
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+    expect(run.status, run.stderr).toBe(0)
+
+    const helperLog = path.join(d.stateDir, 'bin', 'panel-takeover.log')
+    const text = fs.readFileSync(helperLog, 'utf8')
+    expect(text).toContain('the answering panel is not the one it supervises')
+    // The CLI ran the `down`, and only as the fallback.
+    expect(fs.readFileSync(cliMarker, 'utf8')).toContain('down')
+  })
+
   it('writes the helper executable', () => {
     const { deps: d } = deps()
     const file = writeTakeoverHelper(d, null)
@@ -217,7 +327,7 @@ describe('panel control', () => {
     const fake = new EventEmitter()
     ;(fake as unknown as { unref: () => void }).unref = () => {}
 
-    const result = spawnTakeover(d, null, (() => fake as never))
+    const result = spawnTakeover(d, null, {}, (() => fake as never))
     expect(result.ok).toBe(true)
     // A detached child reports a failed start asynchronously; without a listener
     // that 'error' event is thrown and ends the host process.
@@ -226,7 +336,7 @@ describe('panel control', () => {
 
   it('reports a helper that could not be spawned at all', () => {
     const { deps: d } = deps()
-    const result = spawnTakeover(d, null, (() => { throw new Error('EPERM') }))
+    const result = spawnTakeover(d, null, {}, (() => { throw new Error('EPERM') }))
     expect(result.ok).toBe(false)
     expect(result.detail).toContain('EPERM')
   })

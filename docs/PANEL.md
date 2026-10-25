@@ -239,9 +239,29 @@ CLI's `down` finishes the job.
 `panel.takeover` replaces an answering panel with the preferred copy. Stopping the old panel also stops
 the non-persistent servers it supervises — this dsh only if it is one, which an entry this plugin
 manages is not: it is written `persistent: true`, so it survives the panel and the session stays up.
-The guard still refuses unless this session is an adopted entry with `autostart: true`, because a
-non-persistent entry would have nothing to bring it back. A detached helper does the work and logs to
-`bin/panel-takeover.log`.
+A detached helper does the work and logs to `bin/panel-takeover.log`.
+
+**The guard has two questions, and they are not the same one.** *Would a panel come back?* Only an
+`autostart` entry starts one, and the entry that does it is the **managed** one — so that is what is
+asked. It used to ask `selfEntryId()` instead, i.e. whether the *answering* panel had spawned this
+process, which refused every replacement of a panel started by anything else (a hand-run `up`, a
+distro unit, another supervisor) — the exact case the button exists for. *Would this session survive?*
+`down` stops every non-persistent server, so a session the panel spawned without `persistent` would
+not be there to see the new panel; that is only a fact when the panel really spawned us, which is
+where `selfEntryId()` belongs.
+
+**It stops and starts through the installed entry, never the CLI.** `Restart=always` and `KeepAlive`
+treat the CLI's `down` as a death the entry did not cause, so the panel comes back behind the swap —
+and the CLI's `up` then starts one the entry does not supervise. The unit's own run never started the
+answering process, so it reports `enabled-failing` while a panel is healthy, and keeps reporting it.
+`bootControl('stop')` and `bootControl('start')` supply the steps and the helper carries them.
+
+**An installed entry can still be supervising nothing.** If the panel was started by something else —
+a hand-run `up`, a distro unit, another supervisor — the entry's stop returns 0 having stopped
+nothing, because there is nothing it started to stop. The helper therefore waits for the recorded pid
+to go, and falls back to the CLI's `down` when it does not: starting over a live panel is what leaves
+the entry failed while the old process keeps the port. The CLI remains the path when nothing is
+installed, and now also when what is installed does not own the process.
 
 `panel.start`, `panel.takeover` and `cli.installGlobal` answer a *successful* envelope whose payload
 can still carry `ok: false` — the page reads the payload's `detail`/`output` rather than trusting

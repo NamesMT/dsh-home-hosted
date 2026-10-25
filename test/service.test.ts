@@ -15,6 +15,7 @@ import { canonicalPath } from '../src/home-hosted/instances.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
 import type { BootLadderLike, BootInstallResult } from '../src/service.js'
+import { takeoverHelperPath } from '../src/home-hosted/panel-control.js'
 import type { ActivationPlan } from '../src/home-hosted/panel-control.js'
 import type { BootActivation, BootSpec } from '../src/boot/types.js'
 import type { PanelControlResult } from '../src/shared/contracts.js'
@@ -1031,11 +1032,41 @@ describe('panel lifecycle from the page', () => {
     expect(result.detail).toContain('already answering')
   })
 
-  it('refuses to replace a panel that would not bring this session back', async () => {
+  it('refuses to replace a panel when no adopted entry would start one again', async () => {
     const panel = await withPanel()
     const { service } = await harness({ panel })
-    // The stub panel answers, its version differs from the CLI's, and no adopted
-    // autostart entry exists for this process — so a takeover must be refused.
+    // The stub panel answers and its version differs from the CLI's, but no `dsh`
+    // entry is adopted with autostart — so nothing would bring a panel back.
+    await expect(service.takeoverPanel()).rejects.toMatchObject({ code: 'TAKEOVER_UNSAFE' })
+  })
+
+  /**
+   * The guard asks about the *managed entry*, not about who spawned this process.
+   *
+   * It used to require `selfEntryId()`, so a panel started by anything other than itself — a
+   * hand-run `up`, a distro unit, another supervisor — refused every replacement with
+   * `TAKEOVER_UNSAFE`. That is precisely the case the button exists for: two copies disagreeing.
+   */
+  it('replaces a panel it did not spawn, as long as the adopted entry has autostart', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    // Adopted with autostart, and this process is *not* one of the panel's servers:
+    // the panel answers, so its own server list is what `liveEntries()` reads.
+    panel.servers.push({ id: 'dsh', config: { id: 'dsh', command: 'dsh', autostart: true, persistent: true } })
+    delete process.env.HHOSTED_SERVER_ID
+
+    const result = await service.takeoverPanel()
+    expect(result.ok).toBe(true)
+    expect(result.detail).toMatch(/replacing the panel/i)
+  })
+
+  it('still refuses when this session runs as a non-persistent entry of that panel', async () => {
+    const panel = await withPanel()
+    const { service } = await harness({ panel })
+    panel.servers.push({ id: 'dsh', config: { id: 'dsh', autostart: true, persistent: false } })
+    process.env.HHOSTED_SERVER_ID = 'dsh'
+    // `down` stops every non-persistent entry, so this session would not survive to
+    // see the swap finish — a different question from "is an entry adopted".
     await expect(service.takeoverPanel()).rejects.toMatchObject({ code: 'TAKEOVER_UNSAFE' })
   })
 
@@ -1111,6 +1142,40 @@ describe('panel start and stop go through the installed entry', () => {
     start: [['systemctl', '--user', 'start', 'home-hosted.service']],
     stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
   }
+
+  /**
+   * A replacement is the same rule as `panel.start`/`panel.stop`: whoever supervises the panel
+   * may change its state.
+   *
+   * The helper used to stop and start through the CLI whatever was installed, so under a unit
+   * with `Restart=always` the `down` read as an unexpected death and the panel came back behind
+   * the swap — leaving the unit reporting a run that never started the process now answering.
+   * That is the `enabled, failing` state, and it outlives every later start.
+   */
+  it('replaces a supervised panel through its entry, never through the CLI', async () => {
+    const panel = await withPanel()
+    const { service, state } = await harness({
+      panel,
+      ladder: entryLadder('systemd-user', {
+        start: [['systemctl', '--user', 'start', 'home-hosted.service']],
+        stop: [['systemctl', '--user', 'stop', 'home-hosted.service']],
+      }),
+    })
+    panel.servers.push({ id: 'dsh', config: { id: 'dsh', command: 'dsh', autostart: true, persistent: true } })
+
+    const result = await service.takeoverPanel()
+    expect(result.ok).toBe(true)
+    // The detail names the mechanism, so the page says what actually happened.
+    expect(result.detail).toContain('systemd-user')
+
+    // The generated helper is what runs after this process may be gone: it must carry the
+    // entry's own stop and start, and no CLI `down` that the unit would revive.
+    const source = fs.readFileSync(takeoverHelperPath(state), 'utf8')
+    expect(source).toContain('systemctl')
+    expect(source).toContain('home-hosted.service')
+    expect(source).toContain('ENTRY_STOP')
+    expect(source).toContain('ENTRY_START')
+  })
 
   it('stops a supervised panel through systemctl, never the CLI down that the unit would undo', async () => {
     const panel = await withPanel()
