@@ -137,9 +137,10 @@ subcommand and flag this plugin drives are unchanged. The `^migrating ` anchor m
 source line only. Two upstream changes were adopted here rather than merely noted: the state-file
 reader now tolerates the byte-order mark a Windows editor writes (upstream `readStateFile`), since
 the two read the same files and disagreeing reported a healthy config as unparseable; and
-`installedUiRecordFile` now names `.hh/.ui/ui.json`, where every release since 0.7 writes it — the
-plugin had read `<root>/.ui/ui.json`, one directory above `.hh`, so a custom UI reported as the
-stock one and nothing failed.
+`installedUiRecordFile` now names `.hh/.ui/ui.json`, where every release since 0.7 writes it. That
+was a pre-existing bug rather than a 0.10 change — the plugin had read `<root>/.ui/ui.json`, one
+directory above `.hh`, so a custom UI reported as the stock one and nothing failed — but it was
+found while checking this bump, and a stale path is exactly what a bump is supposed to re-check.
 
 `0.10.1` also added `down --with-persistent`, `restart --with-persistent` and `free-port`; none is
 needed here. `panel.stop` runs `down`, and the entry this plugin writes is `persistent`, which is

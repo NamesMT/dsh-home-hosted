@@ -23,6 +23,17 @@ plugin publishes neither: it scrapes no metrics and drives no auth operation ove
 else is additive and read as a value, never as a key being present. See
 [PANEL](../docs/PANEL.md#which-home-hosted-runs) for the surfaces checked.
 
+**One pin bump here is a fix, not a formality: 0.9.10 stopped a bare Windows command resolving to a
+POSIX shim.** `providers/process.ts` tried the extension-less `foo` first, then `.cmd`/`.exe`/… — and
+in `node_modules/.bin` the extension-less `foo` is the `#!/bin/sh` script npm and pnpm write. Node
+cannot spawn it, so the entry started nothing and the panel blamed a missing program. That is
+exactly how this plugin writes its headline entry: a bare `dsh` with `cwd` set so the panel resolves
+it through the project's `node_modules/.bin` (AGENTS.md, *the `dsh` entry stays a bare `dsh`*). On
+Windows, 0.9.0–0.9.9 therefore could not start that entry at all. From 0.9.10 the shim list is
+`['.exe', '.cmd', '.bat', '.ps1']` with the bare name dropped. The floor does not move — Linux and
+macOS were never affected, and a floor is about what this plugin cannot drive at all — but a Windows
+operator on 0.9.x should be told to update rather than left to read a spurious ENOENT.
+
 ### The schema stamp
 
 **A file this plugin creates carries `meta.schema`, read from the pinned release** (`panel-schema.ts`
