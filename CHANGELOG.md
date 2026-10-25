@@ -1,6 +1,23 @@
 # Changelog
 
 
+## v0.9.6
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.5...v0.9.6)
+
+### 🩹 Fixes
+
+- Read the state files the panel reads, and the UI record where it writes it ([297f051](https://github.com/NamesMT/dsh-home-hosted/commit/297f051))
+
+### 📖 Documentation
+
+- Record the 0.10.2 bump and correct a route count that was already wrong ([67dc1c8](https://github.com/NamesMT/dsh-home-hosted/commit/67dc1c8))
+- Say why this bump is a fix on Windows, and where the .ui bug came from ([1c1fdc1](https://github.com/NamesMT/dsh-home-hosted/commit/1c1fdc1))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.5
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.4...v0.9.5)
