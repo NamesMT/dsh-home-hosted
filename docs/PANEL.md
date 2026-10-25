@@ -142,6 +142,16 @@ was a pre-existing bug rather than a 0.10 change — the plugin had read `<root>
 directory above `.hh`, so a custom UI reported as the stock one and nothing failed — but it was
 found while checking this bump, and a stale path is exactly what a bump is supposed to re-check.
 
+**0.10.3 is one WSL fix, in a surface this plugin never touches.** It stops the temperature helper's
+installer from reporting LibreHardwareMonitor as missing after putting it in `%ProgramData%` (the old
+check looked in a hardcoded `C:\Tools`), and adds an optional `needsDownload` field so no click
+downloads a third-party binary it did not mention. Only four source files changed, all of them the
+temperature surface (`api/wsl-temperature`, `providers/wsl-temperature`, its client helper and its
+schema); this plugin reads no host-vitals route, so nothing here needs adapting. Checked by use: no
+CLI file changed, `migrate` is byte-identical (the `^migrating ` anchor and the `--dry-run` line both
+unmoved), and `CONFIG_SCHEMA` is still 2 with the same single 1→2 step. The one contract change is
+additive — an optional `needsDownload` on `wslTemperatureSchema` — read as a value by nobody here.
+
 `0.10.1` also added `down --with-persistent`, `restart --with-persistent` and `free-port`; none is
 needed here. `panel.stop` runs `down`, and the entry this plugin writes is `persistent`, which is
 exactly the thing `down` leaves running by default and what this plugin wants — passing the flag

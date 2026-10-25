@@ -38,7 +38,7 @@ its page.
 `onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13) and the nullable-`label`
 patch (0.7.21) all predate the release this plugin pins. The plugin used to consult the answering
 panel's version and refuse or drop those keys (`KILL_UNSUPPORTED`), and later to retry a `restart` as a
-stop-then-start pair. Both are gone: it pins `home-hosted@^0.10.x` — 0.10.2 at the time of writing —
+stop-then-start pair. Both are gone: it pins `home-hosted@^0.10.x` — 0.10.3 at the time of writing —
 which refuses an older panel outright, so neither check could ever fire again.
 
 An old state root is upgraded by running the latest 0.7.x **once, before installing 0.8** — its first

@@ -10,17 +10,18 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 range. The page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one
 alone makes it recommend a range the plugin is not built against.
 
-The pin is `^0.10.2`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
+The pin is `^0.10.3`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
 **and** made an unstamped file read as schema 1, so a config this plugin created without a stamp is
 refused by 0.9 ("config schema 1 needs 1 migration") while a schema-2 stamp is refused by 0.8 as a
 newer release's file. No stamp satisfies both gates, so a 0.8.x panel is not a lesser-supported copy —
 it is one this plugin cannot drive, and the floor moved with the pin.
 
-The pin moved to 0.10.2 without the floor moving. 0.10.0 is a semver **minor** because it changes two
-things outside the config — two `/api/metrics` series are renamed, and clearing the password,
+The pin tracks the 0.10 line without the floor moving. 0.10.0 is a semver **minor** because it changes
+two things outside the config — two `/api/metrics` series are renamed, and clearing the password,
 switching auth off or restoring `global:secrets` now needs a session rather than a token — and this
-plugin publishes neither: it scrapes no metrics and drives no auth operation over `/api`. Everything
-else is additive and read as a value, never as a key being present. See
+plugin publishes neither: it scrapes no metrics and drives no auth operation over `/api`. Every later
+0.10.x is additive and read as a value, never as a key being present (0.10.3 adds one optional field to
+a WSL-temperature schema this plugin never reads). See
 [PANEL](../docs/PANEL.md#which-home-hosted-runs) for the surfaces checked.
 
 **One pin bump here is a fix, not a formality: 0.9.10 stopped a bare Windows command resolving to a
@@ -58,7 +59,7 @@ policy, never the steps.
 
 **The decision is the panel's answer, not its failure text.** `migrate --dry-run` prints
 ``migrating <label>: config schema A → B`` at column 0 per file; `^migrating ` is the discriminator,
-and it is byte-identical from 0.9.0 through 0.10.2. Branching on `refusing to start: config schema 1
+and it is byte-identical from 0.9.0 through 0.10.3. Branching on `refusing to start: config schema 1
 needs 1 migration` instead would be a branch on wording, and the exit code cannot stand in for it:
 pending-with-`--dry-run` and nothing-to-do both exit 0. `test/panel-migrate` reads the pinned release's
 own `migrate` module from the sourcemap and fails if that line's shape moves — an unanchored match
