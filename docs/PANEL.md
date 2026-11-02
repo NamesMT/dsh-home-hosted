@@ -24,66 +24,19 @@ this plugin names: a path under `.hh`, `CONFIG_SCHEMA`, `serverSchema`, `/api/se
 subcommand. Check that by **use**, not by filename: a file appearing in a diff cannot show that a
 change reaches us, and the two disagree as soon as a comment lands in a schema file.
 
-**0.7.18 and 0.7.19 did move one, and no filename showed it.** Upstream `applyPatch` now deletes a
-top-level key set to `null` (`1f58a5d`), where it used to write it through; `serverSchema.label` also
-began to admit `null` (`45d689e`). This plugin keeps its own copy of that function for the file
-fallback, and the copies had drifted — the nested branch deleted, the top-level branch wrote the
-`null` — so a top-level `null` that the panel deletes would have been stored, producing a config it
-refuses to boot (`servers[0] ("smoke"): cwd must be a string (was null)`). One `applyPatchFields` now
-serves both paths, and the refusal a `null` group gets is one rule `src/service.ts` reads too.
+Two surfaces here are copies of the panel's own semantics, and a bump can silently split them: the
+`applyPatch` fallback and the nullable-`patch` set. Both are read from the pinned release rather than
+hand-listed, so a divergence fails a test instead of arriving as a bug. The reasoning is in
+`COMPATIBILITY.md` under "Copies of the panel's own semantics", in the repo's `.agentDocs/`.
 
-No shipped caller could reach the harmful case, and saying so is part of the finding: the agent tool
-layer validates `patch` against the panel's own field types, so only `port` and `bootstrap` can carry
-a `null` at all — exactly the two whose schema is `… | null` — while the page emits `port` alone. The
-drift was real but latent; it is fixed because a copy of the panel's function is a fork of its
-semantics, and the next field to allow `null` would have made it reachable.
+**Upgrading from 0.7 or earlier? Run the latest 0.7.x once first** — that release moves the state into
+`.hh/` — then install 0.8 or later, which refuses an old root rather than reading it as an empty panel.
 
-**0.7.20 is one fix, and it found a live bug here.** It teaches that a pid is not an identity: the OS
-recycles pids and a zombie still answers signal 0, so the panel's `up`/`status`/`down` now decide with
-the pid *plus* `run.json`'s `startedAt`, and `down` refuses to signal a pid it cannot prove is the
-panel. This plugin's two generated hand-over helpers had re-derived the weak predicate and escalated
-`SIGTERM`→`SIGKILL` on "the pid answers" — **measured** by running the generated script against a live
-`sleep` holding the recorded pid, and watching the stranger's own `SIGTERM` handler fire. A takeover
-could therefore kill an unrelated process. Both helpers now leave every signal to the CLI's own `down`,
-which is the only component that can prove identity; what they kept is a wait, never a signal.
-
-Verified against a real 0.7.20 panel and its own CLI: `PATCH {port:null}` deletes the key; only `port`
-and `bootstrap` have a schema that admits `null`; `_hh` is still exactly four routes; and every route,
-subcommand and flag this plugin drives is unchanged. The console **file** — `.hh/.logs/home-hosted.log`
-plus its `.1`, and the 5 MB rotation — is unchanged too, and this plugin's reader still matches
-`home-hosted logs` line for line.
-
-**0.8.0 stopped relocating an old state root, and this plugin follows it.** A 0.6.x root used to be
-moved into `.hh/` on 0.7's first run; 0.8 refuses it instead, before any command resolves a path into
-it, so a config at the old paths is never read as an empty panel. **Upgrading from 0.7 or earlier? Run
-the latest 0.7.x once first — that release moves the state — then install 0.8.** That removed the last
-version-conditional code here: a stop-then-start fallback for a panel without `restart <id>`, and
-`panel.migrate`, whose CLI no longer performs the move.
-
-**0.9.0 raised the config schema to 2, and it changed what an unstamped file means.** Schema 2 folds
-the Telegram singleton and the webhook list into one `notifications.destinations` list. The part that
-bites here is the stamp: a file with no `meta.schema` is read as the **oldest** shape, so 0.9's `up`
-refuses to start it — `config schema 1 needs 1 migration`. This plugin writes workspace configs
-directly whenever the panel does not answer, and it used to stamp them with `meta.writtenBy` alone, so
-a config it created before any panel had run was unstartable on 0.9. It now stamps `meta.schema` on
-every file it **creates**, reading the number from the pinned release rather than hard-coding it — a
-fixed `2` would break again at the next bump, from the other side.
-
-An existing file that does not already declare **the** schema the pinned panel reads is refused, in
-both directions: below it needs `home-hosted migrate`, above it was written by a newer home-hosted
-than this plugin pins. Stamping over either would claim a migration that never ran — measured, a
-schema-2 stamp over an old `notifications.telegram` block makes 0.9 report the key as unrecognized and
-ignore it, so the person's notifications end up silently off — and writing on regardless would leave
-this plugin editing a panel that cannot boot while every call reports success. Lifting or downgrading
-a config is `home-hosted migrate`'s job, and the refusal names the remedy for the direction it found.
-
-The page says so **before** a write is attempted: a config the panel cannot boot is reported as the
-panel's error, so the root is not shown as healthy until the first call fails. The entries are still
-listed — the file is readable, it is only un-bootable — so nothing looks lost while you migrate it.
-
-The floor is `0.9.0` for the same reason the pin is: a 0.8.x panel reads a schema-2 stamp as a *newer*
-release's file and refuses that in turn, so no stamp satisfies both and there is no version-conditional
-path. A 0.8.x panel is not a lesser-supported copy — it is one this plugin cannot drive.
+A file that does not declare **the** schema the pinned panel reads is refused in both directions:
+below it needs `home-hosted migrate`, above it came from a newer release. Stamping over either would
+claim a migration that never ran, so lifting a config is always the panel's own job. The page reports
+an un-bootable config as the panel's error before a write is attempted, and still lists the entries —
+the file is readable, it is only un-bootable.
 
 ### Upgrading an existing state root
 
@@ -110,79 +63,26 @@ it, exactly as above. The same applies when the panel refuses for a reason `migr
 from a *newer* release, an unreadable config): the start's own error is what you get, with the migration's
 refusal appended.
 
-**0.7.21 widens that nullable set by one field, and it closed a bug here.** Clearing a server's label
-sent an empty string, which the panel accepts and saves — so the entry kept a blank label instead of
-falling back to its id, and nothing reported a failure. Only `null` clears the key, and 0.7.21 is the
-release that let the *patch* schema carry one for `label`; before it, that request was refused with
-`label must be a string (was null)`. The editor now sends `null`, and the parity guard reads the
-nullable fields from the pinned release instead of a list that went stale at exactly this bump. The
-release's other five fixes — proxy pid identity, a duplicate liveness predicate, a removed entry
-recreating its own log, an unflushed log batch, a Windows test skip — touch nothing this plugin names:
-no `.proxy/proxy.json`, `ProxyService`, `terminatePid`, or `DELETE /api/logs`, and `serverSchema`,
-`CONFIG_SCHEMA`, `/_hh` and the CLI are unchanged.
+**A pin bump is checked by use, not by filename.** A release can move something this plugin names
+without any file in its diff saying so, so each bump re-derives the surfaces from the published
+sourcemap: `serverSchema` and `editableFields`, the merge keys, the patch schemas, the view
+schemas, and every CLI subcommand and flag driven here.
 
-**0.10.2 is a semver minor with two changes outside the config, and neither reaches this plugin.**
-Two `/api/metrics` series were renamed (`hh_server_restarts_total` → `hh_server_restarts`,
-`hh_servers_total` → `hh_servers`); this plugin scrapes no metrics. Clearing the panel password,
-switching authentication off, and restoring an archive carrying `global:secrets` each now answer
-`403 SESSION_REQUIRED` unless the caller signed in; this plugin calls none of the three, and its own
-credential work is `set-token`, which still takes a token on the local channel. `CONFIG_SCHEMA` is
-still 2 with the same single 1→2 step, so no config this plugin wrote needs lifting, and `0.9.x`
-panels keep booting the files it writes.
+Two panel behaviours are visible on this page, so they are worth naming:
 
-Checked by use against the published sourcemaps of 0.9.7 and 0.10.2: `serverSchema` (still 25
-fields) and `editableFields` (still 24), the merge keys (`restart`/`health`/`stop`, `auth`/`tls`),
-`controlPatchSchema`, `settingsPatchSchema`, the workspace and server-view schemas, and every CLI
-subcommand and flag this plugin drives are unchanged. The `^migrating ` anchor moved
-source line only. Two upstream changes were adopted here rather than merely noted: the state-file
-reader now tolerates the byte-order mark a Windows editor writes (upstream `readStateFile`), since
-the two read the same files and disagreeing reported a healthy config as unparseable; and
-`installedUiRecordFile` now names `.hh/.ui/ui.json`, where every release since 0.7 writes it. That
-was a pre-existing bug rather than a 0.10 change — the plugin had read `<root>/.ui/ui.json`, one
-directory above `.hh`, so a custom UI reported as the stock one and nothing failed — but it was
-found while checking this bump, and a stale path is exactly what a bump is supposed to re-check.
+- **A crashed server answers `/healthz` with 503**, not only an `autostart` one. `probePanel` asks
+  whether the panel answered at all, so this changes no verdict here.
+- **An entry the panel gave up on reads "Stopped by the panel"** on a warn tone, while an
+  operator's own stop stays a plain `stopped`. Both are `stopped`; the optional `stoppedByPanel`
+  flag tells them apart, so an older panel renders the plain chip.
 
-**0.10.3 is one WSL fix, in a surface this plugin never touches.** It stops the temperature helper's
-installer from reporting LibreHardwareMonitor as missing after putting it in `%ProgramData%` (the old
-check looked in a hardcoded `C:\Tools`), and adds an optional `needsDownload` field so no click
-downloads a third-party binary it did not mention. Only four source files changed, all of them the
-temperature surface (`api/wsl-temperature`, `providers/wsl-temperature`, its client helper and its
-schema); this plugin reads no host-vitals route, so nothing here needs adapting. Checked by use: no
-CLI file changed, `migrate` is byte-identical (the `^migrating ` anchor and the `--dry-run` line both
-unmoved), and `CONFIG_SCHEMA` is still 2 with the same single 1→2 step. The one contract change is
-additive — an optional `needsDownload` on `wslTemperatureSchema` — read as a value by nobody here.
-
-`0.10.1` also added `down --with-persistent`, `restart --with-persistent` and `free-port`; none is
-needed here. `panel.stop` runs `down`, and the entry this plugin writes is `persistent`, which is
-exactly the thing `down` leaves running by default and what this plugin wants — passing the flag
-would stop the dsh serving the page.
-
-**0.9.4 also needs no adaptation, and that was checked by use.** It adds no command and no required
-field: `PUT /api/servers/:id`, `POST /api/servers/orphans/:id/stop`, presets and restore reporting are
-new routes and UI, none of which this plugin calls; `stoppedByPanel`, `orphans`, `healthRestarts` and
-the action-result `code` are new *optional* fields. `serverSchema`, `editableFields`, the merge keys,
-`CONFIG_SCHEMA` (still 2), the four lifecycle `/_hh` routes and every CLI subcommand and flag are
-unchanged, so the pin moved and the floor did not. Verified by diffing the published sourcemaps of 0.9.2 and 0.9.4
-(34 changed files) and by driving a real 0.9.4 panel: this plugin's client lists, creates, patches,
-starts, stops and deletes an entry, and reads workspaces and settings, exactly as on 0.9.2.
-
-Two 0.9.4 behaviour changes reach the page. `/healthz` now answers 503 for **any** crashed server
-rather than only an `autostart` one — measured, and harmless here because `probePanel` asks whether
-the panel answered at all, not whether it said 200.
-
-And the supervisor bounds health force-restarts and then **stops** the entry, reporting `stopped` with
-`stoppedByPanel: true`. Both that and a deliberate stop are `stopped`, so the status chip tells them
-apart by the flag: an entry the panel gave up on reads **"Stopped by the panel"** on a warn tone, and
-an operator's stop stays a plain `stopped`. The field is optional, so a 0.9.2 panel still renders the
-plain chip.
-
-That copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next install
-and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly when it
-matters. So the entry runs a generated launcher in the plugin state dir (`bin/home-hosted.mjs`,
-rewritten every start). At boot the launcher finds the pinned copy again — recorded path, then
-`$DSH_HOME/profiles/*` node_modules (flat or pnpm), then PATH — and forwards its argv, so the entry
-survives plugin upgrades and profile reinstalls. The plugin preflights the launcher the way the unit
-invokes it and shows the version it answers.
+The pinned copy resolves to a pnpm path carrying a version and a peer hash, which moves on the next
+install and disappears when the profile is rebuilt. A boot entry that baked it in would fail exactly
+when it matters. So the entry runs a generated launcher in the plugin state dir
+(`bin/home-hosted.mjs`, rewritten every start). At boot the launcher finds the pinned copy again —
+recorded path, then `$DSH_HOME/profiles/*` node_modules (flat or pnpm), then PATH — and forwards its
+argv, so the entry survives plugin upgrades and profile reinstalls. The plugin preflights the launcher
+the way the unit invokes it and shows the version it answers.
 
 ## One panel root per state root
 
@@ -210,41 +110,53 @@ over. `authNotice` turns it off; `{url}` is read per 401.
 
 ## Starting and stopping the panel
 
-`panel.start` and `panel.stop` ask the *installed* autostart entry first, and fall back to the CLI's
-`up`/`down` only when nothing supervises the panel. That fallback is the out-of-the-box path: with no
-entry, the CLI is the only thing that can start one.
+`panel.start` and `panel.stop` ask the *installed* autostart entry first. They fall back to the CLI's
+`up`/`down` only when nothing supervises the panel — the out-of-the-box path, where the CLI is the
+only thing that can start one.
 
-It cannot be the other way round. An entry that carries a restart policy — `Restart=always` for
-systemd, `KeepAlive` for launchd — reads the CLI's `down` as an unexpected death and starts the panel
-again seconds later, so "Stop the panel" came back on its own: a stop the page reported and the machine
-did not honour. The mirror is just as wrong: a CLI `up` starts a panel *outside* the entry, which then
-cannot be stopped or observed by it either. Whoever supervises the panel is who may change its state.
+**Whoever supervises the panel is who may change its state.** An entry with a restart policy reads a
+CLI `down` as an unexpected death and starts the panel again seconds later, so "Stop the panel" comes
+back on its own. The mirror is just as wrong: a CLI `up` starts a panel the entry cannot then stop or
+observe.
 
-So an installed `systemd-user`/`systemd-system` entry answers with `systemctl start|restart` and
-`stop`, and a `launchd-agent`/`launchd-daemon` with `kickstart`/`kickstart -k` and `kill`. The verb
-follows the entry's own state, read before acting: `start` when the unit is not running, `restart`
-when it is — the Start button appears when `/healthz` is silent, and a wedged panel is still active,
-where a plain start would be a no-op. Probing matters, because that trigger is a 2 s health probe: a
-merely slow panel must not be restarted, and restarting it would stop the servers it supervises.
+So the verbs follow the mechanism and the entry's own state, read before acting:
 
-Mechanisms that start the panel from outside their own control — a `.desktop` file, a `Run` value, a
-container restart policy — have no stop to offer, so those fall back to the CLI.
+| mechanism | start | stop |
+| --- | --- | --- |
+| `systemd-user`, `systemd-system` | `systemctl start` (not running) or `restart` (active) | `systemctl stop` |
+| `launchd-agent`, `launchd-daemon` | `kickstart` or `kickstart -k` | `kill` |
+| `windows-task` | `schtasks /Run` | CLI `down` |
+| `.desktop`, `Run` value, container | CLI `up` | CLI `down` |
 
-A Windows scheduled task is a partial case, and the one place Start may not recover a wedged panel: it
-offers `schtasks /Run` and no stop. Measured on Windows 11: `/End` asks the task to shut down in no
-form a program can observe (a PowerShell `trap` never ran) and, while reporting success, leaves child
-processes alive — so the CLI's `down` is the only stop that runs the panel's own stop policy. The task is registered `MultipleInstancesPolicy=IgnoreNew`, so `/Run` on a running
-instance does nothing, and `schtasks` has no graceful restart — pressing Start on a wedged Windows
-panel therefore reports that the panel did not answer, rather than recovering it. Stopping still goes
-through the CLI's `down`, which is graceful.
+`start` versus `restart` is decided by probing, and that trigger is a 2 s health probe: a merely slow
+panel must not be restarted, and restarting it would stop the servers it supervises.
 
-The entry's command returns as soon as the service manager accepted it, which is not the same as the
-panel answering: a `Type=exec` unit counts as started once the binary was executed, before it binds
-its port. So the call then polls `/healthz`, and stops as soon as the panel answers — about a second
-on the development machine this was measured on. The 20 s is only the ceiling for a panel that never
-answers, matching the CLI's own startup budget. A stop follows the same rule with a 5 s ceiling: if
+Once the entry's command returns, the call polls `/healthz` — a `Type=exec` unit counts as started
+before it binds its port — and stops as soon as the panel answers, about a second in practice. The 20 s
+is only the ceiling for a panel that never answers. A stop follows the same rule with a 5 s ceiling: if
 the entry's stop ran but the panel still answers, it was not the panel that entry supervises, and the
 CLI's `down` finishes the job.
+
+<details>
+<summary><b>Why each mechanism is shaped that way</b></summary>
+
+A Windows scheduled task is the one place Start may not recover a wedged panel. Measured on Windows 11:
+`/End` asks the task to shut down in no form a program can observe (a PowerShell `trap` never ran)
+and, while reporting success, leaves child processes alive. The task is registered
+`MultipleInstancesPolicy=IgnoreNew`, so `/Run` on a running instance does nothing, and `schtasks` has
+no graceful restart — so Start on a wedged Windows panel reports that it did not answer instead of
+recovering it.
+
+Mechanisms that start the panel from outside their own control — a `.desktop` file, a `Run` value, a
+container restart policy — have no stop to offer at all.
+
+**An installed entry can still be supervising nothing.** If the panel was started by something else (a
+hand-run `up`, a distro unit, another supervisor), the entry's stop returns 0 having stopped nothing,
+because there is nothing it started. The helper waits for the recorded pid to go and falls back to the
+CLI's `down` when it does not; starting over a live panel is what leaves the entry failed while the old
+process keeps the port.
+
+</details>
 
 `panel.takeover` replaces an answering panel with the preferred copy. Stopping the old panel also stops
 the non-persistent servers it supervises — this dsh only if it is one, which an entry this plugin
