@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.9.9
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.8...v0.9.9)
+
+### 🩹 Fixes
+
+- **docs:** Update the version claims the bump left behind ([10d5ad3](https://github.com/NamesMT/dsh-home-hosted/commit/10d5ad3))
+
+### 📖 Documentation
+
+- Cut the release chronicle out of the user-facing panel doc ([3f4192d](https://github.com/NamesMT/dsh-home-hosted/commit/3f4192d))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.8
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.7...v0.9.8)
