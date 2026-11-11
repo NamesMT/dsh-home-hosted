@@ -81,12 +81,19 @@ export function wscriptExecutable(ctx: BootProviderContext): string | null {
  * running against the wrong root, which is not.
  */
 export function expandableByWscript(commandLine: string, env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  /**
+   * Compared **case-insensitively**, because Windows environment variable names are.
+   *
+   * Measured: `%username%` and `%UserName%` are both substituted for `USERNAME`, so a
+   * case-sensitive lookup over looked exactly the arguments it existed to catch — the
+   * worst kind of guard, one that passes the case it was written for and misses the rest.
+   * The names are collected once rather than per match, since this runs per install.
+   */
+  const defined = new Set(Object.keys(env).filter(key => env[key] !== undefined && env[key] !== null).map(key => key.toUpperCase()))
   for (const match of commandLine.matchAll(/%([^%\s]+)%/g)) {
-    const name = match[1] ?? ''
-    const value = env[name]
     // Only a name the environment really defines is substituted. An empty value still
     // counts: `%EMPTY%` expands to nothing, which shortens the argument just the same.
-    if (value !== undefined && value !== null)
+    if (defined.has((match[1] ?? '').toUpperCase()))
       return true
   }
   return false

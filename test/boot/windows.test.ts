@@ -1008,6 +1008,16 @@ describe('a command line the wrapper would rewrite', () => {
     expect(expandableByWscript('%EMPTY%', { EMPTY: '' })).toBe(true)
   })
 
+  it('detects it whatever the case, because Windows variable names are case-insensitive', () => {
+    // Measured: `%username%`, `%UserName%` and `%USERNAME%` are all substituted. A
+    // case-sensitive lookup would pass exactly the test written for `%USERNAME%` and miss
+    // the rest — a guard that looks like it runs.
+    for (const name of ['%USERNAME%', '%username%', '%UserName%', '%userNAME%'])
+      expect(expandableByWscript(`--home C:\\Users\\${name}\\hh`, { USERNAME: 'tester' }), name).toBe(true)
+    // And a lowercase-defined variable is found from an uppercase reference.
+    expect(expandableByWscript('%USERNAME%', { username: 'tester' })).toBe(true)
+  })
+
   it('is not detected for a percent pair the environment does not define', () => {
     // Measured: these three arrived verbatim through a real wrapper.
     expect(expandableByWscript('C:\\x\\%NOT_AN_ENV_VAR%\\p', { USERNAME: 'tester' })).toBe(false)
