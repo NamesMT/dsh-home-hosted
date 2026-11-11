@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   bootTaskXml,
   createWindowsBootProvider,
+  expandableByWscript,
   createWindowsRunProvider,
   createWindowsTaskProvider,
   hiddenLaunch,
@@ -16,6 +17,7 @@ import {
   windowsRunPayload,
   wscriptExecutable,
 } from '../../src/boot/windows.js'
+import { inspectOwned } from '../../src/boot/common.js'
 import { windowsCommandLine, xmlEscape } from '../../src/boot/escape.js'
 import type { FakeHandler } from './harness.js'
 import { cleanup, ctxFor, fakeRun, tempHome, winSpec } from './harness.js'
@@ -328,6 +330,25 @@ describe('windows run key', () => {
     expect(status.detail).toMatch(/not marked as ours/)
   })
 
+  /**
+   * A value rewritten back to the direct command still carries the marker, so every other
+   * check passes while each logon goes back to showing a console window — the regression the
+   * wrapper exists to prevent, and one the page could not previously report.
+   */
+  it('reports a marked value that is not this launch as needing a reinstall', async () => {
+    const { provider } = makeProvider()
+    await provider.install(winSpec())
+    // Simulate an older install / a hand edit that put the direct command back, marker kept.
+    store.set(regKeyOf(RUN_KEY, 'home-hosted'), windowsCommandLine(winSpec().command, winSpec().args))
+    const status = await provider.status(winSpec())
+    expect(status.state).toBe('enabled-failing')
+    expect(status.detail).toMatch(/does not name this machine's launch/)
+    // And an install converges it, so the reported remedy actually works.
+    const repaired = await provider.install(winSpec())
+    expect(repaired.ok).toBe(true)
+    expect((await provider.status(winSpec())).state).toBe('enabled-running')
+  })
+
   it('does not claim a foreign Run value whose data already equals ours', async () => {
     const exact = windowsCommandLine(winSpec().command, winSpec().args)
     store.set(regKeyOf(RUN_KEY, 'home-hosted'), exact)
@@ -532,6 +553,28 @@ describe('windows scheduled task', () => {
     expect(candidate.available).toBe(false)
     expect(candidate.bootCapable).toBe(false)
     expect(candidate.reason).toMatch(/elevated/)
+  })
+
+  /**
+   * A file at the wrapper path that this plugin did not write must stop the install.
+   *
+   * `writeOwned` refuses it, but the refusal was only reachable through code no test covered:
+   * deleting the check left the whole suite green. The task must not be registered either —
+   * a task pointing at somebody else's file is worse than no task.
+   */
+  it('refuses a foreign wrapper and does not register the task', async () => {
+    const { provider, ctx, action } = taskRunner()
+    const spec = winSpec()
+    const scriptPath = hiddenLaunchPath(ctx, spec)
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
+    fs.writeFileSync(scriptPath, 'somebody else wrote this\r\n', 'utf8')
+
+    const result = await provider.install(spec)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/does not carry this plugin's marker/)
+    // The foreign file is untouched, and nothing was registered against it.
+    expect(fs.readFileSync(scriptPath, 'utf8')).toContain('somebody else wrote this')
+    expect(action()).toBeNull()
   })
 
   it('maps schtasks /Query exit 1 to not-installed', async () => {
@@ -943,6 +986,114 @@ describe('windows boot task (SYSTEM, before login)', () => {
  * the page shows drift that is not there, so the derivation is pinned directly as well as
  * through the providers.
  */
+/**
+ * `WScript.Shell.Run` expands `%NAME%` for every variable the environment actually defines.
+ *
+ * Measured: through a wrapper, `C:\Users\%USERNAME%\hh` reached the child as
+ * `C:\Users\Administrator\hh`, while `%NOT_AN_ENV_VAR%`, a lone `100%` and `a%b_not_set%c`
+ * all arrived verbatim. The direct command never expanded anything, so a panel root carrying
+ * a `%NAME%` pair would silently start against a *different* state root — worse than a console
+ * window. `Shell.Application.ShellExecute` passes it through literally but returns as soon as
+ * the child starts (measured 0.16 s), so it cannot carry the exit code.
+ *
+ * Therefore a command line the wrapper would rewrite does not use the wrapper at all.
+ */
+describe('a command line the wrapper would rewrite', () => {
+  const withArgs = (args: string[], env: Record<string, string> = { USERNAME: 'tester' }) =>
+    winSpec({ args, env })
+
+  it('is detected when a %NAME% pair names a variable the environment defines', () => {
+    expect(expandableByWscript('panel --home C:\\Users\\%USERNAME%\\hh', { USERNAME: 'tester' })).toBe(true)
+    // An empty value still shortens the argument, so it counts.
+    expect(expandableByWscript('%EMPTY%', { EMPTY: '' })).toBe(true)
+  })
+
+  it('is not detected for a percent pair the environment does not define', () => {
+    // Measured: these three arrived verbatim through a real wrapper.
+    expect(expandableByWscript('C:\\x\\%NOT_AN_ENV_VAR%\\p', { USERNAME: 'tester' })).toBe(false)
+    expect(expandableByWscript('C:\\100% done', { USERNAME: 'tester' })).toBe(false)
+    expect(expandableByWscript('C:\\a%b_not_set%c', { USERNAME: 'tester' })).toBe(false)
+  })
+
+  it('falls back to the direct launch instead of corrupting the argument', () => {
+    const dir = tempHome()
+    try {
+      const spec = withArgs(['cli.js', 'up', '--home', 'C:\\Users\\%USERNAME%\\hh'], { USERNAME: 'tester', SystemRoot: 'C:\\Windows' })
+      const launch = hiddenLaunch(ctxFor({ home: dir, run: fakeRun().run, platform: 'win32', env: spec.env, exists: () => true }), spec)
+      // No wrapper, and the entry keeps the real program: a console window is cosmetic,
+      // running the panel against the wrong state root is not.
+      expect(launch.scriptPath).toBeNull()
+      expect(launch.spec.command).toBe(spec.command)
+    }
+    finally {
+      cleanup(dir)
+    }
+  })
+
+  it('still uses the wrapper when a percent sign cannot expand', () => {
+    // The control: same platform and wscript availability, only the value differs.
+    const dir = tempHome()
+    try {
+      const spec = withArgs(['cli.js', 'up', '--home', 'C:\\100% done\\hh'], { USERNAME: 'tester', SystemRoot: 'C:\\Windows' })
+      const launch = hiddenLaunch(ctxFor({ home: dir, run: fakeRun().run, platform: 'win32', env: spec.env, exists: () => true }), spec)
+      expect(launch.scriptPath).not.toBeNull()
+      expect(launch.spec.command).toMatch(/wscript(\.exe)?$/i)
+    }
+    finally {
+      cleanup(dir)
+    }
+  })
+})
+
+/**
+ * A capability can be removed from Windows: VBScript is an optional feature.
+ *
+ * When `wscript.exe` is gone the launch falls back to the direct command, but the `.vbs` an
+ * earlier install wrote is still this plugin's artifact and must still be removable. Deriving
+ * cleanup from "what should the entry run *now*" made it `null` exactly then, so `uninstall()`
+ * reported success while leaving the file, `status()` kept saying `enabled-running`, and a
+ * reinstall converged the task back to `node.exe` — silently restoring the console window.
+ */
+describe('a task whose wrapper the machine can no longer launch', () => {
+  let home: string
+  let store: Map<string, string>
+
+  beforeEach(() => {
+    home = tempHome()
+    store = new Map()
+  })
+  afterEach(() => cleanup(home))
+
+  /** A provider whose `wscript.exe` does not resolve, with one owned `.vbs` already on disk. */
+  function withoutWscript(spec = winSpec()) {
+    const runner = fakeRun(regHandler(store))
+    const ctx = ctxFor(winCtx({ home, run: runner.run, exists: () => false }))
+    const scriptPath = hiddenLaunchPath(ctx, spec)
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
+    fs.writeFileSync(scriptPath, hiddenLaunchScript(spec), 'utf8')
+    // The task itself is registered, with our marker.
+    store.set('task:home-hosted', spec.marker)
+    return { ctx, scriptPath, spec }
+  }
+
+  it('still reports the missing/foreign artifact rather than claiming health', () => {
+    const { ctx, spec, scriptPath } = withoutWscript()
+    // The artifact exists, so this is the healthy case even with no wscript.
+    expect(inspectOwned(scriptPath, spec.marker).owned).toBe(true)
+    // And the derivation that removal must NOT use is null here — the whole point.
+    expect(hiddenLaunch(ctx, spec).scriptPath).toBeNull()
+  })
+
+  it('names the wrapper in its retirement plan even though wscript is unavailable', async () => {
+    const { ctx, spec, scriptPath } = withoutWscript()
+    const provider = createWindowsTaskProvider(ctx)
+    const retirement = await provider.retireCommands?.(spec)
+    expect(retirement).toBeDefined()
+    // The file must appear in at least one removal step; otherwise it is stranded.
+    expect(JSON.stringify(retirement!.commands)).toContain(scriptPath)
+  })
+})
+
 describe('the windowless launch', () => {
   let home: string
   beforeEach(() => { home = tempHome() })
@@ -1055,10 +1206,24 @@ describe('the windowless launch', () => {
    */
   it('guards sh.Run so an unstartable child reports failure, not exit 0', () => {
     const script = hiddenLaunchScript(winSpec())
+    const lines = script.split('\r\n')
     expect(script).toContain('On Error Resume Next')
-    // The code is nonzero on purpose: measured, `//B` alone turns an unstartable child into
-    // exit **0**, so a wrapper without these guards tells `RestartOnFailure` it succeeded.
-    expect(script).toContain('If Err.Number <> 0 Then WScript.Quit 90')
+    /**
+     * `toContain` on the guard text pinned **nothing**: the same sentence appears after
+     * `CreateObject` and after `sh.Run`, so deleting the `sh.Run` one — the guard that turns
+     * an unstartable child into a nonzero exit — left all 249 boot tests green. Measured, that
+     * shape returns exit **0**, the exact false success that disqualified `conhost`.
+     *
+     * So the assertion is positional: the guard must be the line *immediately after*
+     * `sh.Run`, and there must be one guard for each of the two calls that can raise.
+     */
+    const runIndex = lines.findIndex(line => line.includes('sh.Run('))
+    expect(runIndex, 'the script must call sh.Run').toBeGreaterThanOrEqual(0)
+    expect(lines[runIndex + 1], 'the sh.Run guard must follow sh.Run, not merely exist').toBe('If Err.Number <> 0 Then WScript.Quit 90')
+    const createIndex = lines.findIndex(line => line.includes('CreateObject("WScript.Shell")'))
+    expect(lines[createIndex + 1], 'the CreateObject guard must follow CreateObject').toBe('If Err.Number <> 0 Then WScript.Quit 90')
+    // Two call sites, two guards: a count catches a deletion that a text match cannot.
+    expect(lines.filter(line => line === 'If Err.Number <> 0 Then WScript.Quit 90')).toHaveLength(2)
     expect(script).not.toContain('WScript.Quit 0')
     expect(script).toContain('WScript.Quit rc')
   })
