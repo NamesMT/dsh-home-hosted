@@ -26,13 +26,81 @@ export interface CliLaunch {
   source: 'override' | 'entry' | 'shim-target' | 'shim'
 }
 
-export async function which(command: string): Promise<string | null> {
-  const probe = process.platform === 'win32' ? 'where.exe' : 'which'
-  const result = await run(probe, [command], { timeoutMs: 5000 })
-  if (result.code !== 0)
-    return null
-  const first = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean)[0]
-  return first ?? null
+export interface WhichOptions {
+  /** Which OS's locator to ask; defaults to this process's. */
+  platform?: NodeJS.Platform
+  /**
+   * Test seam: how the locator is run.
+   *
+   * Not a convenience — on a WSL host `where.exe` is genuinely on PATH through interop, so a
+   * test that let the real probe run would assert Windows against a machine that is not Windows.
+   */
+  exec?: (program: string, args: string[]) => Promise<{ code: number | null, stdout: string }>
+}
+
+/**
+ * Every path the OS reports for a command, in the order it lists them.
+ *
+ * `where.exe` prints **one line per hit**, so taking the first line is a guess about which copy
+ * is the right one: measured on Windows 11, `cmd.exe /c "where hh"` answers `C:\Windows\hh.exe`
+ * and exits 0, and that binary is the HTML Help viewer rather than any package's shim.
+ *
+ * POSIX `which` needs `-a` to list more than the first, so that is asked for. A `which` that
+ * lacks the flag exits **non-zero and prints nothing on stdout** (measured: GNU which 2.25
+ * answers `no --version in (…)` on *stderr* and exit 1), which is why the retry keys on an
+ * empty result rather than on the exit code alone — and why a locator that put its single hit
+ * on stderr would be reported as absent rather than as one hit. That is the deliberate trade:
+ * one hit silently standing for several is the defect this function exists to remove.
+ */
+export async function whichAll(command: string, options: WhichOptions = {}): Promise<string[]> {
+  const platform = options.platform ?? process.platform
+  const exec = options.exec ?? ((program, args) => run(program, args, { timeoutMs: 5000 }))
+  const lines = (result: { code: number | null, stdout: string }): string[] =>
+    result.code !== 0 ? [] : result.stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0)
+  if (platform === 'win32')
+    return lines(await exec('where.exe', [command]))
+  const hits = lines(await exec('which', ['-a', command]))
+  return hits.length > 0 ? hits : lines(await exec('which', [command]))
+}
+
+export async function which(command: string, options: WhichOptions = {}): Promise<string | null> {
+  return (await whichAll(command, options))[0] ?? null
+}
+
+export interface WindowsPathOptions {
+  platform?: NodeJS.Platform
+  /** The environment `SystemRoot`/`WINDIR` are read from. */
+  env?: Readonly<Record<string, string | undefined>>
+}
+
+/**
+ * Is this path inside the Windows system directory?
+ *
+ * The OS owns that directory and a package manager never installs into it, so a hit there is not a
+ * candidate at all: `where.exe` answers `C:\Windows\hh.exe` for `hh` (the binary that alias is meant
+ * to reach, `home-hosted.cmd`, is elsewhere), and **probing it can flash its help window**. So a hit
+ * here is skipped before it is run, never after.
+ *
+ * Compared with `path.win32` rather than `path`, so this answers the same question whichever OS the
+ * caller runs on — a test on Linux can still assert the Windows rule.
+ */
+export function isWindowsSystemPath(candidate: string, options: WindowsPathOptions = {}): boolean {
+  if ((options.platform ?? process.platform) !== 'win32')
+    return false
+  const env = options.env ?? process.env
+  const declared = [env.SystemRoot, env.WINDIR].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  const roots = declared.length > 0 ? declared : ['C:\\Windows']
+  return roots.some((root) => {
+    // `path.win32.relative` is case-insensitive, as the filesystem is.
+    const relative = path.win32.relative(path.win32.resolve(root), path.win32.resolve(candidate))
+    return relative.length > 0 && relative !== '..' && !relative.startsWith(`..${path.win32.sep}`) && !path.win32.isAbsolute(relative)
+  })
+}
+
+/** The first `x.y.z[-pre]` in a CLI's output. */
+export function parseVersion(output: string | null): string | null {
+  const match = /(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(output ?? '')
+  return match === null ? null : `${match[1]}.${match[2]}.${match[3]}${match[4] === undefined ? '' : `-${match[4]}`}`
 }
 
 /** Turn a resolved CLI path into an absolute program + argv. */

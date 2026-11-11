@@ -16,7 +16,9 @@ import process from 'node:process'
 import type { CliCandidate, CliSource, CliStatus } from '../shared/contracts.js'
 import { run } from '../util/exec.js'
 import type { CliLaunch } from './launch.js'
-import { resolveShimmedCli, which } from './launch.js'
+import { isWindowsSystemPath, parseVersion, resolveShimmedCli, which, whichAll } from './launch.js'
+import { launchArgv } from './node-interpreter.js'
+import type { NodeInterpreterSource } from './node-interpreter.js'
 
 /** The range the plugin ships and is tested against. `dependencies['home-hosted']` must match. */
 export const EXPECTED_RANGE = '^0.11.0'
@@ -48,8 +50,22 @@ export interface ResolveCliOptions {
   packageManifest?: () => string | null
   /** Test seam: ask a CLI for its own version. */
   readVersion?: (launch: CliLaunch) => Promise<string | null>
-  /** Test seam: locate a command on PATH. */
+  /** Test seam: locate a command on PATH, first hit only. */
   findOnPath?: (command: string) => Promise<string | null>
+  /** Test seam: every path the OS reports for a command, in its own order. */
+  findAllOnPath?: (command: string) => Promise<string[]>
+  /** Test seam: which platform's PATH rules apply. */
+  platform?: NodeJS.Platform
+  /** Test seam: the environment `SystemRoot`/`WINDIR` are read from. */
+  env?: Readonly<Record<string, string | undefined>>
+  /**
+   * Test seam: the node that runs a JS file, for the version probe.
+   *
+   * Under Desktop this process is the Electron binary, which cannot run the script it is
+   * handed, so the probe must ask for an interpreter instead of using this process. Pinned in a
+   * test so the Desktop shape is assertable on a machine that is not Electron.
+   */
+  nodeInterpreter?: NodeInterpreterSource
   timeoutMs?: number
 }
 
@@ -82,12 +98,6 @@ export function binEntryFromManifest(manifestPath: string): string | null {
   catch {
     return null
   }
-}
-
-/** The first `x.y.z[-pre]` in a CLI's output. */
-export function parseVersion(output: string | null): string | null {
-  const match = /(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(output ?? '')
-  return match === null ? null : `${match[1]}.${match[2]}.${match[3]}${match[4] === undefined ? '' : `-${match[4]}`}`
 }
 
 /**
@@ -143,13 +153,16 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-function detailFor(source: CliSource, version: string | null, supported: boolean, prefer: CliPreference, unusableOverride: string | null = null): string {
+function detailFor(source: CliSource, version: string | null, supported: boolean, prefer: CliPreference, unusableOverride: { reason: 'missing' | 'not-identified', path: string } | null = null): string {
   const shown = version ?? 'unknown version'
   switch (source) {
     case 'config':
-      return unusableOverride === null
-        ? `from the configured command (${shown})`
-        : `the configured command could not be used: ${unusableOverride} does not exist (or is not a file this plugin can run); fix homeHostedCommand, or clear it to let the plugin choose`
+      if (unusableOverride === null)
+        return `from the configured command (${shown})`
+      // The two failures have different remedies, so they are not one sentence.
+      return unusableOverride.reason === 'missing'
+        ? `the configured command could not be used: ${unusableOverride.path} does not exist (or is not a file this plugin can run); fix homeHostedCommand, or clear it to let the plugin choose`
+        : `the configured command could not be used: ${unusableOverride.path} did not identify as home-hosted (it answered no version), so it was not run; fix homeHostedCommand, or clear it to let the plugin choose`
     case 'dependency':
       return supported
         ? `the pinned dependency (${shown})`
@@ -165,43 +178,99 @@ function detailFor(source: CliSource, version: string | null, supported: boolean
   }
 }
 
-async function defaultReadVersion(launch: CliLaunch, timeoutMs: number): Promise<string | null> {
-  const result = await run(launch.program, [...launch.args, '--version'], { timeoutMs })
+/** A PATH hit that was refused, and why, so the page can explain a fallback instead of hiding it. */
+interface PathRejection {
+  path: string
+  reason: 'system-directory' | 'not-identified' | 'not-runnable'
+}
+
+function rejectionReason(entry: PathRejection): string {
+  switch (entry.reason) {
+    case 'system-directory':
+      // Never probed, so this says where it is rather than what it answered.
+      return `${entry.path} is in the Windows system directory, where a package manager never installs`
+    case 'not-runnable':
+      return `${entry.path} is not a file this plugin can run`
+    default:
+      return `${entry.path} did not identify as home-hosted`
+  }
+}
+
+/** One clause naming every path that was refused, or null when nothing was. */
+function pathRejectionNote(rejected: readonly PathRejection[]): string | null {
+  if (rejected.length === 0)
+    return null
+  const clauses = rejected.map(rejectionReason)
+  return `on PATH: ${clauses.join('; ')}`
+}
+
+/**
+ * Ask a CLI for its own version, the way every other launch of it is run.
+ *
+ * The probe *is* a launch, so it obeys the same rule as the boot entry, the panel's own start
+ * and the generated helpers: a script entry needs a real node, and under Desktop
+ * `process.execPath` is the Electron binary. Measured on Windows: the Electron executable with a
+ * script argument and no `ELECTRON_RUN_AS_NODE` exits 0 printing nothing, because it answers
+ * `--version` itself rather than running the script — so probing with `launch.program` made every
+ * legitimate script override (including the pinned dependency's own `.mjs`) unidentifiable and
+ * refused. `launchArgv` is the one place that decides how a launch runs, so the probe uses it too.
+ */
+async function defaultReadVersion(launch: CliLaunch, timeoutMs: number, source?: NodeInterpreterSource): Promise<string | null> {
+  const argv = await launchArgv(launch, ['--version'], source)
+  if (argv === null)
+    return null
+  const [program, ...args] = argv
+  if (program === undefined)
+    return null
+  const result = await run(program, args, { timeoutMs })
   return parseVersion(result.stdout) ?? parseVersion(result.stderr)
 }
 
 export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliResolution> {
   const timeoutMs = options.timeoutMs ?? 5000
   const prefer = options.prefer ?? 'pinned'
-  const readVersion = options.readVersion ?? (launch => defaultReadVersion(launch, timeoutMs))
+  const readVersion = options.readVersion ?? (launch => defaultReadVersion(launch, timeoutMs, options.nodeInterpreter))
   const locate = options.findOnPath ?? which
 
   // 1. An explicit override is not a preference: it is an instruction. An
   //    instruction that cannot be carried out is reported, never silently
   //    replaced by a copy the operator did not ask for.
+  //
+  //    "Carried out" means the target identifies itself: a value that cannot name
+  //    its own version is not this plugin's CLI, whatever the operator pointed at
+  //    (an `hh.exe` is the reported case). Two ways to be unusable, kept apart in the
+  //    detail because the remedy differs — a path that is not there, and a program
+  //    that runs but does not answer as home-hosted.
   const override = options.override?.trim()
-  let unusableOverride: string | null = null
+  let unusableOverride: { reason: 'missing' | 'not-identified', path: string } | null = null
   if (override !== undefined && override.length > 0) {
     const launch = resolveShimmedCli(path.resolve(override))
     if (launch === null) {
-      unusableOverride = override
+      unusableOverride = { reason: 'missing', path: override }
     }
     else {
       const version = await readVersion(launch)
-      const supported = version === null || compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
-      return {
-        launch,
-        status: {
-          source: 'config',
-          path: launch.cliEntry ?? launch.shimPath ?? launch.program,
-          version,
-          expectedRange: EXPECTED_RANGE,
-          supported,
-          prefer,
-          dependency: null,
-          global: null,
-          detail: detailFor('config', version, supported, prefer),
-        },
+      // No version is not "unknown but trust it": it is the same proof the PATH loop
+      // demands, and accepting it here reproduced the defect through `homeHostedCommand`.
+      if (version === null) {
+        unusableOverride = { reason: 'not-identified', path: launch.cliEntry ?? launch.shimPath ?? launch.program }
+      }
+      else {
+        const supported = compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
+        return {
+          launch,
+          status: {
+            source: 'config',
+            path: launch.cliEntry ?? launch.shimPath ?? launch.program,
+            version,
+            expectedRange: EXPECTED_RANGE,
+            supported,
+            prefer,
+            dependency: null,
+            global: null,
+            detail: detailFor('config', version, supported, prefer),
+          },
+        }
       }
     }
   }
@@ -224,36 +293,73 @@ export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliRe
     }
   }
 
+  /**
+   * A hit on PATH is a *candidate*, never an install: it must prove it is home-hosted by answering
+   * `--version` with a parseable version. `hh` is the reason — it is a legitimate alias of the CLI,
+   * and on Windows `where hh` answers `C:\Windows\hh.exe`, the HTML Help viewer, which exits
+   * non-zero and prints nothing. A null version there used to read as "supported" and could become
+   * a boot entry that starts the help viewer.
+   *
+   * Several hits are tried in the order the OS gives them, each skipped first when it sits in the
+   * Windows system directory, which a package manager never installs into and which may flash a
+   * window when run.
+   */
+  const platform = options.platform ?? process.platform
+  // A caller that only stubs the first hit keeps the old single-candidate shape.
+  const listAll: (command: string) => Promise<string[]> = options.findAllOnPath
+    ?? (options.findOnPath !== undefined
+      ? async command => [await locate(command)].filter((hit): hit is string => hit !== null)
+      : async command => await whichAll(command, { platform }))
+  const rejected: PathRejection[] = []
   let global: Candidate | null = null
-  const found = (await locate('home-hosted')) ?? (await locate('hh'))
-  if (found !== null) {
-    const launch = resolveShimmedCli(path.resolve(found))
-    if (launch !== null) {
+  for (const command of ['home-hosted', 'hh']) {
+    for (const hit of await listAll(command)) {
+      const absolute = path.resolve(hit)
+      if (isWindowsSystemPath(absolute, { platform, env: options.env })) {
+        rejected.push({ path: absolute, reason: 'system-directory' })
+        continue
+      }
+      const launch = resolveShimmedCli(absolute)
+      if (launch === null) {
+        rejected.push({ path: absolute, reason: 'not-runnable' })
+        continue
+      }
+      const version = await readVersion(launch)
+      if (version === null) {
+        rejected.push({ path: launch.cliEntry ?? launch.shimPath ?? launch.program, reason: 'not-identified' })
+        continue
+      }
       global = {
-        candidate: { source: 'path', path: launch.cliEntry ?? launch.shimPath ?? launch.program, version: await readVersion(launch) },
+        candidate: { source: 'path', path: launch.cliEntry ?? launch.shimPath ?? launch.program, version },
         launch,
       }
+      break
     }
+    if (global !== null)
+      break
   }
 
   const order = prefer === 'global' ? [global, dependency] : [dependency, global]
   const chosen = order.find(item => item !== null) ?? null
   const dependencySummary = dependency?.candidate ?? null
   const globalSummary = global?.candidate ?? null
+  // A refused hit is appended to whatever the resolution says, so a fallback explains itself
+  // instead of leaving the page to claim the pinned copy for no stated reason.
+  const withRejections = (detail: string): string => [detail, pathRejectionNote(rejected)].filter((part): part is string => part !== null).join('; ')
 
   if (unusableOverride !== null) {
     return {
       launch: null,
       status: {
         source: 'config',
-        path: unusableOverride,
+        path: unusableOverride.path,
         version: null,
         expectedRange: EXPECTED_RANGE,
         supported: false,
         prefer,
         dependency: dependencySummary,
         global: globalSummary,
-        detail: detailFor('config', null, false, prefer, unusableOverride),
+        detail: withRejections(detailFor('config', null, false, prefer, unusableOverride)),
       },
     }
   }
@@ -270,13 +376,24 @@ export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliRe
         prefer,
         dependency: dependencySummary,
         global: globalSummary,
-        detail: detailFor('none', null, false, prefer),
+        detail: withRejections(detailFor('none', null, false, prefer)),
       },
     }
   }
 
   const version = chosen.candidate.version
-  const supported = version === null || compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
+  /**
+   * A null version here is a deliberate, narrow allowance, not the old bug.
+   *
+   * `source: 'path'` can no longer be null — the loop above rejects any PATH hit that does not
+   * identify — and `source: 'config'` is the same rule since the override refuses one too. What
+   * remains is the **pinned dependency**, whose version comes from its own `package.json`: a
+   * manifest that declares none is still the copy this plugin shipped and was tested against, so
+   * it is accepted and shown as "unknown version". It is reported by `detail`, never presented as
+   * a version that was checked.
+   */
+  const pinned = chosen.candidate.source === 'dependency'
+  const supported = version === null ? pinned : compareVersions(version, MIN_SUPPORTED_VERSION) >= 0
   return {
     launch: chosen.launch,
     status: {
@@ -288,7 +405,7 @@ export async function resolveCli(options: ResolveCliOptions = {}): Promise<CliRe
       prefer,
       dependency: dependencySummary,
       global: globalSummary,
-      detail: detailFor(chosen.candidate.source, version, supported, prefer),
+      detail: withRejections(detailFor(chosen.candidate.source, version, supported, prefer)),
     },
   }
 }

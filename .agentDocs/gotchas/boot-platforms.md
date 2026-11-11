@@ -92,7 +92,52 @@ write the artifact.
   `spec.unitName`, so the boot one appends `-boot` (`bootTaskNameOf`); sharing it would make installing
   one silently replace the other, and a switch between them impossible to undo. Tests assert both
   names coexist and that uninstalling one leaves the other.
-- **`schtasks /End` is not a stop, and not reliably a kill either — measured.**- **`schtasks /End` is not a stop, and not reliably a kill either — measured.** On Windows 11 through
+- **A Windows autostart entry carries no environment, so its command must be a real node.** A Task
+  Scheduler `<Exec>` action and an `HKCU\…\Run` value hold a command line and nothing else, so
+  `ELECTRON_RUN_AS_NODE=1` — the only thing that makes the Electron binary behave as node — can never
+  reach one. `process.execPath` is that binary in DSH Desktop (measured: `…\DeepSeek Harness.exe`,
+  `process.versions.electron` `44.7.0`, `process.versions.node` `24.21.0`), so a spec built from it
+  installed a task that **started the Desktop application instead of the panel**. `src/home-hosted/
+  node-interpreter.ts` is the one answer to "which real node runs a JS file": `process.execPath` while it
+  really is node (so every POSIX spec keeps its exact bytes), else Desktop's bundled
+  `<resourcesPath>/runtime/primary-runtime/dependencies/node/bin/node(.exe)`, else a proved `node` on
+  PATH, else `null`. A candidate is proved by **running** it, not by existing: Desktop's
+  `runtime\bin\node.cmd` exists and is a trap — with no `DSH_DESKTOP_NODE_EXECUTABLE` it prints
+  `'""' is not recognized…`, and only with one does it answer `v24.21.0`. The same rule covers the
+  generated helpers, which are JS files: `spawnTakeover`/`spawnActivation` resolve the interpreter
+  *before* writing the helper, so a refusal leaves no artifact for the next run to mistake for a
+  hand-over that happened. **A missing node is not a missing CLI**, so `bootArtifact()` keeps the two
+  failures apart (`NODE_NOT_FOUND` vs `CLI_NOT_FOUND`) and `bootStatus` never claims the CLI is absent
+  on a machine whose CLI resolved. Uninstall deliberately does not refuse: an entry this plugin wrote
+  must stay removable on the machine whose node has since gone.
+- **A version probe is a launch, so it obeys the launch rule.** The probe that decides whether a
+  candidate *is* home-hosted ran `launch.program`, which under Desktop is the Electron binary.
+  Electron with a script argument and no `ELECTRON_RUN_AS_NODE` exits 0 printing **nothing** — it
+  answers `--version` itself rather than running the script (measured) — so the probe read every
+  legitimate script override as unidentifiable and refused it, including the pinned dependency's own
+  `.mjs`. It was invisible while the code merely *returned* the launch regardless; it became a
+  regression the moment a null version started meaning "not home-hosted". `defaultReadVersion` goes
+  through `launchArgv`, so probe and launch cannot disagree. The seam is
+  `ResolveCliOptions.nodeInterpreter`: without it a test on a non-Electron host pins nothing, because
+  `process.execPath` there already *is* real node — the test asserts a marker file the resolved
+  interpreter writes, not merely the version it printed.
+- **A script named as `argv[0]` is not a program.** `ActivationPlan.stop` is run by the generated
+  helper as `spawnSync(STOP[0], STOP.slice(1))`, so its first word must be the *program* that runs the
+  CLI, not the CLI entry. On POSIX a chmod +x entry with `#!/usr/bin/env node` hides the mistake; on
+  Windows it cannot run at all — measured with node 24.21.0,
+  `spawnSync('…\cli.mjs', [...])` → `{"status":null,"err":"EFTYPE"}`, which the helper logs as
+  `down exited null` and then starts the new entry over a panel that may still hold `run.json` and the
+  port. `buildTakeoverSource` was never affected because it already passes program and args as separate
+  words. **POSIX is not a safe default either**: the shebang works only while the file keeps its mode
+  bit — the same file with the executable bit cleared is `Permission denied` — so `launchArgv` names
+  the program on both platforms, with no `platform` parameter to grow into two guards.
+- **The same shape hid in every direct CLI call.** `cliExec`, `uiManage`'s `runUi` and the preflight
+  each did `run(launch.program, …)`; under Desktop that is the Electron binary, so every direct CLI
+  command and UI subcommand would have opened the app. Anything that spawns the CLI goes through
+  `launchProgram`/`launchArgv`. What remains legitimately using `process.execPath` is the *inside* of a
+  generated launcher (`launcher.ts`, already running under a real node) and `dsh-entry.ts`'s row, which
+  Desktop refuses anyway.
+- **`schtasks /End` is not a stop, and not reliably a kill either — measured.** On Windows 11 through
   WSL interop, `/End` reported "terminated successfully" and `Last Result` 267014 (user-terminated), yet
   a program's own shutdown handler never ran (a PowerShell `trap` stayed cold) and a `ping` child
   survived `/End` by minutes, parent already dead. `RestartOnFailure` did **not** revive the task after

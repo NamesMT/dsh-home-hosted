@@ -59,7 +59,11 @@ function harness(make: (unitPath: string) => BootStatus, options: { unitFile?: b
   fs.mkdirSync(state, { recursive: true })
 
   const fakeCli = path.join(scratch.path, 'home-hosted.mjs')
-  fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
+  // A stand-in for *home-hosted*, which answers `--version` (measured on the pinned 0.11.0:
+  // `0.11.0`, exit 0). Printing nothing made this fixture depend on the old lenient read of a
+  // null version as "supported"; an override that cannot name itself is refused now, because
+  // that is how `homeHostedCommand` used to accept an `hh.exe`.
+  fs.writeFileSync(fakeCli, '#!/usr/bin/env node\nconsole.log(\'0.11.0\')\n', 'utf8')
 
   const unitPath = path.join(scratch.path, 'home-hosted.service')
   if (options.unitFile === true)

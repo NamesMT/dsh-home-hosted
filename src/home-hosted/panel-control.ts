@@ -18,6 +18,8 @@ import type { RunResult } from '../util/exec.js'
 import { writeFileAtomic } from '../util/fsx.js'
 import type { CliLaunch } from './launch.js'
 import { launcherDir } from './launcher.js'
+import { helperArgv, launchArgv, NO_INTERPRETER_DETAIL, nodeInterpreter } from './node-interpreter.js'
+import type { NodeInterpreterSource } from './node-interpreter.js'
 import { repairPanelMigration } from './panel-migrate.js'
 
 /** How the panel's CLI is run: the resolved argv plus an environment. */
@@ -34,6 +36,8 @@ export interface PanelControlDeps {
   timeoutMs?: number
   /** Test seam: run the resolved CLI without spawning it. */
   exec?: PanelCliExec
+  /** Test seam: the node that runs a JS CLI; defaults to this process's own resolution. */
+  nodeInterpreter?: NodeInterpreterSource
 }
 
 /**
@@ -41,10 +45,15 @@ export interface PanelControlDeps {
  * entry paths resolve against.
  */
 function cliArgs(deps: PanelControlDeps, words: string[]): string[] {
-  const args = [...(deps.launch?.args ?? []), ...words, '--home', deps.home]
+  return [...(deps.launch?.args ?? []), ...panelWords(deps, words)]
+}
+
+/** A command aimed at this panel: its state root, and the project its entry paths resolve against. */
+function panelWords(deps: PanelControlDeps, words: string[]): string[] {
+  const out = [...words, '--home', deps.home]
   if (deps.projectDir)
-    args.push('--project', deps.projectDir)
-  return args
+    out.push('--project', deps.projectDir)
+  return out
 }
 
 /** Run the resolved CLI with this panel's argv; one seam for every command. */
@@ -55,7 +64,13 @@ async function runCliArgs(deps: PanelControlDeps, words: string[]): Promise<RunR
   const launch = deps.launch
   if (launch === null)
     return { command: '', args, code: null, signal: null, stdout: '', stderr: 'no home-hosted CLI is available', timedOut: false, error: null }
-  return await run(launch.program, args, {
+  // One rule for every spawn: a script entry runs under a real node (never this process's
+  // executable, which is the Electron binary under Desktop) and a `.cmd` shim runs through
+  // `cmd.exe`, because `spawn` without a shell cannot run either one directly.
+  const argv = await launchArgv(launch, panelWords(deps, words), deps.nodeInterpreter ?? nodeInterpreter)
+  if (argv === null)
+    return { command: '', args, code: null, signal: null, stdout: '', stderr: NO_INTERPRETER_DETAIL, timedOut: false, error: null }
+  return await run(argv[0] ?? '', argv.slice(1), {
     env: deps.env,
     timeoutMs: deps.timeoutMs ?? 90_000,
   })
@@ -290,11 +305,20 @@ export interface TakeoverControl {
 
 /** The generated helper's source; exported so a test can inspect it. */
 export function buildTakeoverSource(deps: PanelControlDeps, oldPid: number | null, control: TakeoverControl | null = null, marker = 'managed by dsh-home-hosted'): string {
-  const program = deps.launch?.program ?? process.execPath
-  const args = deps.launch === null
-    ? []
-    : [...deps.launch.args, 'up', '--home', deps.home, ...(deps.projectDir ? ['--project', deps.projectDir] : [])]
-  const downArgs = [...(deps.launch?.args ?? []), 'down', '--home', deps.home]
+  /**
+   * The complete argv that runs the CLI *inside this helper*, from the one shared rule.
+   *
+   * A JS entry is run by `process.execPath` here — correct, because by the time this helper
+   * exists it is itself running under a real node — while a `.cmd` shim needs `cmd.exe /d /c`,
+   * which `spawnSync` cannot replace with the shim itself (measured: `EINVAL`). `helperArgv`
+   * owns that decision so this builder cannot bake in a program the helper cannot spawn.
+   */
+  const upWords = ['up', '--home', deps.home, ...(deps.projectDir ? ['--project', deps.projectDir] : [])]
+  const up = deps.launch === null ? null : helperArgv(deps.launch, upWords)
+  const down = deps.launch === null ? null : helperArgv(deps.launch, ['down', '--home', deps.home])
+  const program = up === null ? 'process.execPath' : up.program
+  const args = up === null ? [] : up.args
+  const downArgs = down === null ? [] : down.args
   // The entry's own steps when it has them, the CLI otherwise. `null` is "nothing installed", not
   // "fall back silently": the helper logs which path it took, because the two leave the machine
   // in different states.
@@ -307,7 +331,7 @@ import { spawnSync } from 'node:child_process'
 
 const OLD_PID = ${JSON.stringify(oldPid)}
 const DOWN_ARGS = ${JSON.stringify(downArgs)}
-const PROGRAM = ${JSON.stringify(program)}
+const PROGRAM = ${program === 'process.execPath' ? 'process.execPath' : JSON.stringify(program)}
 const ARGS = ${JSON.stringify(args)}
 const ENV = ${JSON.stringify(deps.env)}
 const LOG = ${JSON.stringify(takeoverLogPath(deps.stateDir))}
@@ -424,11 +448,18 @@ export function writeActivationHelper(stateDir: string, plan: ActivationPlan): s
  * The helper is left to it: whatever it does to the panel, the entry it starts
  * is the one that brings the plugin back.
  */
-export function spawnActivation(stateDir: string, plan: ActivationPlan, spawnChild: SpawnDetached = spawnDetached): PanelControlResult {
+export async function spawnActivation(stateDir: string, plan: ActivationPlan, spawnChild: SpawnDetached = spawnDetached, source: NodeInterpreterSource = nodeInterpreter): Promise<PanelControlResult> {
+  // The helper is a JS file, so it needs a real node: this process's own executable is
+  // the Electron binary under Desktop, and spawning that with no environment opens the
+  // app. Resolved before the helper is written, so a refusal leaves no artifact behind
+  // for the next run to find and treat as a hand-over that happened.
+  const program = await helperProgram(source)
+  if (program === null)
+    return { ok: false, detail: `could not start the autostart helper: ${NO_INTERPRETER_DETAIL}` }
   const helper = writeActivationHelper(stateDir, plan)
   let child: ChildProcess
   try {
-    child = spawnChild(process.execPath, [helper])
+    child = spawnChild(program, [helper])
   }
   catch (error) {
     return { ok: false, detail: `could not start the autostart helper: ${error instanceof Error ? error.message : String(error)}` }
@@ -439,6 +470,17 @@ export function spawnActivation(stateDir: string, plan: ActivationPlan, spawnChi
     ok: true,
     detail: `starting the panel through its autostart entry now; the page shows it again when it answers`,
   }
+}
+
+/**
+ * The node that runs a generated helper: a real node, never this process's executable.
+ *
+ * Both helpers are JS files with a POSIX shebang and no Windows counterpart, so a
+ * Windows launch must name a node — and under Desktop that node is Desktop's bundled
+ * runtime node rather than `process.execPath`.
+ */
+async function helperProgram(source: NodeInterpreterSource): Promise<string | null> {
+  return (await source())?.path ?? null
 }
 
 /** Spawn a helper process; injected so a test can drive the failure paths. */
@@ -457,12 +499,15 @@ export interface TakeoverOptions {
   control?: TakeoverControl | null
 }
 
-export function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, options: TakeoverOptions = {}, spawnChild: SpawnDetached = spawnDetached): PanelControlResult {
+export async function spawnTakeover(deps: PanelControlDeps, oldPid: number | null, options: TakeoverOptions = {}, spawnChild: SpawnDetached = spawnDetached, source: NodeInterpreterSource = nodeInterpreter): Promise<PanelControlResult> {
   const control = options.control ?? null
+  const program = await helperProgram(source)
+  if (program === null)
+    return { ok: false, detail: `could not start the panel-replacement helper: ${NO_INTERPRETER_DETAIL}` }
   const helper = writeTakeoverHelper(deps, oldPid, control)
   let child: ChildProcess
   try {
-    child = spawnChild(process.execPath, [helper])
+    child = spawnChild(program, [helper])
   }
   catch (error) {
     return { ok: false, detail: `could not start the panel-replacement helper: ${error instanceof Error ? error.message : String(error)}` }

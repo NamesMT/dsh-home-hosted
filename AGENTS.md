@@ -116,6 +116,14 @@ nobody reads is worse than a long file.
   the page shows it web-only; every other server entry is managed exactly as on web.
 - **Boot entries point at a generated stable launcher**, never at a pnpm path; the marker proves
   ownership and uninstall/disable refuses an artifact this plugin did not write.
+- **The interpreter is resolved, never assumed**: `process.execPath` is the Electron binary under
+  Desktop, and a Windows autostart action carries no environment, so an entry built from it starts the
+  Desktop app instead of the panel. Every spec, generated helper and preflight asks
+  `node-interpreter.ts`, and a candidate is proved by running it — Desktop's `node.cmd` exists and
+  cannot work from an entry. A missing node is its own failure (`NODE_NOT_FOUND`), never "no CLI".
+  A version probe is a launch too, so it goes through `launchArgv` — probing with
+  `launch.program` is what made every legitimate override unidentifiable under Desktop. See
+  [boot-platforms](.agentDocs/gotchas/boot-platforms.md).
 - **Whoever supervises the panel may change its state**: `panel.start`, `panel.stop` and
   `panel.takeover` go through the installed entry (`systemctl start|restart|stop`, `kickstart
   [-k]`/`kill`, `schtasks /Run`) and use the CLI only when nothing is installed. A

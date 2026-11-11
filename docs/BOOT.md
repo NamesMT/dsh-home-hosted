@@ -119,6 +119,22 @@ account's credentials would be a credential store, not a boot entry.
 Neither mechanism offers a stop: `/End` was measured to deliver no shutdown request and to leave
 orphans behind, so the CLI's `down` remains the only stop that runs the supervised stop policy.
 
+### The command is a real node, never the Desktop app
+
+A Windows autostart action is a command line and nothing else: a Task Scheduler `<Exec>` and an
+`HKCU\…\Run` value both carry **no environment**, so `ELECTRON_RUN_AS_NODE=1` — the only thing that
+makes Electron behave as node — can never reach one. In dsh Desktop this plugin runs inside Electron,
+where `process.execPath` is `DeepSeek Harness.exe`; an entry built from that started the **Desktop
+application instead of the panel**. The entry therefore names a real node: the bundled one under
+Desktop's resources when this runs in Electron, otherwise `process.execPath` itself (which really is
+node for a POSIX service or a plain-node install, so existing entries are not rewritten), otherwise a
+`node` on PATH. Each candidate is proved by running it, because Desktop's `runtime\bin\node.cmd`
+exists yet only works with an environment no entry can supply.
+
+If no node resolves, the install refuses instead of writing a task that cannot start the panel, and
+says *that* — a missing node is not a missing CLI. Removal is still allowed: an entry this plugin wrote
+must never be stranded.
+
 ## Escaping is per setting, not per file
 
 A unit file is read by systemd, not by a shell, and its settings do not share one

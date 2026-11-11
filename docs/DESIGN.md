@@ -33,6 +33,16 @@ autostart are not surface-bound, and only the harness entry is keyed on `default
 the browser surface in Electron — the same `dsh-web-app` bundles — so `platform: "web"` already covers
 its page.
 
+The refusal covers **autostarting Desktop from the panel**, which is a separate fact worth stating,
+because it is the one thing a row could plausibly be asked for and still not deliver. Desktop has no
+headless mode: reading the installed `main.js`, the only argv it parses is `--updated` — no
+`--hidden`/`--background` — `openInitialWindow` shows the window, and a second launch does not start a
+second carrier either, since the single-instance lock routes it to focus the running window. Its host
+also binds `--port 0`, so there is no port a health check could watch. A row could therefore start the
+Desktop *app*, but never silently in the background and never with a stable URL to prove it — which is
+not what "the panel keeps it alive" means. Rather than ship that half-behaviour, the harness entry
+stays out of Desktop's panel entirely.
+
 ## Config compatibility was dropped, deliberately
 
 `onPortConflict: kill` (0.6.0), `persistent` (0.6.3), `restart <id>` (0.7.13) and the nullable-`label`

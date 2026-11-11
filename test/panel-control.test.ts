@@ -18,6 +18,8 @@ import {
   writeTakeoverHelper,
 } from '../src/home-hosted/panel-control.js'
 import type { ActivationPlan, PanelControlDeps } from '../src/home-hosted/panel-control.js'
+import { helperArgv, launchArgv } from '../src/home-hosted/node-interpreter.js'
+import type { NodeInterpreterSource } from '../src/home-hosted/node-interpreter.js'
 import type { RunResult } from '../src/util/exec.js'
 import { tempDir } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
@@ -301,7 +303,7 @@ describe('panel control', () => {
 
   it('replaces a panel from a detached helper that outlives this process', async () => {
     const { deps: d, log } = deps()
-    const result = spawnTakeover(d, null)
+    const result = await spawnTakeover(d, null)
     expect(result.ok).toBe(true)
     // Not "the page disconnects": a managed entry is `persistent: true`, and
     // home-hosted's `down` leaves a persistent entry running — measured, a
@@ -322,21 +324,21 @@ describe('panel control', () => {
     expect(fs.readFileSync(helperLog, 'utf8')).toContain('started with exit')
   })
 
-  it('never turns a helper that could not start into an uncaught exception', () => {
+  it('never turns a helper that could not start into an uncaught exception', async () => {
     const { deps: d } = deps()
     const fake = new EventEmitter()
     ;(fake as unknown as { unref: () => void }).unref = () => {}
 
-    const result = spawnTakeover(d, null, {}, (() => fake as never))
+    const result = await spawnTakeover(d, null, {}, (() => fake as never))
     expect(result.ok).toBe(true)
     // A detached child reports a failed start asynchronously; without a listener
     // that 'error' event is thrown and ends the host process.
     expect(() => fake.emit('error', new Error('EAGAIN'))).not.toThrow()
   })
 
-  it('reports a helper that could not be spawned at all', () => {
+  it('reports a helper that could not be spawned at all', async () => {
     const { deps: d } = deps()
-    const result = spawnTakeover(d, null, {}, (() => { throw new Error('EPERM') }))
+    const result = await spawnTakeover(d, null, {}, (() => { throw new Error('EPERM') }))
     expect(result.ok).toBe(false)
     expect(result.detail).toContain('EPERM')
   })
@@ -433,7 +435,7 @@ describe('the activation helper', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o755)
   })
 
-  it('spawns the helper detached and never waits for it', () => {
+  it('spawns the helper detached and never waits for it', async () => {
     scratch = tempDir()
     const state = path.join(scratch.path, 'state')
     fs.mkdirSync(state, { recursive: true })
@@ -441,7 +443,7 @@ describe('the activation helper', () => {
     const fake = new EventEmitter()
     ;(fake as unknown as { unref: () => void }).unref = () => { spawned.push(['unref']) }
 
-    const result = spawnActivation(state, plan, ((program: string, args: string[]) => {
+    const result = await spawnActivation(state, plan, ((program: string, args: string[]) => {
       spawned.push([program, ...args])
       return fake as never
     }) as never)
@@ -449,9 +451,179 @@ describe('the activation helper', () => {
     expect(spawned[0]?.[1]).toBe(activationHelperPath(state))
     expect(spawned[1]).toEqual(['unref'])
 
-    const failed = spawnActivation(state, plan, () => { throw new Error('EPERM') })
+    const failed = await spawnActivation(state, plan, () => { throw new Error('EPERM') })
     expect(failed.ok).toBe(false)
     expect(failed.detail).toContain('EPERM')
+  })
+})
+
+/**
+ * A generated helper is a JS file with a POSIX shebang and no Windows counterpart, so
+ * the process that starts it must be a real node.
+ *
+ * Under DeepSeek Harness Desktop `process.execPath` is the Electron binary, and
+ * spawning that with no environment opens the Desktop application instead of running
+ * the helper — the same reported defect, reached through the hand-over rather than
+ * through the boot entry.
+ */
+/**
+ * Running the panel's CLI has the same requirement: its entry is a JS file, so the
+ * program that runs it must be a real node.
+ *
+ * `resolveShimmedCli` records the node it resolved with as the program, and under
+ * Desktop that is the Electron binary — running it with no environment opens the
+ * application instead of starting the panel.
+ */
+/**
+ * A Windows **global** install is a `.cmd`, and `spawn` without a shell answers `EINVAL` for
+ * one — measured with the bundled node 24.21.0, alongside `cmd.exe /d /c <shim> up` running.
+ *
+ * So every panel action on that install used to fail with a silently-null status. This is
+ * driven through `startPanel`, which is the path `panel.start` and the hand-over use, rather
+ * than asserted on the argv alone: what matters is that the CLI was *reached*.
+ */
+/**
+ * A Windows **global** install is a `.cmd`, and `spawn` without a shell answers `EINVAL` for
+ * one — measured with the bundled node 24.21.0, alongside `cmd.exe /d /c <shim> up` running.
+ *
+ * So every panel action on that install used to fail with a silently-null status. The
+ * assertions are on the argv that would be spawned, taken from the same seam `startPanel`
+ * uses, with the platform pinned because the `.cmd` form only applies on win32.
+ */
+describe('a command-shim CLI', () => {
+  const SHIM = 'C:\\Users\\me\\AppData\\Roaming\\npm\\home-hosted.cmd'
+  const shimLaunch: CliLaunch = { program: SHIM, args: [], cliEntry: null, shimPath: SHIM, source: 'shim' }
+
+  it('runs a .cmd shim through cmd.exe, never as the bare program', async () => {
+    const { deps: d } = deps()
+    const words = ['up', '--home', d.home]
+    const argv = await launchArgv({ ...shimLaunch }, words, async () => null, 'win32')
+
+    expect(argv).not.toBeNull()
+    // cmd.exe first; the shim is one argv word after `/d /c`, never argv[0].
+    expect(argv![0]!.toLowerCase()).toMatch(/cmd(?:\.exe)?$/)
+    expect(argv!.slice(1, 3)).toEqual(['/d', '/c'])
+    expect(argv![3]).toBe(SHIM)
+    expect(argv!.slice(4)).toEqual(words)
+  })
+
+  /**
+   * A shim path carrying a cmd metacharacter is refused rather than quoted, so nothing is
+   * spawned — and the refusal must never fall through to the bare `.cmd`, which is the
+   * `EINVAL` this whole branch exists to prevent.
+   */
+  it('refuses a metacharacter shim instead of spawning the bare .cmd', async () => {
+    const unsafe = 'C:\\a&b\\home-hosted.cmd'
+    const launch: CliLaunch = { program: unsafe, args: [], cliEntry: null, shimPath: unsafe, source: 'shim' }
+    expect(await launchArgv(launch, ['up'], async () => null, 'win32')).toBeNull()
+    // The same rule governs a generated helper, so it cannot bake in an unrunnable program.
+    expect(helperArgv(launch, ['up'], 'win32')).toBeNull()
+  })
+})
+
+describe('the node that runs the CLI itself', () => {
+  it('runs a script CLI through the resolved interpreter, not the recorded program', async () => {
+    const { deps: d, log } = deps({ nodeInterpreter: async () => ({ path: process.execPath, source: 'bundled' }) })
+    // The recorded program is deliberately not a node: the test's CLI must still run, so
+    // the program can only have come from the interpreter.
+    d.launch = { ...d.launch!, program: path.join(d.stateDir, 'not-a-node') }
+
+    const result = await startPanel(d)
+    expect(result.ok).toBe(true)
+    expect(fs.readFileSync(log, 'utf8')).toContain(`up --home ${d.home}`)
+  })
+
+  it('refuses with the honest reason when no node resolves', async () => {
+    const { deps: d, log } = deps({ nodeInterpreter: async () => null })
+    const result = await startPanel(d)
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('no node that can run it')
+    // The CLI never ran: nothing was started with the wrong program.
+    expect(fs.existsSync(log)).toBe(false)
+  })
+})
+
+describe('the node that runs a generated helper', () => {
+  const DESKTOP_NODE = '/opt/DeepSeek Harness/resources/runtime/primary-runtime/dependencies/node/bin/node'
+
+  const plan: ActivationPlan = {
+    commands: [['true']],
+    requires: [],
+    files: [],
+    stop: ['true'],
+    detach: [],
+    oldPid: 4242,
+    retire: [],
+    logPath: '/tmp/panel-activate.log',
+  }
+
+  function fake(): { child: EventEmitter, spawned: string[][] } {
+    const child = new EventEmitter()
+    const spawned: string[][] = []
+    ;(child as unknown as { unref: () => void }).unref = () => { spawned.push(['unref']) }
+    return { child, spawned }
+  }
+
+  it('spawns the activation helper with the resolved node, not the Electron executable', async () => {
+    scratch = tempDir()
+    const state = path.join(scratch.path, 'state')
+    fs.mkdirSync(state, { recursive: true })
+    const { child, spawned } = fake()
+    const source: NodeInterpreterSource = async () => ({ path: DESKTOP_NODE, source: 'bundled' })
+
+    const result = await spawnActivation(state, plan, ((program: string, args: string[]) => {
+      spawned.push([program, ...args])
+      return child as never
+    }) as never, source)
+
+    expect(result.ok).toBe(true)
+    expect(spawned[0]).toEqual([DESKTOP_NODE, activationHelperPath(state)])
+    expect(spawned[0]?.[0]).not.toBe(process.execPath)
+  })
+
+  it('spawns the takeover helper with the resolved node, not the Electron executable', async () => {
+    const { deps: d } = deps()
+    const { child, spawned } = fake()
+    const source: NodeInterpreterSource = async () => ({ path: DESKTOP_NODE, source: 'bundled' })
+
+    const result = await spawnTakeover(d, null, {}, ((program: string, args: string[]) => {
+      spawned.push([program, ...args])
+      return child as never
+    }) as never, source)
+
+    expect(result.ok).toBe(true)
+    expect(spawned[0]).toEqual([DESKTOP_NODE, takeoverHelperPath(d.stateDir)])
+    expect(spawned[0]?.[0]).not.toBe(process.execPath)
+  })
+
+  /**
+   * With no node there is nothing to start, and the honest answer is a refusal a person
+   * can act on — never a spawn of the Desktop app, and never a helper file left behind
+   * claiming a hand-over that never happened.
+   */
+  it('refuses when no node resolves, spawning nothing and writing no helper', async () => {
+    scratch = tempDir()
+    const state = path.join(scratch.path, 'state')
+    fs.mkdirSync(state, { recursive: true })
+    let spawned = 0
+    const source: NodeInterpreterSource = async () => null
+
+    const activation = await spawnActivation(state, plan, (() => {
+      spawned += 1
+      return fake().child as never
+    }) as never, source)
+    expect(activation.ok).toBe(false)
+    expect(activation.detail).toContain('no node that can run it')
+    expect(fs.existsSync(activationHelperPath(state))).toBe(false)
+
+    const { deps: d } = deps()
+    const takeover = await spawnTakeover(d, null, {}, (() => {
+      spawned += 1
+      return fake().child as never
+    }) as never, source)
+    expect(takeover.ok).toBe(false)
+    expect(fs.existsSync(takeoverHelperPath(d.stateDir))).toBe(false)
+    expect(spawned).toBe(0)
   })
 })
 
@@ -478,6 +650,45 @@ describe('running the generated activation helper', () => {
       return (error as { status?: number }).status ?? 1
     }
   }
+
+  /**
+   * The stop is a `spawnSync(STOP[0], …)`, so `STOP[0]` has to be a **program**.
+   *
+   * This is driven, not inspected: the helper really runs and the CLI script records
+   * whether it was reached. The entry is deliberately **not** executable, which is the one
+   * condition Windows always has — it has no shebang and no mode bit, so spawning a script
+   * as a program answers `EFTYPE` and nothing runs (measured against the real bundled node
+   * 24.21.0: `{"status":null,"error":"EFTYPE"}`). Reproducing that on POSIX is what makes
+   * the difference a fact here rather than a claim about another platform.
+   */
+  it('reaches the CLI only when the stop names a program rather than the entry file', () => {
+    const state = scratchState()
+    const cli = path.join(state, 'cli.mjs')
+    const reached = path.join(state, 'cli-ran.txt')
+    fs.writeFileSync(cli, `import fs from 'node:fs'\nfs.appendFileSync(${JSON.stringify(reached)}, process.argv.slice(2).join(' ') + '\\n')\n`, { mode: 0o644 })
+
+    const base: ActivationPlan = {
+      commands: [],
+      requires: [],
+      files: [],
+      stop: [process.execPath, cli, 'down', '--home', '/srv/hh'],
+      detach: [],
+      oldPid: null,
+      retire: [],
+      logPath: path.join(state, 'act.log'),
+    }
+
+    // The shipped shape — [node, entry, words] — reaches the CLI.
+    expect(execute(state, base)).toBe(0)
+    expect(fs.readFileSync(reached, 'utf8')).toContain('down --home /srv/hh')
+
+    // The shape that spreading `launch.args` produced — [entry, words] — does not: the
+    // helper's stop dies, and the CLI is never reached. That silent failure is why the
+    // panel could be started again over one that still held the port.
+    fs.rmSync(reached, { force: true })
+    execute(state, { ...base, stop: [cli, 'down', '--home', '/srv/hh'] })
+    expect(fs.existsSync(reached)).toBe(false)
+  })
 
   it('proves, stops, starts, then retires — in that order', () => {
     const state = scratchState()

@@ -398,6 +398,12 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
                   {`${t(CLI_SOURCE_KEYS[cli.source] ?? 'panelCliMissing')} · ${dash(cli.version)}`}
                 </Spec>
                 <Spec label={t('panelCliPath')}><Code>{dash(cli.path)}</Code></Spec>
+                {/*
+                  How the copy was chosen, in the plugin's own words. The hints above name the
+                  *cases* this page anticipated; this line is what says why a fallback happened,
+                  which a `hh.exe` found on PATH could otherwise do in silence.
+                */}
+                {cli.detail.length > 0 ? <Hint>{cli.detail}</Hint> : null}
               </>
             )}
         {panel.detail.length > 0 ? <Hint>{panel.detail}</Hint> : null}

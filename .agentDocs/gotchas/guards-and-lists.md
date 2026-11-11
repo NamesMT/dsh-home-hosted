@@ -42,3 +42,16 @@ still let a member vanish.
 - **`Number.parseInt` takes a *prefix*** (`0x10` → 0, the "whole log" sentinel): require
   `/^[+-]?\d+$/` plus `Number.isSafeInteger`, and refuse rather than default (`parsePasswd`, the
   `panel_logs` tool's `lines`).
+- **A nullable measurement read as "no objection" accepts anything.** `supported` was
+  `version === null || compareVersions(version, MIN_SUPPORTED_VERSION) >= 0`, so a copy that could not
+  name itself was *promoted* to supported — and on Windows `where hh` answers `C:\Windows\hh.exe`, the
+  HTML Help viewer (it exists only because `hh` is a real alias of the CLI, per home-hosted's `bin`),
+  which prints nothing and exits 255. That path then reached a generated boot entry. A PATH hit is now
+  a **candidate** that must prove itself by answering `--version` with a parseable version, and a hit
+  is skipped *before* it is probed when it sits in `%SystemRoot%`/`%WINDIR%` — a package manager never
+  installs there, and running the help viewer can flash a window. The rule to keep: **when the probe
+  is also the thing you want to avoid running, the skip must come first, not the version check.**
+  Two shapes of the same trap: `resolveShimmedCli` accepted the impostor for existing, and
+  `where.exe` prints one line *per hit*, so taking the first line is a guess — all hits are iterated.
+  `pinned` vs `global` is a preference and stays one; an unusable `homeHostedCommand` override remains
+  an instruction that is reported, never silently replaced.

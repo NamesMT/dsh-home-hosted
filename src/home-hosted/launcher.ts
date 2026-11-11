@@ -16,8 +16,11 @@ import path from 'node:path'
 import process from 'node:process'
 import { run } from '../util/exec.js'
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../util/fsx.js'
+import { parseVersion } from './launch.js'
+import { nodeInterpreter } from './node-interpreter.js'
+import type { NodeInterpreterSource } from './node-interpreter.js'
 import { MIGRATION_STEP_SOURCE } from './panel-migrate.js'
-import { compareVersions, parseVersion } from './resolve.js'
+import { compareVersions } from './resolve.js'
 
 /** A package-manager shim's real target, as the shim itself records it. */
 const SHIM_TARGET = /^#\s*cmd-shim-target=(.+)$/m
@@ -426,19 +429,36 @@ export function writeLauncher(options: LauncherOptions): LauncherWrite {
   return { path: file, changed }
 }
 
+/** What a preflight may be told instead of reading this process. */
+export interface PreflightOptions {
+  /** The platform the entry belongs to; defaults to this process's. */
+  platform?: NodeJS.Platform
+  /** The node that runs a JS file; defaults to this process's own resolution. */
+  nodeInterpreter?: NodeInterpreterSource
+}
+
 /**
  * Run the launcher the way the boot entry will, and read the version it answers.
  *
  * `env` is only for tests that have to describe the PATH the entry would see; a
  * boot entry inherits a login PATH, never the one this process happens to have.
  */
-export async function preflightLauncher(stateDir: string, timeoutMs = 10_000, env?: Record<string, string | undefined>): Promise<string | null> {
+export async function preflightLauncher(stateDir: string, timeoutMs = 10_000, env?: Record<string, string | undefined>, options: PreflightOptions = {}): Promise<string | null> {
   const file = launcherPath(stateDir)
   if (!fs.existsSync(file))
     return null
-  const result = process.platform === 'win32'
-    ? await run(process.execPath, [file, '--version'], { timeoutMs, ...(env === undefined ? {} : { env }) })
-    : await run(file, ['--version'], { timeoutMs, ...(env === undefined ? {} : { env }) })
+  const runOptions = { timeoutMs, ...(env === undefined ? {} : { env }) }
+  // POSIX runs the executable script itself, exactly as the entry does. Windows has no
+  // shebang, so the launcher needs a real node — never this process's executable, which
+  // under Desktop is the Electron binary and would open the app instead of answering.
+  if ((options.platform ?? process.platform) !== 'win32') {
+    const direct = await run(file, ['--version'], runOptions)
+    return parseVersion(direct.stdout) ?? parseVersion(direct.stderr)
+  }
+  const interpreter = await (options.nodeInterpreter ?? nodeInterpreter)()
+  if (interpreter === null)
+    return null
+  const result = await run(interpreter.path, [file, '--version'], runOptions)
   return parseVersion(result.stdout) ?? parseVersion(result.stderr)
 }
 

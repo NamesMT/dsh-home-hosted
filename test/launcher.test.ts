@@ -111,6 +111,46 @@ describe('boot launcher', () => {
     expect(await preflightLauncher(h.state, 10_000, isolatedPath())).toBe('0.6.1')
   })
 
+  /**
+   * On Windows the launcher is a script with no shebang, so the preflight has to run it
+   * through a real node — and under Desktop `process.execPath` is the Electron binary,
+   * which would open the application instead of answering.
+   *
+   * The platform is pinned, so this describes the Windows call on any host; without the
+   * seam the branch could only ever be exercised on Windows itself.
+   */
+  it('runs the launcher through a real node on win32, never the Electron executable', async () => {
+    const h = harness()
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
+
+    /**
+     * The recorder proves the path was **executed**, not merely consulted.
+     *
+     * Recording a call to the seam is not evidence: replacing `run(interpreter.path, …)` with
+     * `run(process.execPath, …)` left the old version of this test at 32/32, because the seam
+     * is still asked. So the recorder writes a marker file — and prints a version that a real
+     * launcher would not, so a run that skipped the recorder cannot report it either.
+     */
+    const marker = path.join(h.state, 'recorder-ran.txt')
+    const recorder = path.join(h.state, 'recorder-node')
+    fs.writeFileSync(recorder, `#!/bin/sh\nprintf ran > ${JSON.stringify(marker)}\necho "v0.6.1"\n`, { mode: 0o755 })
+    expect(fs.existsSync(marker)).toBe(false)
+
+    const answer = await preflightLauncher(h.state, 10_000, isolatedPath(), {
+      platform: 'win32',
+      nodeInterpreter: async () => ({ path: recorder, source: 'bundled' }),
+    })
+    expect(answer).toBe('0.6.1')
+    expect(fs.readFileSync(marker, 'utf8')).toBe('ran')
+
+    // With no node there is nothing to run the launcher with, and null is the honest
+    // answer the page turns into "the launcher did not answer".
+    expect(await preflightLauncher(h.state, 10_000, isolatedPath(), {
+      platform: 'win32',
+      nodeInterpreter: async () => null,
+    })).toBeNull()
+  })
+
   it('reads the version of the package a shim runs, not the one it sits in', () => {
     // A pnpm shim lives in the plugin's own node_modules/.bin, so walking up from
     // the shim read this plugin's package.json and reported the plugin's version

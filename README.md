@@ -162,6 +162,11 @@ browser: the page, the agent tools, workspaces, the panel, and boot autostart.
 in Electron — it is never one of the panel's server entries. (`dsh --profile desktop` is refused by
 the CLI, so a row for it could only crash-loop.) Server entries of every other kind are unaffected.
 
+Autostarting Desktop itself from the panel is out of scope: Desktop has no headless mode (its only
+argv flag is `--updated`, the window is shown on startup, and a second launch just focuses the running
+one), and its port is random, so there is no background process and no URL to check. Windows autostart
+entries of the **panel** still work from Desktop — including `windows-boot`.
+
 </details>
 
 <details>

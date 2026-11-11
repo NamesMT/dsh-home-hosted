@@ -10,7 +10,7 @@ import { DEFAULT_WORKSPACE, globalSettingsFile, hhDir, installedUiRecordFile, ru
 import { readStoredToken, storeToken, tokenSlot } from '../src/home-hosted/token.js'
 import { panelConsolePath } from '../src/home-hosted/panel-console.js'
 import { EXPECTED_RANGE } from '../src/home-hosted/resolve.js'
-import { readLauncherRecord } from '../src/home-hosted/launcher.js'
+import { launcherPath, readLauncherRecord } from '../src/home-hosted/launcher.js'
 import { canonicalPath } from '../src/home-hosted/instances.js'
 import { HomeHostedService } from '../src/service.js'
 import type { DshLaunch } from '../src/home-hosted/dsh-entry.js'
@@ -18,6 +18,7 @@ import type { BootLadderLike, BootInstallResult } from '../src/service.js'
 import { takeoverHelperPath } from '../src/home-hosted/panel-control.js'
 import type { ActivationPlan } from '../src/home-hosted/panel-control.js'
 import type { BootActivation, BootSpec } from '../src/boot/types.js'
+import type { NodeInterpreterSource } from '../src/home-hosted/node-interpreter.js'
 import type { PanelControlResult } from '../src/shared/contracts.js'
 import { SettingsStore } from '../src/settings.js'
 import { bootUnitName } from '../src/util/paths.js'
@@ -101,7 +102,7 @@ async function harness(options: {
   /** How long a mechanism's start/stop is watched for; a short window keeps the suite fast. */
   controlWaitMs?: number
   /** Replaces the detached hand-over helper, so no process is spawned. */
-  spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
+  spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult | Promise<PanelControlResult>
   /** The project the managed row belongs to; defaults to this process's cwd. */
   projectDir?: string
   /** The dsh surface this process runs in; defaults to `web`. */
@@ -110,6 +111,10 @@ async function harness(options: {
   preflight?: (stateDir: string) => Promise<string | null>
   /** Replaces the global install, which otherwise spawns a package manager. */
   installGlobal?: (range: string) => Promise<{ ok: boolean, detail: string, output: string }>
+  /** The node that runs a JS file, instead of resolving this process's own. */
+  nodeInterpreter?: NodeInterpreterSource
+  /** The platform a boot artifact is generated for; defaults to this process's. */
+  bootPlatform?: NodeJS.Platform
 } = {}): Promise<Harness> {
   scratch = tempDir()
   const home = path.join(scratch.path, 'home')
@@ -120,8 +125,12 @@ async function harness(options: {
 
   // A deterministic CLI path: a .mjs file is run through node, so no `which` probe.
   const fakeCli = options.cli ?? path.join(scratch.path, 'home-hosted.mjs')
-  if (options.cli === undefined)
-    fs.writeFileSync(fakeCli, '#!/usr/bin/env node\n', 'utf8')
+  if (options.cli === undefined) {
+    // A realistic stand-in: real home-hosted answers `--version` (measured on the pinned
+    // 0.11.0: `0.11.0`, exit 0), and `resolveCli` refuses an override that cannot name
+    // itself — which is the right behaviour for a path pointing at some other program.
+    fs.writeFileSync(fakeCli, '#!/usr/bin/env node\nconsole.log(\'0.11.0\')\n', 'utf8')
+  }
 
   if (options.panel !== undefined)
     writeJsonFile(runFile(home), { version: options.panelVersion ?? '0.6.1', pid: process.pid, url: options.panel.url, port: 1234 })
@@ -160,6 +169,8 @@ async function harness(options: {
     spawnActivation: options.spawnActivation ?? (() => ({ ok: true, detail: 'handed over' })),
     resolveDsh: options.resolveDsh,
     projectDir: options.projectDir,
+    nodeInterpreter: options.nodeInterpreter,
+    bootPlatform: options.bootPlatform,
     execCli: options.execCli === null ? undefined : options.execCli ?? (async (args, env): Promise<RunResult> => {
       cliCalls.push({ args, env })
       if (env.HHOSTED_TOKEN === undefined)
@@ -918,6 +929,197 @@ describe('the dsh Desktop client', () => {
   })
 })
 
+/**
+ * The reported defect: on DeepSeek Harness Desktop for Windows, `windows-boot` (and
+ * `windows-run` / `windows-task`) registered a task that started the **Desktop
+ * application** instead of the home-hosted server.
+ *
+ * The cause is that this plugin runs inside Electron there, so `process.execPath` is
+ * `…\DeepSeek Harness.exe`. An entry whose command is that starts the app: a Windows
+ * autostart action carries no environment, so `ELECTRON_RUN_AS_NODE=1` can never be
+ * supplied by it. Every case below pins the platform and the interpreter, so it runs
+ * on this Linux box and still describes the Windows artifact exactly.
+ */
+describe('the node a Windows boot entry names', () => {
+  const ELECTRON_EXEC = 'C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek Harness\\DeepSeek Harness.exe'
+  const BUNDLED_NODE = 'C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek Harness\\resources\\runtime\\primary-runtime\\dependencies\\node\\bin\\node.exe'
+
+  /** The interpreter a Desktop-for-Windows process resolves: the bundled node. */
+  const desktopNode: NodeInterpreterSource = async () => ({ path: BUNDLED_NODE, source: 'bundled' })
+
+  /** A status with the platform pinned, so a test's expectation does not depend on this host. */
+  function bootStatusWith(state: BootStatus['state']): BootStatus {
+    return { ...bootStatus, platform: 'win32', mechanism: 'windows-task', state, recommended: 'windows-task' }
+  }
+
+  /** A ladder that records the spec it was handed, for every verb. */
+  function recordingLadder(status: BootStatus = bootStatus): { ladder: BootLadderLike, specs: BootSpec[], asked: BootSpec[] } {
+    const specs: BootSpec[] = []
+    const asked: BootSpec[] = []
+    return {
+      specs,
+      asked,
+      ladder: {
+        status: async (spec) => {
+          asked.push(spec)
+          return status
+        },
+        install: async (spec): Promise<BootInstallResult> => {
+          specs.push(spec)
+          return { ok: true, changed: true, detail: 'installed', commands: [], needsPrivilege: false, mechanism: 'windows-task', status: bootStatus }
+        },
+        uninstall: async (spec): Promise<BootInstallResult> => {
+          specs.push(spec)
+          return { ok: true, changed: true, detail: 'removed', commands: [], needsPrivilege: false, mechanism: 'windows-task', status: bootStatus }
+        },
+        activate: async () => null,
+        control: async () => null,
+      },
+    }
+  }
+
+  /**
+   * The regression guard. On win32 under Electron the entry must name the real node,
+   * never the executable this process happens to run as.
+   */
+  it('names the bundled node as the command, and never the Electron executable', async () => {
+    const { ladder, specs } = recordingLadder()
+    const { service, state } = await harness({
+      ladder,
+      bootPlatform: 'win32',
+      nodeInterpreter: desktopNode,
+    })
+
+    await service.installBoot('windows-task')
+
+    const spec = specs[0]
+    expect(spec).toBeDefined()
+    expect(spec!.command).toBe(BUNDLED_NODE)
+    expect(spec!.command).not.toBe(ELECTRON_EXEC)
+    expect(spec!.command).not.toBe(process.execPath)
+    // The launcher is still what the entry runs, now as the first argument.
+    expect(spec!.args[0]).toBe(launcherPath(state))
+    // And the panel, not the app.
+    expect(spec!.args).toEqual(expect.arrayContaining(['up', '--foreground']))
+  })
+
+  it('keeps a POSIX entry pointing at the launcher itself, byte-identically', async () => {
+    // The other half of the guard: on POSIX the artifact must not change at all, or every
+    // existing entry is rewritten on the next plugin start.
+    const { ladder, specs } = recordingLadder()
+    const { service, state } = await harness({
+      ladder,
+      bootPlatform: 'linux',
+      nodeInterpreter: async () => ({ path: '/usr/bin/node', source: 'execPath' }),
+    })
+
+    await service.installBoot('systemd-user')
+
+    const spec = specs[0]
+    expect(spec!.command).toBe(launcherPath(state))
+    expect(spec!.args).not.toContain(launcherPath(state))
+    expect(spec!.args[0]).toBe('up')
+  })
+
+  it('treats a plain node on win32 as its own interpreter, exactly as before', async () => {
+    // A web-surface install on Windows runs under plain node: `process.execPath` *is*
+    // node, so the spec keeps naming it and no existing entry is rewritten.
+    const { ladder, specs } = recordingLadder()
+    const { service } = await harness({
+      ladder,
+      bootPlatform: 'win32',
+      nodeInterpreter: async () => ({ path: 'C:\\Program Files\\nodejs\\node.exe', source: 'execPath' }),
+    })
+
+    await service.installBoot('windows-run')
+    expect(specs[0]!.command).toBe('C:\\Program Files\\nodejs\\node.exe')
+  })
+
+  /**
+   * No node is a *different* failure from no CLI, and saying the wrong one is a false
+   * statement about a machine whose CLI is fine — which is what the page would show.
+   */
+  it('refuses the install with its own code when no node resolves, and says why', async () => {
+    const { ladder, specs } = recordingLadder()
+    const { service } = await harness({ ladder, bootPlatform: 'win32', nodeInterpreter: async () => null })
+
+    await expect(service.installBoot('windows-boot')).rejects.toMatchObject({ code: 'NODE_NOT_FOUND' })
+    // Nothing was written: a task naming a broken command is worse than none.
+    expect(specs).toEqual([])
+  })
+
+  /**
+   * An entry this plugin wrote must stay removable — even on the machine where the
+   * reason it was refused is also the reason its node is gone. The uninstall needs the
+   * spec only to name the artifact and prove the marker, so it does not refuse.
+   */
+  it('still removes the entry when no node resolves, rather than stranding it', async () => {
+    const { ladder, specs } = recordingLadder()
+    const { service } = await harness({ ladder, bootPlatform: 'win32', nodeInterpreter: async () => null })
+
+    const { result } = await service.uninstallBoot('windows-task')
+    expect(result.ok).toBe(true)
+    expect(specs).toHaveLength(1)
+  })
+
+  it('does not claim the CLI is missing when only the node is', async () => {
+    // A ladder that would answer "not installed" for the spec it is given: nothing is there,
+    // so the honest state is unsupported.
+    const { ladder, asked } = recordingLadder(bootStatusWith('not-installed'))
+    const { service } = await harness({ ladder, bootPlatform: 'win32', nodeInterpreter: async () => null })
+
+    const status = await service.bootStatus('windows-boot')
+    expect(status.state).toBe('unsupported')
+    // The CLI resolved, so the CLI is not the thing to report as missing.
+    expect(status.detail).toContain('the home-hosted CLI was found')
+    expect(status.detail).toContain('no node that can run it')
+    expect(status.detail).not.toContain('no home-hosted CLI is available')
+    // And the ladder *was* asked, so "nothing installed" is a measurement rather than an
+    // assumption made because the spec could not be built.
+    expect(asked).toHaveLength(1)
+  })
+
+  /**
+   * An entry this plugin already wrote must stay **visible and removable** when no node
+   * resolves.
+   *
+   * The page derives `installed = boot.mechanism !== null`, so a hardcoded
+   * `mechanism: null, state: 'unsupported'` hides the uninstall button — stranding exactly
+   * the entry a previous release wrote with the Electron command on the machine whose node
+   * has since gone. That contradicts `uninstallBoot`, which deliberately still removes it,
+   * and the promise in `docs/BOOT.md`.
+   */
+  it('still reports an installed entry when no node resolves, so the page can offer removal', async () => {
+    const { ladder, asked } = recordingLadder(bootStatusWith('enabled-running'))
+    const { service } = await harness({ ladder, bootPlatform: 'win32', nodeInterpreter: async () => null })
+
+    const status = await service.bootStatus('windows-task')
+    expect(asked).toHaveLength(1)
+    // The installed entry is reported, so `installed` is true and the button exists.
+    expect(status.state).toBe('enabled-running')
+    expect(status.mechanism).toBe('windows-task')
+    // Both true facts, said together: the entry to remove, and why install cannot work.
+    expect(status.detail).toContain('cannot generate a new entry')
+    expect(status.detail).toContain('no node that can run it')
+  })
+
+  it('still reports a genuinely missing CLI as a missing CLI', async () => {
+    // The control case: with no CLI the old sentence is the true one, and the two
+    // failures have to stay distinguishable on the page.
+    const { service } = await harness({
+      cli: path.join(os.tmpdir(), 'dsh-home-hosted-nope', `missing-${process.pid}.mjs`),
+      ladder: recordingLadder().ladder,
+      bootPlatform: 'win32',
+    })
+    // The fake CLI file does not exist, so resolution finds nothing to run.
+    fs.rmSync(path.join(os.tmpdir(), 'dsh-home-hosted-nope'), { recursive: true, force: true })
+
+    const status = await service.bootStatus('windows-boot')
+    expect(status.detail).toContain('no home-hosted CLI is available')
+  })
+
+})
+
 describe('panel lifecycle from the page', () => {
   it('writes the chosen panel port into .hh/settings.json before starting it', async () => {
     const { home, service, settings } = await harness()
@@ -979,12 +1181,27 @@ describe('panel lifecycle from the page', () => {
     expect(result.detail).toBe('the panel is using its stock UI')
   })
 
+  /**
+   * A CLI that resolves and then fails must hand its own words to the person, not only a
+   * non-zero exit.
+   *
+   * Its own fixture, deliberately: a CLI that cannot even name itself is now refused during
+   * resolution (`resolveCli`), which is a *different* message and a different layer. This
+   * case is the one after that — it answers `--version` so it is accepted, then fails the
+   * command with an explanation, which is what has to reach the page.
+   */
   it('says why a panel CLI could not be run instead of only that it failed', async () => {
-    // A directory exists but cannot be executed, which is how a broken CLI looks.
-    const { service } = await harness({ cli: os.tmpdir(), execCli: null })
+    const dir = tempDir()
+    const broken = path.join(dir.path, 'home-hosted.mjs')
+    fs.writeFileSync(broken, `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('0.11.0'); process.exit(0) }
+console.error('the panel state root is unreadable'); process.exit(1)
+`, 'utf8')
+    const { service } = await harness({ cli: broken, execCli: null })
     const result = await service.uiManage('update')
     expect(result.ok).toBe(false)
-    expect(result.output ?? '').not.toBe('')
+    expect(result.output ?? '').toContain('the panel state root is unreadable')
+    dir.cleanup()
   })
 
   it('installs an official UI through ui-switch --asset, not a downloaded zip', async () => {
@@ -1513,7 +1730,72 @@ describe('handing the panel to the entry that was just installed', () => {
       retire: [['rm', '-f', '/x.desktop']],
     })
     expect(calls[0]?.plan.stop.join(' ')).toContain('down')
+    // The stop's **first word must be a program**. A script launch's own args start with
+    // the entry file, so spreading them made the helper do `spawnSync('…/home-hosted.mjs',
+    // …)` — which runs on POSIX only through its shebang and mode bit, and on Windows not
+    // at all (measured: `EFTYPE`, status null, nothing runs). The helper then starts the
+    // new entry over a panel that may still hold the port, which is the one thing its stop
+    // exists to prevent.
+    expect(calls[0]?.plan.stop[0]).not.toMatch(/\.(?:mjs|cjs|js)$/)
+    expect(calls[0]?.plan.stop[1]).toMatch(/\.(?:mjs|cjs|js)$/)
     expect(result.detail).toContain('retiring xdg-autostart')
+  })
+
+  /**
+   * The regression guard for the hand-over's CLI `down` on Windows.
+   *
+   * A Windows entry carries no environment and the helper cannot rely on a shebang, so the
+   * stop has to name a real node before the entry. Without it the `down` never runs and the
+   * helper starts the new entry beside a live panel.
+   */
+  it('names a real node before the CLI entry in the hand-over stop', async () => {
+    const BUNDLED_NODE = 'C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek Harness\\resources\\runtime\\primary-runtime\\dependencies\\node\\bin\\node.exe'
+    let handed: ActivationPlan | null = null
+    const { service, home } = await harness({
+      panel: await withPanel(),
+      ladder: activatingLadder(plan),
+      bootPlatform: 'win32',
+      nodeInterpreter: async () => ({ path: BUNDLED_NODE, source: 'bundled' }),
+      spawnActivation: (_stateDir, value) => {
+        handed = value
+        return { ok: true, detail: 'handed over' }
+      },
+    })
+
+    await service.installBoot('windows-task')
+
+    expect(handed).not.toBeNull()
+    const stop = handed!.stop
+    expect(stop[0]).toBe(BUNDLED_NODE)
+    // Never this process's executable, which is the Electron binary under Desktop.
+    expect(stop[0]).not.toBe(process.execPath)
+    // The entry is an argument *after* the program, then the CLI's own words.
+    expect(stop[1]).toMatch(/\.(?:mjs|cjs|js)$/)
+    expect(stop.slice(2)).toEqual(['down', '--home', home])
+  })
+
+  /**
+   * With no node the hand-over refuses, before a helper exists to fail silently.
+   *
+   * Deliberately on a platform whose *boot spec* needs no node, so the refusal can only be
+   * the hand-over's: on win32 `bootArtifact` refuses first and this would pass without
+   * exercising the stop at all.
+   */
+  it('refuses the hand-over when no node resolves, rather than writing a helper that cannot stop', async () => {
+    let spawned = 0
+    const { service } = await harness({
+      panel: await withPanel(),
+      ladder: activatingLadder(plan),
+      bootPlatform: 'linux',
+      nodeInterpreter: async () => null,
+      spawnActivation: () => {
+        spawned += 1
+        return { ok: true, detail: 'handed over' }
+      },
+    })
+
+    await expect(service.installBoot('systemd-user')).rejects.toMatchObject({ code: 'NODE_NOT_FOUND' })
+    expect(spawned).toBe(0)
   })
 
   it('stops the panel through the CLI first, naming the pid to wait on', async () => {

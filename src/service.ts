@@ -17,6 +17,7 @@ import type { BootActivation, BootControlResult, BootSpec } from './boot/types.j
 import type { ActivationPlan } from './home-hosted/panel-control.js'
 import { createBootLadder } from './boot/index.js'
 import { accountOf } from './boot/index.js'
+import { isInstalledState } from './boot/common.js'
 import type { AccountInput, PasswdEntry } from './boot/index.js'
 import { findEntry, nullGroupRefusal, patchEntry, readConfig, readGlobalSettings, removeEntry as removeConfigEntry, schemaRefusal, setControl, SERVER_MERGE_KEYS, upsertEntry, writeConfig } from './home-hosted/config-file.js'
 import { DEFAULT_WORKSPACE, defaultWorkspace, installedUiRecordFile, isLegacyRoot, readWorkspaces, serversFile } from './home-hosted/layout.js'
@@ -31,6 +32,8 @@ import { EXPECTED_RANGE, MIN_SUPPORTED_VERSION, resolveCli } from './home-hosted
 import { preflightLauncher, writeLauncher } from './home-hosted/launcher.js'
 import type { PanelControlDeps } from './home-hosted/panel-control.js'
 import { activationLogPath, installGlobal, spawnActivation, spawnTakeover, startPanel as startPanelProcess, stopPanel as stopPanelProcess } from './home-hosted/panel-control.js'
+import { launchArgv, NO_INTERPRETER_DETAIL, nodeInterpreter } from './home-hosted/node-interpreter.js'
+import type { NodeInterpreterSource } from './home-hosted/node-interpreter.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { readPanelConsole } from './home-hosted/panel-console.js'
@@ -92,6 +95,21 @@ export interface BootLadderLike {
   control: (spec: BootSpec, action: 'start' | 'stop', mechanism?: BootMechanism | null) => Promise<BootControlResult | null>
 }
 
+/**
+ * Why no boot artifact could be built.
+ *
+ * `cli` and `node` are different statements about the machine, with different
+ * remedies, so they are kept apart: reporting a missing node as "no home-hosted CLI
+ * is available" would be false about a machine whose CLI resolved fine.
+ */
+interface BootArtifactFailure {
+  reason: 'cli' | 'node'
+  detail: string
+}
+
+/** A spec a provider can write, or the reason there is none. */
+type BootArtifact = { spec: BootSpec } | { failure: BootArtifactFailure }
+
 export class HomeHostedError extends Error {
   constructor(message: string, readonly code: string) {
     super(message)
@@ -142,7 +160,7 @@ export interface HomeHostedServiceOptions {
   /** Test seam: how long a mechanism's start/stop is watched for, instead of 20 s. */
   controlWaitMs?: number
   /** Test seam: hand the panel to an autostart entry without spawning a helper. */
-  spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult
+  spawnActivation?: (stateDir: string, plan: ActivationPlan) => PanelControlResult | Promise<PanelControlResult>
   /** The project the managed `dsh` row belongs to; defaults to this process's cwd. */
   projectDir?: string
   /** Test seam: resolve the running harness instead of reading this process. */
@@ -153,6 +171,13 @@ export interface HomeHostedServiceOptions {
   uid?: number | null
   /** Test seam: the user database to resolve the entry's account against. */
   passwd?: readonly PasswdEntry[]
+  /**
+   * Test seam: the node that runs a JavaScript file, instead of resolving this
+   * process's own. See `home-hosted/node-interpreter.ts`.
+   */
+  nodeInterpreter?: NodeInterpreterSource
+  /** Test seam: the platform a boot artifact is generated for; defaults to this process's. */
+  bootPlatform?: NodeJS.Platform
 }
 
 interface CachedClient {
@@ -515,6 +540,7 @@ export class HomeHostedService extends Service {
       stateDir: this.options.stateDir,
       env: launch === null ? {} : homeHostedEnv({ home: this.options.home, projectDir }, launch),
       exec: this.options.execCli,
+      nodeInterpreter: this.options.nodeInterpreter ?? nodeInterpreter,
     }
   }
 
@@ -525,7 +551,13 @@ export class HomeHostedService extends Service {
     const launch = resolution.launch
     if (launch === null)
       throw new HomeHostedError(resolution.status.detail, 'CLI_NOT_FOUND')
-    return await run(launch.program, [...launch.args, ...args], { env, timeoutMs: 30_000 })
+    // One rule for every spawn of the CLI: a script entry runs under a real node (never this
+    // process's executable, which is the Electron binary under Desktop) and a `.cmd` shim runs
+    // through `cmd.exe`, because `spawn` without a shell can run neither directly.
+    const argv = await launchArgv(launch, args, this.options.nodeInterpreter ?? nodeInterpreter)
+    if (argv === null)
+      throw new HomeHostedError(NO_INTERPRETER_DETAIL, 'NODE_NOT_FOUND')
+    return await run(argv[0] ?? '', argv.slice(1), { env, timeoutMs: 30_000 })
   }
 
   // -------------------------------------------------------------------------
@@ -1017,11 +1049,15 @@ export class HomeHostedService extends Service {
       const launch = cli?.resolution.launch ?? null
       if (launch === null)
         throw new HomeHostedError(cli?.resolution.status.detail ?? 'no home-hosted CLI could be resolved', 'CLI_NOT_FOUND')
-      const full = [...launch.args, ...args, '--home', home]
+      const words = [...args, '--home', home]
+      const full = [...launch.args, ...words]
       const env = { ...process.env, HHOSTED_HOME: home }
+      const argv = await launchArgv(launch, words, this.options.nodeInterpreter ?? nodeInterpreter)
+      if (argv === null)
+        throw new HomeHostedError(NO_INTERPRETER_DETAIL, 'NODE_NOT_FOUND')
       const result = this.options.execCli !== undefined
         ? await this.options.execCli(full, env)
-        : await run(launch.program, full, { env, timeoutMs: 300_000 })
+        : await run(argv[0] ?? '', argv.slice(1), { env, timeoutMs: 300_000 })
       // A CLI that never started has no stdout to show, so its spawn error is the
       // only thing that explains the failure.
       return { code: result.code, output: failureOutput(result) ?? '' }
@@ -1159,11 +1195,19 @@ export class HomeHostedService extends Service {
     return createBootLadder(this.accountFacts())
   }
 
-  private async bootSpec(): Promise<BootSpec | null> {
+  /**
+   * Everything a boot artifact needs, or why it cannot be built.
+   *
+   * The two failures are kept apart because they are different statements about the
+   * machine with different remedies: no CLI resolved at all, versus a CLI that resolved
+   * and a node that did not. Calling the second one "no home-hosted CLI is available"
+   * would be false about a machine whose CLI is fine.
+   */
+  private async bootArtifact(options: { legacyCommandWhenNoNode?: boolean } = {}): Promise<BootArtifact> {
     const { resolution, launcher } = await this.cli()
     const launch = resolution.launch
     if (launch === null)
-      return null
+      return { failure: { reason: 'cli', detail: resolution.status.detail } }
     const runtime = this.runtime()
     // The account a system entry hands the panel to, resolved from the login that
     // elevated (or this process's own), never from `$USER`: under `sudo` the
@@ -1190,27 +1234,76 @@ export class HomeHostedService extends Service {
     )
 
     // The entry runs the stable launcher, not the pinned node_modules path: that
-    // path carries a version and a peer hash, and moves on the next install.
-    if (launcher !== null) {
-      const cliArgs = spec.args.slice(launch.args.length)
-      if (process.platform === 'win32') {
-        spec.command = process.execPath
-        spec.args = [launcher, ...cliArgs]
+    // path carries a version and a peer hash, and moves on the next install. `cli()`
+    // writes it whenever a CLI resolves, so it is present on every path that gets here.
+    if (launcher === null)
+      return { failure: { reason: 'cli', detail: resolution.status.detail } }
+    const cliArgs = spec.args.slice(launch.args.length)
+    if (this.bootPlatform() === 'win32') {
+      // A Windows entry carries no environment and no shebang, so it must name a real
+      // node beside the launcher — while `process.execPath` under Desktop is the
+      // Electron binary, which without `ELECTRON_RUN_AS_NODE=1` starts the app instead
+      // of the panel. That is the defect this path exists to prevent.
+      const program = await this.nodeInterpreterPath()
+      if (program === null) {
+        // Removing an entry must stay possible on a machine whose node has since gone:
+        // an artifact this plugin wrote cannot be left un-removable. The uninstall path
+        // only compares, and the command an earlier release baked in is `process.execPath`.
+        if (options.legacyCommandWhenNoNode !== true)
+          return { failure: { reason: 'node', detail: NO_INTERPRETER_DETAIL } }
       }
       else {
-        spec.command = launcher
-        spec.args = cliArgs
+        spec.command = program
       }
+      spec.args = [launcher, ...cliArgs]
     }
-    return spec
+    else {
+      spec.command = launcher
+      spec.args = cliArgs
+    }
+    return { spec }
+  }
+
+  /** The node that runs a JS file here, or null; the seam is `options.nodeInterpreter`. */
+  private async nodeInterpreterPath(): Promise<string | null> {
+    return (await (this.options.nodeInterpreter ?? nodeInterpreter)())?.path ?? null
+  }
+
+  /** The platform a boot artifact is generated for; `options.bootPlatform` pins it in a test. */
+  private bootPlatform(): NodeJS.Platform {
+    return this.options.bootPlatform ?? process.platform
+  }
+
+  /** Refuse a boot action that cannot produce an artifact, naming the real cause. */
+  private bootUnavailable(failure: BootArtifactFailure): HomeHostedError {
+    return new HomeHostedError(failure.detail, failure.reason === 'cli' ? 'CLI_NOT_FOUND' : 'NODE_NOT_FOUND')
   }
 
   async bootStatus(mechanism?: BootMechanism): Promise<BootStatus> {
-    const platform: BootStatus['platform'] = process.platform === 'linux'
+    const platform: BootStatus['platform'] = this.bootPlatform() === 'linux'
       ? 'linux'
-      : process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'other'
-    const spec = await this.bootSpec()
-    if (spec === null) {
+      : this.bootPlatform() === 'darwin' ? 'darwin' : this.bootPlatform() === 'win32' ? 'win32' : 'other'
+    const artifact = await this.bootArtifact()
+    if ('failure' in artifact) {
+      /**
+       * A missing **node** is not a reason to forget the entry that is already there.
+       *
+       * The page derives `installed` from `boot.mechanism !== null`, so reporting
+       * `mechanism: null` here hides the uninstall button — leaving an entry a previous
+       * release wrote (with the Electron command, before this fix) stranded on exactly the
+       * machine whose node has since gone. That contradicts both `uninstallBoot`, which
+       * deliberately still removes it, and `docs/BOOT.md`'s promise that an entry this
+       * plugin wrote is never stranded.
+       *
+       * The CLI *did* resolve, so a spec still exists to ask the ladder with; the command it
+       * carries cannot be spawned, which is fine because `status()` only compares and names
+       * the artifact. Only the *new* spec is unavailable, and the detail says so.
+       */
+      if (artifact.failure.reason === 'node') {
+        const installed = await this.installedEntryStatus(mechanism)
+        if (installed !== null)
+          return installed
+      }
       return {
         platform,
         mechanism: null,
@@ -1220,11 +1313,37 @@ export class HomeHostedService extends Service {
         privileged: false,
         unitPath: null,
         commands: [],
-        detail: 'no home-hosted CLI is available, so no boot entry can be generated; install the plugin with its dependencies',
+        detail: artifact.failure.reason === 'cli'
+          ? 'no home-hosted CLI is available, so no boot entry can be generated; install the plugin with its dependencies'
+          : NO_INTERPRETER_DETAIL,
         candidates: [],
       }
     }
-    return await this.ladder().status(spec, mechanism ?? this.requestedMechanism())
+    return await this.ladder().status(artifact.spec, mechanism ?? this.requestedMechanism())
+  }
+
+  /**
+   * The status of an entry that exists, when no new spec can be built.
+   *
+   * Null when nothing is installed, so the caller falls back to `unsupported`: an entry that
+   * is not there is genuinely nothing to report. When one *is*, its own status is returned
+   * with the reason no new one can be written appended, because both facts are true and a
+   * person needs both — the entry to remove, and why the install button will not work.
+   */
+  private async installedEntryStatus(mechanism?: BootMechanism): Promise<BootStatus | null> {
+    const artifact = await this.bootArtifact({ legacyCommandWhenNoNode: true })
+    if ('failure' in artifact)
+      return null
+    try {
+      const status = await this.ladder().status(artifact.spec, mechanism ?? this.requestedMechanism())
+      if (!isInstalledState(status.state))
+        return null
+      return { ...status, detail: `${status.detail} [cannot generate a new entry: ${NO_INTERPRETER_DETAIL}]` }
+    }
+    catch {
+      // An unreadable status is reported by the `unsupported` answer below.
+      return null
+    }
   }
 
   /** The mechanism the settings name, or `undefined` for `auto`. */
@@ -1234,9 +1353,10 @@ export class HomeHostedService extends Service {
   }
 
   async installBoot(mechanism?: BootMechanism): Promise<{ result: BootInstallResult, status: BootStatus }> {
-    const spec = await this.bootSpec()
-    if (spec === null)
-      throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
+    const artifact = await this.bootArtifact()
+    if ('failure' in artifact)
+      throw this.bootUnavailable(artifact.failure)
+    const spec = artifact.spec
 
     // Read what the panel is doing *before* the install: this decides whether the
     // entry has to be started, and whether that start must stop anything first.
@@ -1275,7 +1395,7 @@ export class HomeHostedService extends Service {
     // Only now, with the intent already on disk: the helper stops the panel, and
     // this process may not survive to write anything after that.
     if (handover.plan !== null && handover.stateDir !== null) {
-      const spawned = (this.options.spawnActivation ?? spawnActivation)(handover.stateDir, handover.plan)
+      const spawned = await (this.options.spawnActivation ?? spawnActivation)(handover.stateDir, handover.plan)
       this.clientCache = null
       this.tokenProof = null
       return {
@@ -1352,6 +1472,13 @@ export class HomeHostedService extends Service {
     const deps = await this.panelControlDeps()
     if (deps.launch === null)
       throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
+    // A complete argv, so the helper's `spawnSync(STOP[0], …)` names a program: a script
+    // launch's own args start with the entry file, which Windows cannot spawn at all
+    // (`EFTYPE`, measured) and POSIX can only run because of its shebang and mode bit.
+    // Resolved here, before the helper exists, so a refusal leaves no artifact behind.
+    const stop = await launchArgv(deps.launch, ['down', '--home', deps.home], deps.nodeInterpreter ?? nodeInterpreter)
+    if (stop === null)
+      throw new HomeHostedError(NO_INTERPRETER_DETAIL, 'NODE_NOT_FOUND')
 
     const retire = activation.retired.length > 0 ? `; retiring ${activation.retired.join(', ')}` : ''
     return {
@@ -1367,7 +1494,7 @@ export class HomeHostedService extends Service {
         // refuses to start a second panel while `run.json` names a live pid, so
         // the old one has to be gone first or the entry just fails while the
         // orphan keeps the port.
-        stop: [...deps.launch.args, 'down', '--home', deps.home],
+        stop,
         detach: activation.stop,
         oldPid: panel.pid,
         retire: activation.retire,
@@ -1377,9 +1504,13 @@ export class HomeHostedService extends Service {
   }
 
   async uninstallBoot(mechanism?: BootMechanism): Promise<{ result: BootInstallResult, status: BootStatus }> {
-    const spec = await this.bootSpec()
-    if (spec === null)
-      throw new HomeHostedError((await this.cli()).resolution.status.detail, 'CLI_NOT_FOUND')
+    // A missing node never blocks removal: the spec an uninstall needs only names the
+    // artifact and its marker, and leaving an entry nobody can delete is worse than the
+    // command it carries while it is being deleted.
+    const artifact = await this.bootArtifact({ legacyCommandWhenNoNode: true })
+    if ('failure' in artifact)
+      throw this.bootUnavailable(artifact.failure)
+    const spec = artifact.spec
     const result = await this.ladder().uninstall(spec, mechanism)
     if (result.ok)
       await this.retireLegacyBootEntry(spec, mechanism)
@@ -1442,9 +1573,10 @@ export class HomeHostedService extends Service {
    * in both directions is in `.agentDocs/gotchas/boot-platforms.md`.
    */
   private async bootControl(action: 'start' | 'stop'): Promise<BootControlResult | null> {
-    const spec = await this.bootSpec()
-    if (spec === null)
+    const artifact = await this.bootArtifact()
+    if ('failure' in artifact)
       return null
+    const spec = artifact.spec
     try {
       // The configured mechanism, so the entry that acts is the one the page names;
       // `control()` reads the status once and reports which entry it used.
@@ -1649,7 +1781,7 @@ export class HomeHostedService extends Service {
     const control = stop !== null && start !== null
       ? { mechanism: stop.mechanism, stop: stop.commands, start: start.commands }
       : null
-    const result = spawnTakeover(deps, runtime.pid, { control })
+    const result = await spawnTakeover(deps, runtime.pid, { control })
     this.clientCache = null
     this.tokenProof = null
     return result
@@ -1702,9 +1834,10 @@ export class HomeHostedService extends Service {
   private async migrateBootEntryName(): Promise<void> {
     if (!this.options.settings.get().autostart.enabled)
       return
-    const spec = await this.bootSpec()
-    if (spec === null || spec.unitName === LEGACY_BOOT_UNIT_NAME)
+    const artifact = await this.bootArtifact()
+    if ('failure' in artifact || artifact.spec.unitName === LEGACY_BOOT_UNIT_NAME)
       return
+    const spec = artifact.spec
     try {
       const own = await this.bootStatus()
       if (own.state !== 'enabled-running' && own.state !== 'enabled-failing' && own.state !== 'installed-disabled')
