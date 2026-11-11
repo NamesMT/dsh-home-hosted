@@ -189,6 +189,36 @@ describe('windows run key', () => {
     expect(/[^^]&/.test(payload.wrapperContent ?? '')).toBe(false)
   })
 
+  /**
+   * A refusal must leave the machine exactly as it was.
+   *
+   * The other order removed the `Run` value first and only then found a foreign wrapper,
+   * reporting failure with the entry already gone — and the retry could never recover, because
+   * `status()` reads a missing value as `not-installed`. So every file the removal touches is
+   * proved to be ours *before* the registry is mutated.
+   */
+  it('refuses a foreign wrapper without touching the Run value', async () => {
+    const { provider } = makeProvider()
+    await provider.install(winSpec())
+
+    // Replace the wrapper the install just wrote with somebody else's file.
+    const long = winSpec({ args: ['C:\home-hosted\dist\cli.js', 'up', '--home', 'C:\\Users\\tester\\' + 'x'.repeat(240)] })
+    const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)
+    expect(payload.wrapperPath).not.toBeNull()
+    fs.mkdirSync(path.dirname(payload.wrapperPath!), { recursive: true })
+    fs.writeFileSync(payload.wrapperPath!, 'somebody else wrote this\r\n', 'utf8')
+    store.set(regKeyOf(RUN_KEY, 'home-hosted'), payload.data)
+
+    const before = store.get(regKeyOf(RUN_KEY, 'home-hosted'))
+    const refused = await provider.uninstall(long)
+    expect(refused.ok).toBe(false)
+    expect(refused.ok).toBe(false)
+    // `inspectOwned`'s own sentence: the file exists and is not marked as ours.
+    expect(refused.detail).toMatch(/does not carry this plugin's marker/)
+    // The whole point: the value is still there, so the entry is still removable next time.
+    expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toBe(before)
+  })
+
   it('deletes the value and the marker, tolerating reg exit 1', async () => {
     const { provider } = makeProvider()
     await provider.install(winSpec())

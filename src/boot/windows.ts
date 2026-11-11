@@ -229,6 +229,24 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
             return failed(`${RUN_KEY}\\${name} is not marked as ours; refusing to delete a foreign Run value`)
         }
 
+        /**
+         * Prove every file this removal touches is ours BEFORE mutating the registry.
+         *
+         * The other order deleted the `Run` value first and only then refused a foreign wrapper,
+         * leaving the entry gone while reporting failure — and the retry could never succeed,
+         * because `status()` reads a missing value as `not-installed`. A refusal has to leave the
+         * machine exactly as it was.
+         */
+        const payload = windowsRunPayload(ctx, spec)
+        const stale = path.join(localAppData(ctx), 'home-hosted', `${spec.unitName}.cmd`)
+        for (const file of [payload.wrapperPath, stale]) {
+          if (file === null || file === undefined)
+            continue
+          const own = inspectOwned(file, marker)
+          if (own.exists && !own.owned)
+            return failed(own.reason ?? `${file} was not written by this plugin; refusing to remove anything`)
+        }
+
         let changed = false
         if (current.exists) {
           const del = await ctx.run('reg.exe', ['delete', RUN_KEY, '/v', name, '/f'])
@@ -242,14 +260,13 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
           changed = true
         }
 
-        const payload = windowsRunPayload(ctx, spec)
+        // Already proved ours above, so only a deletion failure can remain.
         if (payload.wrapperPath) {
           const remove = removeOwned(payload.wrapperPath, marker)
           if (remove.refusal)
             return failed(remove.refusal)
           changed = remove.removed || changed
         }
-        const stale = path.join(localAppData(ctx), 'home-hosted', `${spec.unitName}.cmd`)
         const staleRemove = removeOwned(stale, marker)
         if (staleRemove.refusal)
           return failed(staleRemove.refusal)

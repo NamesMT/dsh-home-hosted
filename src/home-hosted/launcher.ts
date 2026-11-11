@@ -411,7 +411,12 @@ function choose() {
   for (const requireSupported of [true, false]) {
     const unsupported = []
     for (const tier of tiers()) {
-      const found = tier.map(item => ({ ...item, version: versionOf(item.entry) }))
+      // tiers() already put the recorded version on the record tier; re-deriving it here
+      // overwrote it with versionOf, which reads a package manifest and returns null for a
+      // Windows .cmd shim — so a recorded pin lost its version, dropped out of the supported
+      // pass, and a DIFFERENT installed copy won the boot. Keep what the tier carries, and only
+      // ask the filesystem when it carries nothing.
+      const found = tier.map(item => ({ ...item, version: item.version !== undefined ? item.version : versionOf(item.entry) }))
       const supported = requireSupported
         ? found.filter(item => item.version !== null && compare(item.version, MIN_VERSION) >= 0)
         : found

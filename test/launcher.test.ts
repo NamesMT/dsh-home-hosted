@@ -363,6 +363,28 @@ describe('the no-shell guarantee in the process seam', () => {
  * `cmdShimArgv` exists for, so the launcher carries the same rule and is asserted here rather than
  * only exercised on Windows.
  */
+/**
+ * A recorded pin must win over a *different* copy that merely sits below it.
+ *
+ * `tiers()` puts the recorded version on the record tier, and `choose()` used to overwrite it
+ * with `versionOf(entry)` — which reads a package manifest and therefore returns `null` for a
+ * Windows `.cmd` shim. A recorded `.cmd` pin then dropped out of the supported pass and some
+ * other installed copy booted in its place: the exact "the entry runs something I did not
+ * choose" failure the recorded pin exists to prevent.
+ *
+ * The assertion reads the generated source, because the alternative is a Windows box: the
+ * record tier's version survives into `choose()`.
+ */
+describe('the recorded pin keeps its version', () => {
+  it('does not overwrite a version the tier already carries', () => {
+    const h = harness()
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, resolvedVersion: '0.11.0', minVersion: '0.4.1' })
+    const source = fs.readFileSync(launcherPath(h.state), 'utf8')
+    // The guard, not the prose: `choose()` must consult the tier's own version first.
+    expect(source).toMatch(/version:\s*item\.version !== undefined \? item\.version : versionOf\(item\.entry\)/)
+  })
+})
+
 describe('the generated launcher spawns without a shell', () => {
   function source(): string {
     const h = harness()
