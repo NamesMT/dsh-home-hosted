@@ -353,6 +353,39 @@ describe('the no-shell guarantee in the process seam', () => {
   })
 })
 
+/**
+ * The generated launcher's own spawn rule.
+ *
+ * It used to pass `shell: true` for a Windows `.cmd`, which does not quote: measured on Windows,
+ * a panel root of `C:\Users\Jane Doe\home-hosted` arrived as two argv words and the panel died
+ * with `Unexpected argument 'Doe\home-hosted'`; the launcher's migrate repair used `shell: false`
+ * on the same shim, which is `EINVAL` and killed the launcher outright. This is the defect class
+ * `cmdShimArgv` exists for, so the launcher carries the same rule and is asserted here rather than
+ * only exercised on Windows.
+ */
+describe('the generated launcher spawns without a shell', () => {
+  function source(): string {
+    const h = harness()
+    writeLauncher({ stateDir: h.state, dshHome: h.dshHome, resolvedEntry: h.entry, minVersion: '0.4.1' })
+    return fs.readFileSync(launcherPath(h.state), 'utf8')
+  }
+
+  it('never sets a spawn shell option', () => {
+    // The *option*, not the word: comments mention the shell deliberately.
+    expect(source()).not.toMatch(/shell:\s*(?:true|false|useShell)/)
+  })
+
+  it('routes a .cmd through cmd.exe /d /c with the shim as its own word', () => {
+    const src = source()
+    // Both spawn helpers must go through the one builder, or a second copy drifts.
+    expect(src).toContain('function spawnArgv')
+    expect(src).toContain('function cmdShimArgv')
+    expect(src).toMatch(/cmd\.exe'?\s*,?\s*'\/d', '\/c'|\/d', '\/c'/)
+    for (const helper of ['launchChild', 'runQuiet'])
+      expect(src, `${helper} must build its argv through spawnArgv`).toMatch(new RegExp(`function ${helper}\\([^)]*\\)[\\s\\S]{0,200}spawnArgv\\(`))
+  })
+})
+
 describe('dsh launcher', () => {
   it('writes an executable script and records the entry it resolved', () => {
     const h = dshHarness()

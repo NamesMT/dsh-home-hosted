@@ -131,6 +131,15 @@ write the artifact.
   words. **POSIX is not a safe default either**: the shebang works only while the file keeps its mode
   bit — the same file with the executable bit cleared is `Permission denied` — so `launchArgv` names
   the program on both platforms, with no `platform` parameter to grow into two guards.
+- **The generated launcher had the same defect, and a fix can make an old bug newly reachable.**
+  Routing Windows entries at the launcher (so they run a real node) meant the launcher executed on
+  Windows for the first time — and its own spawn was wrong in both directions: `shell: true` for a
+  `.cmd` concatenates the argv without quoting, so a panel root of `C:\Users\Jane Doe\home-hosted`
+  arrived as two words (`Unexpected argument 'Doe\home-hosted'`), and `runQuiet` used `shell: false`
+  on the same shim, which is `EINVAL` and killed the launcher outright. Both now go through one
+  `spawnArgv`/`cmdShimArgv` pair inside the generated script, with no shell option anywhere. The
+  general lesson: **when a change makes dormant code execute for the first time, audit that code as
+  if it were new** — its defects were unreachable before, not absent.
 - **The same shape hid in every direct CLI call.** `cliExec`, `uiManage`'s `runUi` and the preflight
   each did `run(launch.program, …)`; under Desktop that is the Electron binary, so every direct CLI
   command and UI subcommand would have opened the app. Anything that spawns the CLI goes through

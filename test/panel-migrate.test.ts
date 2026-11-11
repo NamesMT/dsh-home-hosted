@@ -269,7 +269,9 @@ describe('the generated launcher lifts an old config at boot', () => {
     // The migration runs through `runQuiet`, which never sets `current` — the variable the signal
     // handler forwards to — so a stop cannot kill the process rewriting the person's config.
     expect(source).toContain('function runQuiet')
-    expect(source).toMatch(/runQuiet\(program, \[\.\.\.prefix, 'migrate', '--yes'/)
+    // `prefix` is now passed separately because `runQuiet` builds the argv through `spawnArgv`
+    // (a Windows `.cmd` needs `cmd.exe /d /c`, and a shell would split a spaced path).
+    expect(source).toMatch(/runQuiet\(program, prefix, \['migrate', '--yes'/)
     expect(source).not.toContain('spawnSync')
     const quiet = source.slice(source.indexOf('function runQuiet'), source.indexOf('function runQuiet') + 700)
     expect(quiet).not.toContain('current =')
