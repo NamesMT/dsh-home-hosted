@@ -21,18 +21,145 @@ import {
   assertRegistryValueName,
   assertUnitName,
   batchCommandLine,
+  isAbsolutePath,
   powershellLiteral,
   windowsArg,
   windowsCommandLine,
   windowsDisplayCommand,
   xmlEscape,
   xmlUnescape,
+  vbscriptString,
 } from './escape.js'
-import { bootState, errorMessage, failed, inspectOwned, localAppData, removeOwned, tempDir, writeOwned } from './common.js'
+import { bootState, errorMessage, existsOf, failed, inspectOwned, localAppData, removeOwned, tempDir, writeOwned } from './common.js'
 
 export const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
 export const MARKER_KEY = 'HKCU\\Software\\home-hosted'
 const RUN_VALUE_LIMIT = 260
+
+/**
+ * Why the wrapper exists at all: **`wscript.exe` is a GUI-subsystem binary.**
+ *
+ * `node.exe` is console-subsystem (PE `Subsystem=3`, measured), so a task or a `Run`
+ * value that starts it inherits no console, Windows allocates one, and the user sees a
+ * console window at every logon. `wscript.exe` is `Subsystem=2` (also measured), so it
+ * cannot allocate a console — the window is impossible by construction rather than
+ * hidden. Measured from inside the started process with `GetConsoleWindow` +
+ * `IsWindowVisible`: task -> `node.exe` is `visible=True`; task -> `wscript.exe <vbs>`
+ * is `visible=False`. The task's `<Hidden>true</Hidden>` does *not* help, and a
+ * `conhost.exe --headless` wrapper is disqualified for a different reason: it turns a
+ * child exit of 7 into an exit of 0, which would blind `RestartOnFailure`. The wrapper
+ * below preserves the code (measured `Last Result: 7`).
+ *
+ * Returns null when this machine does not provably have one, and null is the signal every
+ * caller uses to keep today's direct command: a machine whose `SystemRoot` we cannot read
+ * is not a machine whose wrapper we can name, and a bare
+ * `wscript.exe` would not be an absolute `spec.command` (`validate()` refuses it), so
+ * guessing one there would break the install instead of improving it.
+ */
+export function wscriptExecutable(ctx: BootProviderContext): string | null {
+  const root = ctx.env.SystemRoot?.trim() || ctx.env.windir?.trim()
+  if (root === undefined || root === '' || !isAbsolutePath(root))
+    return null
+  const candidate = path.win32.join(root, 'System32', 'wscript.exe')
+  return existsOf(ctx, candidate) ? candidate : null
+}
+
+/** The `.vbs` this spec's launch goes through, in the same directory as the `.cmd` fallback. */
+export function hiddenLaunchPath(ctx: BootProviderContext, spec: BootSpec): string {
+  return path.join(localAppData(ctx), 'home-hosted', `${assertUnitName(spec.unitName)}.vbs`)
+}
+
+/**
+ * The wrapper's own exit code when it could not start the child at all.
+ *
+ * Not 0: a wrapper that could not launch anything must not look like a clean exit, or
+ * `RestartOnFailure` and the launcher's retry branch both read the failure as success.
+ */
+const WRAPPER_FAILURE = 90
+
+/**
+ * The `.vbs` source: a marker comment, then the real command line run hidden and waited on.
+ *
+ * Two things here are **measured**, and the two guards cover different failures — neither
+ * is redundant, which a matrix of the four combinations showed:
+ *
+ * | shape | unstartable child | missing `.vbs` |
+ * | --- | --- | --- |
+ * | bare `sh.Run`, no `//B` | **hangs** on a modal dialog (no exit in 120 s) | **hangs** |
+ * | bare `sh.Run`, `//B` | exits **0** — a false success | exits 1 |
+ * | `On Error` guards, no `//B` | exits 90 | n/a (the script never runs) |
+ * | `On Error` guards, `//B` | exits 90 | exits 1 |
+ *
+ * So `//B` is what stops the wrapper hanging before it can even report, and `On Error` is
+ * what stops a failed launch reading as **exit 0** — the same blind spot that disqualified
+ * `conhost --headless` (child 7 -> 0). Both are needed: `//B` alone makes a broken wrapper
+ * look healthy to `RestartOnFailure`, and the guards alone cannot run at all when the
+ * script itself is missing.
+ *
+ * The command line is the **original** spec's. Deriving it from the windowless spec would
+ * make the wrapper launch `wscript.exe` again and recurse.
+ *
+ * A marker is safe inside the comment because `assertNoControl` already refuses the one
+ * character that ends a VBScript comment: a bare `CR` (measured to run the text after
+ * it as code — exit 42), while `LF` does too but `assertNoControl` refuses it as well.
+ * `U+2028`, `U+2029` and `U+0085` were each measured to stay inside the comment.
+ */
+export function hiddenLaunchScript(spec: BootSpec, marker = spec.marker): string {
+  validate(spec)
+  assertMarker(marker)
+  return [
+    `' ${marker}`,
+    'On Error Resume Next',
+    'Set sh = CreateObject("WScript.Shell")',
+    `If Err.Number <> 0 Then WScript.Quit ${WRAPPER_FAILURE}`,
+    `rc = sh.Run(${vbscriptString(windowsCommandLine(spec.command, spec.args))}, 0, True)`,
+    `If Err.Number <> 0 Then WScript.Quit ${WRAPPER_FAILURE}`,
+    'WScript.Quit rc',
+    '',
+  ].join('\r\n')
+}
+
+/** A derived spec plus the artifact it needs, or `scriptPath: null` for no wrapper. */
+export interface HiddenLaunch {
+  /** What the entry must start. The input spec itself when no wrapper is used. */
+  spec: BootSpec
+  /** The `.vbs` that must exist for this launch to work, or null. */
+  scriptPath: string | null
+}
+
+/**
+ * The **one** derivation of the launch an entry performs.
+ *
+ * Everything that has to agree about it goes through here: `install()` writes what this
+ * names, `status()`/`inspect()` compare the registered artifact against it, and
+ * `uninstall()`/`retireCommands()` remove exactly it. A second derivation — even one
+ * that looks the same — is the bug this shape exists to prevent, because the symptom is
+ * `changed: true` on every re-install and a page that reports drift that is not there.
+ *
+ * `//B` is batch mode, and it is load-bearing: without it a missing `.vbs` (deleted by
+ * hand, or an interrupted uninstall) makes `wscript.exe` open a modal "Input Error" dialog
+ * and never exit — measured: still alive after 120 s. It does not touch a real child's exit
+ * code (7 either way), which is why the *failure* case still needs the script's own guards.
+ * See `hiddenLaunchScript` for the full matrix.
+ */
+export function hiddenLaunch(ctx: BootProviderContext, spec: BootSpec): HiddenLaunch {
+  // Validated **here**, on the input spec, before anything is derived. The derivation
+  // replaces `command`/`args` with the wrapper's, so a hostile `command` or `unitName`
+  // would otherwise be validated only in the derived form — and `uninstall()` reaches
+  // this path with only `assertMarker` behind it. That is the same guard
+  // `windowsRunPayload` carries, applied to the value the caller actually passed.
+  validate(spec)
+  const wscript = wscriptExecutable(ctx)
+  if (wscript === null)
+    return { spec, scriptPath: null }
+  const scriptPath = hiddenLaunchPath(ctx, spec)
+  return { spec: { ...spec, command: wscript, args: ['//B', '//nologo', scriptPath] }, scriptPath }
+}
+
+/** The windowless form of a spec; the spec itself when this machine has no `wscript.exe`. */
+export function windowlessSpec(ctx: BootProviderContext, spec: BootSpec): BootSpec {
+  return hiddenLaunch(ctx, spec).spec
+}
 
 function validate(spec: BootSpec): void {
   assertUnitName(spec.unitName)
@@ -106,6 +233,32 @@ export function windowsRunPayload(ctx: BootProviderContext, spec: BootSpec): Win
   }
 }
 
+/**
+ * The `.cmd` fallback's path, which `windowsRunPayload` writes for a long command line.
+ *
+ * Named here as well as there because the *removal* paths have to find it without
+ * knowing whether this install used it: the `.cmd` may be left over from an install
+ * made before the wrapper existed, or from a machine whose `wscript.exe` has since gone.
+ */
+function legacyWrapperPath(ctx: BootProviderContext, spec: BootSpec): string {
+  return path.join(localAppData(ctx), 'home-hosted', `${assertUnitName(spec.unitName)}.cmd`)
+}
+
+/** Every file the `Run` mechanism can leave behind for one spec. */
+function runArtifacts(ctx: BootProviderContext, spec: BootSpec): { script: string, wrapper: string } {
+  return { script: hiddenLaunchPath(ctx, spec), wrapper: legacyWrapperPath(ctx, spec) }
+}
+
+/** One refusal for the first artifact that exists and is not ours; null when all are ours or absent. */
+function foreignArtifact(files: readonly string[], marker: string): string | null {
+  for (const file of files) {
+    const own = inspectOwned(file, marker)
+    if (own.exists && !own.owned)
+      return own.reason ?? `${file} was not written by this plugin; refusing to touch it`
+  }
+  return null
+}
+
 function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
   const mechanism = 'windows-run' as const
   const nameOf = (spec: BootSpec): string => assertRegistryValueName(assertUnitName(spec.unitName))
@@ -139,6 +292,14 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         const owned = markerValue.data?.includes(marker) === true
         if (!owned)
           return { state: 'not-installed', unitPath: RUN_KEY, detail: `${name} exists under ${RUN_KEY} but is not marked as ours; refusing to treat it as this plugin's entry`, commands: [] }
+        // The value names the wrapper, so a wrapper that is gone makes the entry start
+        // nothing — reporting `enabled-running` there would hide exactly the failure a
+        // person needs to see. Only checked when this machine's launch *is* the wrapper.
+        const launch = hiddenLaunch(ctx, spec)
+        if (launch.scriptPath !== null && !existsOf(ctx, launch.scriptPath)) {
+          const state: BootState = bootState(true, true, true)
+          return { state, unitPath: RUN_KEY, detail: `${RUN_KEY}\\${name} starts at login, but its wrapper ${launch.scriptPath} is missing, so it would start nothing`, commands: [] }
+        }
         const state: BootState = bootState(true, true, false)
         return { state, unitPath: RUN_KEY, detail: `${RUN_KEY}\\${name} starts at login (not at boot)`, commands: [] }
       }
@@ -152,11 +313,15 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         validate(spec)
         const name = nameOf(spec)
         const marker = assertMarker(spec.marker)
-        const payload = windowsRunPayload(ctx, spec)
-        const wrapperExists = payload.wrapperPath !== null && fs.existsSync(payload.wrapperPath)
-        const wrapperOwn = payload.wrapperPath ? inspectOwned(payload.wrapperPath, marker) : null
-        if (wrapperOwn?.exists && !wrapperOwn.owned)
-          return failed(wrapperOwn.reason ?? 'foreign wrapper')
+        const launch = hiddenLaunch(ctx, spec)
+        const artifacts = runArtifacts(ctx, spec)
+        // Nothing is mutated while a file this install would touch is somebody else's.
+        const foreign = foreignArtifact([artifacts.script, artifacts.wrapper], marker)
+        if (foreign !== null)
+          return failed(foreign)
+
+        // The windowless form is what the entry starts; the payload builder only quotes it.
+        const payload = windowsRunPayload(ctx, launch.spec)
 
         const markerValue = await queryReg(ctx, MARKER_KEY, name)
         const owned = markerValue.data?.includes(marker) === true
@@ -170,12 +335,31 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
           windowsDisplayCommand('reg.exe', ['add', RUN_KEY, '/v', name, '/t', 'REG_SZ', '/d', payload.data, '/f']),
         ]
 
+        /**
+         * Exactly the artifacts this launch needs, and then whatever the *other* form
+         * left behind. The fallback's `.cmd` converges away once the wrapper takes over,
+         * and an orphaned `.vbs` converges away if the wrapper ever cannot be used —
+         * so a re-install is a no-op in either direction instead of reporting `changed`.
+         */
+        const wanted: Array<{ path: string, content: string }> = []
+        if (launch.scriptPath !== null)
+          wanted.push({ path: launch.scriptPath, content: hiddenLaunchScript(spec, marker) })
+        if (payload.wrapperPath !== null && payload.wrapperContent !== null)
+          wanted.push({ path: payload.wrapperPath, content: payload.wrapperContent })
+        const stale = [artifacts.script, artifacts.wrapper].filter(file => !wanted.some(entry => entry.path === file))
+
         let changed = false
-        if (payload.wrapperPath && payload.wrapperContent) {
-          const write = writeOwned(payload.wrapperPath, marker, payload.wrapperContent, 0o644)
+        for (const artifact of wanted) {
+          const write = writeOwned(artifact.path, marker, artifact.content, 0o644)
           if (write.refusal)
             return failed(write.refusal)
           changed = write.changed || changed
+        }
+        for (const file of stale) {
+          const remove = removeOwned(file, marker)
+          if (remove.refusal)
+            return failed(remove.refusal)
+          changed = remove.removed || changed
         }
 
         if (!current.exists || current.data !== payload.data) {
@@ -197,11 +381,6 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         if (after.data !== payload.data)
           return failed(`${RUN_KEY}\\${name} does not read back as the value that was written`, { changed, commands })
 
-        // A wrapper we no longer need is cleaned up so the Run value converges on the direct form.
-        if (!payload.wrapperPath && wrapperExists && wrapperOwn?.owned) {
-          removeOwned(path.join(localAppData(ctx), 'home-hosted', `${spec.unitName}.cmd`), marker)
-        }
-
         return {
           ok: true,
           changed,
@@ -222,10 +401,12 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         const current = await queryReg(ctx, RUN_KEY, name)
         const markerValue = await queryReg(ctx, MARKER_KEY, name)
         const owned = markerValue.data?.includes(marker) === true
+        const launch = hiddenLaunch(ctx, spec)
+        const payload = windowsRunPayload(ctx, launch.spec)
+        const artifacts = runArtifacts(ctx, spec)
         if (current.exists && !owned) {
-          const payload = windowsRunPayload(ctx, spec)
-          const wrapperOwned = payload.wrapperPath !== null ? inspectOwned(payload.wrapperPath, marker).owned : false
-          if (current.data !== payload.data && !wrapperOwned)
+          const artifactOwned = [artifacts.script, artifacts.wrapper].some(file => inspectOwned(file, marker).owned)
+          if (current.data !== payload.data && !artifactOwned)
             return failed(`${RUN_KEY}\\${name} is not marked as ours; refusing to delete a foreign Run value`)
         }
 
@@ -237,15 +418,9 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
          * because `status()` reads a missing value as `not-installed`. A refusal has to leave the
          * machine exactly as it was.
          */
-        const payload = windowsRunPayload(ctx, spec)
-        const stale = path.join(localAppData(ctx), 'home-hosted', `${spec.unitName}.cmd`)
-        for (const file of [payload.wrapperPath, stale]) {
-          if (file === null || file === undefined)
-            continue
-          const own = inspectOwned(file, marker)
-          if (own.exists && !own.owned)
-            return failed(own.reason ?? `${file} was not written by this plugin; refusing to remove anything`)
-        }
+        const foreign = foreignArtifact([artifacts.script, artifacts.wrapper], marker)
+        if (foreign !== null)
+          return failed(foreign)
 
         let changed = false
         if (current.exists) {
@@ -261,16 +436,12 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
         }
 
         // Already proved ours above, so only a deletion failure can remain.
-        if (payload.wrapperPath) {
-          const remove = removeOwned(payload.wrapperPath, marker)
+        for (const file of [artifacts.script, artifacts.wrapper]) {
+          const remove = removeOwned(file, marker)
           if (remove.refusal)
             return failed(remove.refusal)
           changed = remove.removed || changed
         }
-        const staleRemove = removeOwned(stale, marker)
-        if (staleRemove.refusal)
-          return failed(staleRemove.refusal)
-        changed = staleRemove.removed || changed
 
         const after = await queryReg(ctx, RUN_KEY, name)
         if (after.exists)
@@ -299,17 +470,31 @@ function createWindowsRunProviderImpl(ctx: BootProviderContext): BootProvider {
       return null
     },
 
-    /** Deleting the value and its marker stops nothing that is already running. */
+    /**
+     * Deleting the value and its marker stops nothing that is already running.
+     *
+     * The wrapper goes too, or every switch away from this mechanism would leave a `.vbs`
+     * that a later login could never run. Ownership is decided **here**, at plan time,
+     * exactly as the systemd retirement decides it: the step is only emitted for a file
+     * this plugin wrote. `Remove-Item -LiteralPath` is used rather than `del` because
+     * these steps run argv-only, with no shell to quote `&` or `%` for.
+     */
     async retireCommands(spec: BootSpec): Promise<BootRetirement> {
       const name = nameOf(spec)
+      const marker = assertMarker(spec.marker)
+      const artifacts = runArtifacts(ctx, spec)
+      const ours = [artifacts.script, artifacts.wrapper].filter(file => inspectOwned(file, marker).owned)
+      const removeFiles = ours.map(file => ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', `Remove-Item -LiteralPath ${powershellLiteral(file)} -Force -ErrorAction SilentlyContinue`])
       return {
         commands: [
           ['reg.exe', 'delete', RUN_KEY, '/v', name, '/f'],
           ['reg.exe', 'delete', MARKER_KEY, '/v', name, '/f'],
+          ...removeFiles,
         ],
         display: [
           windowsDisplayCommand('reg.exe', ['delete', RUN_KEY, '/v', name, '/f']),
           windowsDisplayCommand('reg.exe', ['delete', MARKER_KEY, '/v', name, '/f']),
+          ...ours.map(file => windowsDisplayCommand('powershell.exe', ['-NoProfile', '-Command', `Remove-Item -LiteralPath ${powershellLiteral(file)} -Force`])),
         ],
       }
     },
@@ -487,6 +672,17 @@ interface TaskFlavour {
   nameOf: (spec: BootSpec) => string
   xml: (spec: BootSpec) => string
   script: (spec: BootSpec) => string
+  /**
+   * Whether the registered action must go through the windowless wrapper.
+   *
+   * `true` only for the logon task, because only an interactive logon has a desktop to
+   * show a console on. `false` for the boot task, and that is a **measurement**, not a
+   * preference: a SYSTEM task runs in session 0, which has no interactive desktop, so a
+   * task that starts `node.exe` there already measured `visible=False`. Adding the
+   * wrapper would buy nothing and would put a second artifact between SYSTEM and the
+   * panel.
+   */
+  hideWindow: boolean
   /** How the entry starts the panel. */
   describe: string
   /** Whether it starts the panel before an interactive login. */
@@ -499,6 +695,9 @@ const LOGON_TASK: TaskFlavour = {
   nameOf: spec => assertUnitName(spec.unitName),
   xml: scheduledTaskXml,
   script: registerTaskScript,
+  // Measured `visible=True` for a task that starts node.exe at logon; a wrapper is
+  // the only shape that removes the console rather than hiding it.
+  hideWindow: true,
   describe: 'runs at logon, not at boot',
   bootCapable: false,
   detectReason: {
@@ -512,6 +711,9 @@ const BOOT_TASK: TaskFlavour = {
   nameOf: spec => bootTaskNameOf(spec.unitName),
   xml: bootTaskXml,
   script: registerBootTaskScript,
+  // No wrapper: session 0 has no interactive desktop, so a SYSTEM task that starts
+  // node.exe directly already measured `visible=False`. See `TaskFlavour.hideWindow`.
+  hideWindow: false,
   describe: 'runs at boot as SYSTEM, before any login, in session 0',
   bootCapable: true,
   detectReason: {
@@ -523,6 +725,16 @@ const BOOT_TASK: TaskFlavour = {
 function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): BootProvider {
   const mechanism = flavour.mechanism
   const nameOf = flavour.nameOf
+
+  /**
+   * What this flavour's registered action must actually name.
+   *
+   * The single derivation: `inspect()` (and so `status()`), `install()` and the two
+   * removal paths all ask this, never the raw spec. `hideWindow` is the whole difference
+   * between the mechanisms, and a second place deciding it is how an install starts
+   * rewriting a task that already matches.
+   */
+  const entryOf = (spec: BootSpec): HiddenLaunch => flavour.hideWindow ? hiddenLaunch(ctx, spec) : { spec, scriptPath: null }
 
   const query = async (name: string): Promise<{ exists: boolean, xml: string | null }> => {
     const res = await ctx.run('schtasks.exe', ['/Query', '/TN', name, '/XML'])
@@ -536,12 +748,26 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
     if (!found.exists || found.xml === null)
       return { exists: false, xml: null, marked: false, matches: false }
     const marked = xmlUnescape(found.xml).includes(spec.marker)
-    const args = spec.args.map(windowsArg).join(' ')
+    const entry = entryOf(spec).spec
+    const args = entry.args.map(windowsArg).join(' ')
     const matches = marked
-      && xmlTag(found.xml, 'Command') === spec.command
+      && xmlTag(found.xml, 'Command') === entry.command
       && xmlTag(found.xml, 'Arguments') === args
       && (xmlTag(found.xml, 'WorkingDirectory') ?? spec.cwd) === spec.cwd
     return { exists: true, xml: found.xml, marked, matches }
+  }
+
+  /**
+   * Write (or converge away) the `.vbs` this flavour's action names.
+   *
+   * `writeOwned` is idempotent on identical bytes, so a re-install reports `changed:
+   * false`; a foreign file refuses the whole install rather than being overwritten.
+   */
+  const syncArtifact = (spec: BootSpec, entry: HiddenLaunch): { changed: boolean, refusal: string | null } => {
+    if (entry.scriptPath === null)
+      return { changed: false, refusal: null }
+    const write = writeOwned(entry.scriptPath, assertMarker(spec.marker), hiddenLaunchScript(spec, spec.marker), 0o644)
+    return { changed: write.changed, refusal: write.refusal }
   }
 
   const hasRegisterCmdlet = async (): Promise<boolean> => {
@@ -581,6 +807,14 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
           return { state: 'not-installed', unitPath: null, detail: `no scheduled task named ${name}`, commands: [] }
         if (!info.marked)
           return { state: 'not-installed', unitPath: null, detail: `task ${name} exists but does not carry this plugin's marker; refusing to treat it as this plugin's entry`, commands: [] }
+        // The action names the wrapper, so a missing wrapper means the logon would start
+        // nothing. Reported as failing rather than healthy, because the entry a person
+        // relies on is the one that does not work.
+        const entry = entryOf(spec)
+        if (entry.scriptPath !== null && !existsOf(ctx, entry.scriptPath)) {
+          const state: BootState = bootState(true, true, true)
+          return { state, unitPath: null, detail: `scheduled task ${name} is registered, but its wrapper ${entry.scriptPath} is missing, so it would start nothing (${flavour.describe})`, commands: [] }
+        }
         const state: BootState = bootState(true, true, false)
         return { state, unitPath: null, detail: `scheduled task ${name} is registered (${flavour.describe})`, commands: [] }
       }
@@ -593,6 +827,7 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
       try {
         validate(spec)
         const name = nameOf(spec)
+        const marker = assertMarker(spec.marker)
         const info = await inspect(spec)
         if (info.exists && !info.marked)
           return failed(`scheduled task ${name} already exists and was not written by this plugin; refusing to overwrite it`)
@@ -604,15 +839,27 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
           windowsDisplayCommand('schtasks.exe', ['/Query', '/TN', name, '/XML']),
         ]
 
+        const entry = entryOf(spec)
         if (info.exists && info.matches) {
+          // Already registered, but the wrapper it names may not be on disk (a hand
+          // deletion, an interrupted uninstall): writing it back is part of the install,
+          // and it is a no-op when the bytes already match.
+          const artifact = syncArtifact(spec, entry)
+          if (artifact.refusal)
+            return failed(artifact.refusal, { needsPrivilege: true })
           const verify = await query(name)
           if (verify.exists)
-            return { ok: true, changed: false, detail: `scheduled task ${name} is already registered`, commands: [], needsPrivilege: true }
+            return { ok: true, changed: artifact.changed, detail: artifact.changed ? `scheduled task ${name} was already registered; its wrapper was rewritten` : `scheduled task ${name} is already registered`, commands: [], needsPrivilege: true }
         }
+
+        // Proved before the task is registered, so a refusal leaves the machine as it was.
+        const artifact = syncArtifact(spec, entry)
+        if (artifact.refusal)
+          return failed(artifact.refusal, { needsPrivilege: true })
 
         const cmdlet = await hasRegisterCmdlet()
         if (cmdlet) {
-          const script = flavour.script(spec)
+          const script = flavour.script(entry.spec)
           const res = await ctx.run('powershell.exe', ['-NoProfile', '-Command', script])
           if (codeOf(res) !== 0)
             return failed(problem(res, windowsDisplayCommand('powershell.exe', ['-NoProfile', '-Command', script])) ?? 'Register-ScheduledTask failed', { needsPrivilege: true, commands: elevatedCommands })
@@ -620,7 +867,7 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
         else {
           const xmlFile = path.join(tempDir(ctx), `${name}.xml`)
           fs.mkdirSync(path.dirname(xmlFile), { recursive: true })
-          fs.writeFileSync(xmlFile, Buffer.from(`\uFEFF${flavour.xml(spec)}`, 'utf16le'))
+          fs.writeFileSync(xmlFile, Buffer.from(`\uFEFF${flavour.xml(entry.spec)}`, 'utf16le'))
           const createCommand = windowsDisplayCommand('schtasks.exe', ['/Create', '/TN', name, '/XML', xmlFile, '/F'])
           const create = await ctx.run('schtasks.exe', ['/Create', '/TN', name, '/XML', xmlFile, '/F'])
           if (codeOf(create) !== 0)
@@ -648,9 +895,27 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
     async uninstall(spec: BootSpec): Promise<BootActionResult> {
       try {
         const name = nameOf(spec)
+        const marker = assertMarker(spec.marker)
         const info = await inspect(spec)
-        if (!info.exists)
-          return { ok: true, changed: false, detail: `no scheduled task named ${name}; already gone`, commands: [], needsPrivilege: false }
+        const entry = entryOf(spec)
+        /**
+         * Proved before the task is unregistered, exactly as `windows-run.uninstall` does:
+         * a refusal must leave the machine as it was, and a foreign `.vbs` at our path
+         * would otherwise be reported *after* the entry was already gone.
+         */
+        if (entry.scriptPath !== null) {
+          const own = inspectOwned(entry.scriptPath, marker)
+          if (own.exists && !own.owned)
+            return failed(own.reason ?? `${entry.scriptPath} was not written by this plugin; refusing to remove anything`)
+        }
+        if (!info.exists) {
+          // No task, but a wrapper left behind by an interrupted removal is still ours to
+          // clear — otherwise a later install would adopt an artifact nothing references.
+          const orphan = entry.scriptPath === null ? { removed: false, refusal: null } : removeOwned(entry.scriptPath, marker)
+          if (orphan.refusal)
+            return failed(orphan.refusal)
+          return { ok: true, changed: orphan.removed, detail: orphan.removed ? `no scheduled task named ${name}; removed its orphaned wrapper` : `no scheduled task named ${name}; already gone`, commands: [], needsPrivilege: false }
+        }
         if (!info.marked)
           return failed(`scheduled task ${name} is not marked as ours; refusing to delete a foreign task`)
         if (!(await isElevated()))
@@ -667,6 +932,11 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
         const after = await query(name)
         if (after.exists)
           return failed(`scheduled task ${name} still exists after removal`, { changed: true, needsPrivilege: true })
+
+        // The task is gone, so the wrapper it named has no reader left.
+        const remove = entry.scriptPath === null ? { removed: false, refusal: null } : removeOwned(entry.scriptPath, marker)
+        if (remove.refusal)
+          return failed(remove.refusal, { changed: true, needsPrivilege: true })
 
         return {
           ok: true,
@@ -720,15 +990,34 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
       return null
     },
 
-    /** Unregistering a task stops nothing that is already running. */
+    /**
+     * Unregistering a task stops nothing that is already running.
+     *
+     * The wrapper is removed in the same plan, and only when the marker proves it is
+     * ours: a switch retires the mechanism it came from, and leaving a `.vbs` behind
+     * would accumulate an artifact no entry names. `Remove-Item -LiteralPath` runs
+     * argv-only, so no shell quotes it and a path with `&` needs no escaping.
+     */
     async retireCommands(spec: BootSpec): Promise<BootRetirement> {
       const name = nameOf(spec)
+      const entry = entryOf(spec)
+      const ours = entry.scriptPath !== null && inspectOwned(entry.scriptPath, assertMarker(spec.marker)).owned
       const cmdlet = await hasRegisterCmdlet()
       return {
-        commands: [cmdlet
-          ? ['powershell.exe', '-NoProfile', '-Command', unregisterTaskScript(name)]
-          : ['schtasks.exe', '/Delete', '/TN', name, '/F']],
-        display: [windowsDisplayCommand('schtasks.exe', ['/Delete', '/TN', name, '/F'])],
+        commands: [
+          cmdlet
+            ? ['powershell.exe', '-NoProfile', '-Command', unregisterTaskScript(name)]
+            : ['schtasks.exe', '/Delete', '/TN', name, '/F'],
+          ...(ours && entry.scriptPath !== null
+            ? [['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', `Remove-Item -LiteralPath ${powershellLiteral(entry.scriptPath)} -Force -ErrorAction SilentlyContinue`]]
+            : []),
+        ],
+        display: [
+          windowsDisplayCommand('schtasks.exe', ['/Delete', '/TN', name, '/F']),
+          ...(ours && entry.scriptPath !== null
+            ? [windowsDisplayCommand('powershell.exe', ['-NoProfile', '-Command', `Remove-Item -LiteralPath ${powershellLiteral(entry.scriptPath)} -Force`])]
+            : []),
+        ],
       }
     },
   }

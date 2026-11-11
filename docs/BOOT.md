@@ -135,6 +135,35 @@ If no node resolves, the install refuses instead of writing a task that cannot s
 says *that* — a missing node is not a missing CLI. Removal is still allowed: an entry this plugin wrote
 must never be stranded.
 
+### No console window at logon
+
+`node.exe` is a console program. Started by a task or a `Run` value it has no console to inherit, so
+Windows creates one — and a console window appears at every logon. Nothing in the entry's settings
+stops that: measured on Windows 11, the task's `Hidden` flag still leaves the window visible, and
+hiding the *child* the launcher starts does not help either, because the window belongs to the task's
+own process.
+
+So `windows-task` and `windows-run` launch the panel through a small generated `.vbs` started by
+`wscript.exe`. `wscript` is a GUI-subsystem program, so it *cannot* create a console at all — the
+window never exists rather than being created and hidden — and it hands the panel's exit code back, so
+a crash still counts as a failure and `RestartOnFailure` still fires. `windows-boot` needs none of
+this: a SYSTEM task runs in session 0 and shows no window.
+
+The fallback is the plain command, used when `wscript.exe` is missing. `<unitName>.vbs` lives beside
+the `Run` wrapper under `%LOCALAPPDATA%\home-hosted\`, is written only by this plugin, and is removed
+with the entry; like every other artifact here it carries the ownership marker, so a file this plugin
+did not write is never deleted.
+
+Two details of that script are load-bearing, and both were measured:
+
+- **It is pure ASCII.** VBScript decodes a BOM-less file in the ANSI code page, so a UTF-8 path became
+  `JosĂ©` before the panel saw it, and a UTF-8 BOM is a compile error. Non-ASCII characters are
+  therefore emitted as `ChrW(&H…)`, which is why a panel path may contain any character.
+- **It runs in batch mode (`//B`) and guards its own failure.** Without `//B` a missing script leaves
+  `wscript` waiting on a modal dialog forever; with `//B` alone an unstartable panel exits `0`, which
+  would look healthy to `RestartOnFailure`. The guards exit `90` instead, so a broken wrapper is a
+  failure rather than a silent success.
+
 ## Escaping is per setting, not per file
 
 A unit file is read by systemd, not by a shell, and its settings do not share one

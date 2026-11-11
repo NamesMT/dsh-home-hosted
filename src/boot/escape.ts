@@ -320,6 +320,61 @@ export function powershellLiteral(value: string): string {
   return `'${value.split('\'').join('\'\'')}'`
 }
 
+const NON_ASCII = /[^\u0000-\u007F]/
+
+/**
+ * One VBScript string literal holding `value` **verbatim**.
+ *
+ * Two layers, and only one of them is obvious:
+ *
+ * 1. **Quote for VBScript.** A literal is wrapped in `"` and an embedded `"` is doubled
+ *    (`""`). Backslashes are *not* special in VBScript — a Windows path is written as
+ *    itself, unlike every other escaping in this file.
+ * 2. **Keep the source ASCII.** Windows Script Host decodes a `.vbs` file with no
+ *    byte-order mark in the machine's **ANSI code page**, not as UTF-8, and it refuses a
+ *    UTF-8 BOM outright (`Invalid character`, measured under `cscript.exe`). So a
+ *    non-ASCII character written raw reaches the script as mojibake — measured: `José`
+ *    in a BOM-less UTF-8 file arrived as `JosĂ©` (U+0102 U+00A9), and a path like that
+ *    starts no program. Characters outside ASCII are therefore emitted as `ChrW(&H…)`
+ *    calls joined with `&`, which is encoding-independent: the literal's value is the
+ *    same code point whatever the script's code page is.
+ *
+ * A `ChrW` argument takes a UTF-16 **code unit**, so a character above the BMP is
+ * emitted as its two surrogate halves — measured to write the right pair back out.
+ */
+export function vbscriptString(value: string): string {
+  assertNoControl(value, 'vbscript value')
+  if (!NON_ASCII.test(value))
+    return `"${value.split('"').join('""')}"`
+  const parts: string[] = []
+  let ascii = ''
+  const flush = (): void => {
+    if (ascii !== '') {
+      parts.push(`"${ascii.split('"').join('""')}"`)
+      ascii = ''
+    }
+  }
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0
+    if (code < 0x80) {
+      ascii += char
+      continue
+    }
+    flush()
+    if (code <= 0xFFFF) {
+      parts.push(`ChrW(&H${code.toString(16).toUpperCase().padStart(4, '0')})`)
+      continue
+    }
+    // Astral: two surrogate halves, each a UTF-16 code unit `ChrW` accepts.
+    const offset = code - 0x10000
+    const high = 0xD800 + (offset >> 10)
+    const low = 0xDC00 + (offset & 0x3FF)
+    parts.push(`ChrW(&H${high.toString(16).toUpperCase()})`, `ChrW(&H${low.toString(16).toUpperCase()})`)
+  }
+  flush()
+  return parts.join(' & ')
+}
+
 /**
  * Quote one word for a copy-pasteable `commands[]` entry, run by `cmd.exe`.
  *

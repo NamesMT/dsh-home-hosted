@@ -124,6 +124,16 @@ nobody reads is worse than a long file.
   A version probe is a launch too, so it goes through `launchArgv` — probing with
   `launch.program` is what made every legitimate override unidentifiable under Desktop. See
   [boot-platforms](.agentDocs/gotchas/boot-platforms.md).
+- **A Windows logon entry must be windowless, and only a GUI-subsystem launcher can guarantee it.**
+  `node.exe` is a console program, so a task or `Run` value with no console allocates one and the
+  person sees it every logon; the task's `Hidden` flag and `windowsHide` on the child both leave it
+  visible. `windows-task`/`windows-run` therefore launch a generated `.vbs` through `wscript.exe`,
+  which cannot create a console at all and still returns the panel's exit code. `conhost --headless`
+  is **not** an option: it swallows the exit code and blinds `RestartOnFailure`. `windows-boot`
+  (session 0) needs no wrapper. The wrapper's source must be **pure ASCII** (VBScript reads a
+  BOM-less file as ANSI, and a BOM will not compile) and it needs `//B` *plus* its own `Err` guards:
+  `//B` alone turns an unstartable panel into exit `0`. See
+  [boot-platforms](.agentDocs/gotchas/boot-platforms.md).
 - **Whoever supervises the panel may change its state**: `panel.start`, `panel.stop` and
   `panel.takeover` go through the installed entry (`systemctl start|restart|stop`, `kickstart
   [-k]`/`kill`, `schtasks /Run`) and use the CLI only when nothing is installed. A

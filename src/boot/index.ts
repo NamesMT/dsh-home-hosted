@@ -26,5 +26,19 @@ export { bootProviders, createBootLadder } from './ladder.js'
 export { launchdLabel, launchdPlist } from './launchd.js'
 export { systemdSystemUnit, systemdUserUnit } from './systemd.js'
 export { xdgDesktopEntry } from './xdg.js'
-export { bootTaskNameOf, bootTaskXml, registerBootTaskScript, registerTaskScript, scheduledTaskXml, unregisterTaskScript, windowsRunPayload } from './windows.js'
+export {
+  bootTaskNameOf,
+  bootTaskXml,
+  hiddenLaunch,
+  hiddenLaunchPath,
+  hiddenLaunchScript,
+  registerBootTaskScript,
+  registerTaskScript,
+  scheduledTaskXml,
+  unregisterTaskScript,
+  windowlessSpec,
+  windowsRunPayload,
+  wscriptExecutable,
+} from './windows.js'
+export type { HiddenLaunch } from './windows.js'
 export { detectContainer } from './fallback.js'

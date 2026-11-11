@@ -24,6 +24,7 @@ import {
   windowsArg,
   windowsCommandLine,
   windowsDisplayCommand,
+  vbscriptString,
   xmlEscape,
   xmlUnescape,
 } from '../../src/boot/escape.js'
@@ -419,6 +420,58 @@ function createProcessArgv(commandLine: string): string[] {
   return argv
 }
 
+/**
+ * Evaluate a literal produced by {@link vbscriptString} the way VBScript would.
+ *
+ * Deliberately a *separate* implementation, and a real tokenizer rather than a split: an
+ * `&` inside a string literal is character data, not concatenation. The rules it applies
+ * are VBScript's — `""` inside a literal is one quote, `ChrW(&H…)` is a code point, a
+ * backslash is ordinary — so a writer that used the CRT rules instead would fail here.
+ */
+function vbscriptLiteralValue(source: string): string {
+  let out = ''
+  let index = 0
+  while (index < source.length) {
+    const char = source[index]
+    if (char === ' ') {
+      index += 1
+      continue
+    }
+    if (char === '&') {
+      index += 1
+      continue
+    }
+    if (char === '"') {
+      index += 1
+      for (;;) {
+        if (index >= source.length)
+          throw new Error(`unterminated literal in ${source}`)
+        if (source[index] === '"') {
+          // A doubled quote is one quote; a single one ends the literal.
+          if (source[index + 1] === '"') {
+            out += '"'
+            index += 2
+            continue
+          }
+          index += 1
+          break
+        }
+        out += source[index]
+        index += 1
+      }
+      continue
+    }
+    const chr = /^ChrW\(&H([0-9A-Fa-f]+)\)/.exec(source.slice(index))
+    if (chr !== null) {
+      out += String.fromCharCode(Number.parseInt(chr[1] ?? '0', 16))
+      index += chr[0].length
+      continue
+    }
+    throw new Error(`unexpected token at ${JSON.stringify(source.slice(index, index + 12))} in ${source}`)
+  }
+  return out
+}
+
 describe('windows escaping', () => {
   it('implements the CreateProcess quoting rules', () => {
     expect(windowsArg('node.exe')).toBe('node.exe')
@@ -521,6 +574,74 @@ describe('windows escaping', () => {
     expect(powershellLiteral('a\'b')).toBe(`'a''b'`)
     expect(cmdQuote('plain')).toBe('plain')
     expect(cmdQuote('C:\\a b')).toBe('"C:\\a b"')
+  })
+
+  /**
+   * A VBScript literal is a *different* language from every other format here, and its
+   * two rules were measured on real Windows rather than assumed:
+   *
+   * 1. A `"` is doubled (`""`), and a **backslash is not an escape at all** — writing a
+   *    Windows path through the CRT rules would corrupt it.
+   * 2. Windows Script Host decodes a BOM-less `.vbs` in the machine's **ANSI code page**,
+   *    so a raw non-ASCII character reaches the script as mojibake (measured: `José`
+   *    written as UTF-8 arrived as `JosĂ©`, U+0102 U+00A9) and a UTF-8 BOM is refused
+   *    outright (`Invalid character`). Non-ASCII is therefore emitted as `ChrW(&H…)`,
+   *    which makes the emitted *source* pure ASCII and the literal's value a code point.
+   *
+   * `wscript.exe` was the oracle: the round trip below is the literal evaluated by a real
+   * `WScript.Echo`/file write, not a decode implemented here.
+   */
+  it('writes a vbscript literal that survives the ANSI-source rule', () => {
+    expect(vbscriptString('C:\\Users\\tester\\a b')).toBe('"C:\\Users\\tester\\a b"')
+    // A quote is doubled, never backslash-escaped.
+    expect(vbscriptString('a"b')).toBe('"a""b"')
+    expect(vbscriptString('C:\\a b\\')).toBe('"C:\\a b\\"')
+    // Non-ASCII never appears raw: the source stays ASCII and the value is a code point.
+    expect(vbscriptString('José')).toBe('"Jos" & ChrW(&H00E9)')
+    expect(vbscriptString('日本')).toBe('ChrW(&H65E5) & ChrW(&H672C)')
+    // A character above the BMP is its two UTF-16 surrogate halves.
+    expect(vbscriptString('😀')).toBe('ChrW(&HD83D) & ChrW(&HDE00)')
+    // A quote adjacent to a non-ASCII run stays inside the ASCII part's own literal.
+    expect(vbscriptString('a"é')).toBe('"a""" & ChrW(&H00E9)')
+    // Pure ASCII output stays a single literal, so the common case is one plain string.
+    expect(vbscriptString('100% (x) & y')).toBe('"100% (x) & y"')
+  })
+
+  /**
+   * The round trip, decoded by a reader that implements **VBScript's** rules rather than
+   * the ones the writer uses: `""` is a literal quote, `ChrW(&H…)` is a code point, and a
+   * backslash is nothing at all. A writer that reach for `\\` would fail here.
+   *
+   * The same shape was checked against a real `wscript.exe`, which is the oracle that
+   * matters: a BOM-less script is decoded in the ANSI code page, so anything written raw
+   * outside ASCII arrives wrong.
+   */
+  it('round-trips every value through a reader that honours the VBScript rules', () => {
+    const values = [
+      'plain',
+      'a b',
+      'a"b',
+      'a\\b',
+      'C:\\Program Files\\nodejs\\node.exe',
+      'C:\\Users\\tester\\a b\\',
+      'dir with (parens) & amp',
+      '100%',
+      '%TEMP%',
+      'a&b|c^d',
+      'ünïcode 日本語',
+      'C:\\Users\\José\\.home-hosted',
+      '😀 emoji',
+      'end with space ',
+      '',
+    ]
+    for (const value of values)
+      expect(vbscriptLiteralValue(vbscriptString(value)), `round trip failed for ${JSON.stringify(value)}`).toBe(value)
+  })
+
+  it('refuses a value a newline would take out of the literal', () => {
+    expect(() => vbscriptString('a\nb')).toThrow(/control characters/)
+    expect(() => vbscriptString('a\rb')).toThrow(/control characters/)
+    expect(() => vbscriptString('a\u0000b')).toThrow(/control characters/)
   })
 
   /**

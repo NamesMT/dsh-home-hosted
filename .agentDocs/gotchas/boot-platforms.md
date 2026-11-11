@@ -110,6 +110,33 @@ write the artifact.
   failures apart (`NODE_NOT_FOUND` vs `CLI_NOT_FOUND`) and `bootStatus` never claims the CLI is absent
   on a machine whose CLI resolved. Uninstall deliberately does not refuse: an entry this plugin wrote
   must stay removable on the machine whose node has since gone.
+- **A Windows autostart entry shows a console window unless the launcher is GUI-subsystem.**
+  `node.exe` is a console-subsystem binary; launched by a task or a `Run` value it inherits no
+  console, so Windows allocates one and a window appears at every logon. Measured on Windows 11
+  build 26200 with `GetConsoleWindow()`/`IsWindowVisible()` **from inside the started process**:
+  a task running `node.exe` directly is `visible=True`, and so is a window-style-1 launch from a
+  console-less parent (the `Run` case; explorer is the parent and a logon cannot be triggered from
+  here, so that shape was emulated). What does not work, each measured rather than assumed:
+  the task's `<Hidden>true</Hidden>` leaves it `visible=True`, and `windowsHide` on the *child*
+  spawn does not help either — the console belongs to the task's own process, which the child
+  merely inherits through `stdio: 'inherit'`. `conhost.exe --headless` gives `NO_CONSOLE` but
+  **swallows the exit code** (child 7 → conhost 0), which blinds `RestartOnFailure` and the
+  launcher's retry branch, so it is disqualified. A **VBScript launched by `wscript.exe`** is the
+  fix: `wscript` is GUI-subsystem so it *cannot* allocate a console (structural, not a hint), and
+  `sh.Run(cmd, 0, True)` + `WScript.Quit rc` preserves the code — measured as task
+  `Last Result: 7`. A `powershell -WindowStyle Hidden` wrapper also measured `visible=False` with
+  the exit code intact, but `powershell.exe` is itself console-subsystem, so it must allocate a
+  console and hide it — a flash stays possible, which `wscript` cannot do at all. `windows-boot`
+  (SYSTEM, session 0) already reports `visible=False`, so it is the one mechanism that needs no
+  wrapper. A process started from WSL interop also has no console,
+  which is why this was invisible while developing and only appeared under a real task.
+  Two further traps in that wrapper, both measured. **VBScript decodes a BOM-less file in the ANSI
+  code page** (a UTF-8 `José` reached the child as `JosĂ©`, hex `c4 82 c2 a9` instead of `c3 a9`), and
+  a UTF-8 BOM is a *compile error*, so the generated source must be pure ASCII with non-ASCII emitted
+  as `ChrW(&H…)`. And **`//B` is not enough on its own**: a missing `.vbs` otherwise waits on a modal
+  "Input Error" dialog forever (still alive after 120 s), while an unstartable child under `//B`
+  alone exits **0** — the same false-success blind spot that disqualified `conhost`. `On Error
+  Resume Next` plus an `Err.Number` check that exits 90 is a separate guard, not a redundant one.
 - **A version probe is a launch, so it obeys the launch rule.** The probe that decides whether a
   candidate *is* home-hosted ran `launch.program`, which under Desktop is the Electron binary.
   Electron with a script argument and no `ELECTRON_RUN_AS_NODE` exits 0 printing **nothing** — it

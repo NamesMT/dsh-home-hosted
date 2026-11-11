@@ -1280,9 +1280,12 @@ export class HomeHostedService extends Service {
   }
 
   async bootStatus(mechanism?: BootMechanism): Promise<BootStatus> {
-    const platform: BootStatus['platform'] = this.bootPlatform() === 'linux'
+    // Read once: the seam can be pinned per call, and three reads invite the three answers
+    // to differ if it ever becomes dynamic.
+    const bootPlatform = this.bootPlatform()
+    const platform: BootStatus['platform'] = bootPlatform === 'linux'
       ? 'linux'
-      : this.bootPlatform() === 'darwin' ? 'darwin' : this.bootPlatform() === 'win32' ? 'win32' : 'other'
+      : bootPlatform === 'darwin' ? 'darwin' : bootPlatform === 'win32' ? 'win32' : 'other'
     const artifact = await this.bootArtifact()
     if ('failure' in artifact) {
       /**

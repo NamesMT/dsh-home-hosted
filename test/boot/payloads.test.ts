@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { launchdPlist } from '../../src/boot/launchd.js'
 import { systemdSystemUnit, systemdUserUnit } from '../../src/boot/systemd.js'
-import { bootTaskNameOf, bootTaskXml, registerBootTaskScript, registerTaskScript, scheduledTaskXml } from '../../src/boot/windows.js'
+import { bootTaskNameOf, bootTaskXml, hiddenLaunchPath, registerBootTaskScript, registerTaskScript, scheduledTaskXml, windowlessSpec } from '../../src/boot/windows.js'
 import { xdgDesktopEntry } from '../../src/boot/xdg.js'
-import { spec, winSpec } from './harness.js'
+import { ctxFor, fakeRun, spec, winSpec } from './harness.js'
+import type { BootProviderContext } from '../../src/boot/types.js'
+
+/**
+ * A Windows context with `wscript.exe` present, so the derived spec is the wrapped one.
+ *
+ * The builders stay pure — they take whatever spec they are given — so the *provider* is
+ * what decides. These tests therefore drive the derivation and hand its result to the
+ * builder, which is exactly what `install()` does.
+ */
+function windowsCtx(systemRoot = 'C:\\Windows'): BootProviderContext {
+  return ctxFor({
+    home: 'C:\\Users\\tester',
+    platform: 'win32',
+    run: fakeRun().run,
+    env: { SystemRoot: systemRoot, LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local' },
+    exists: file => file.toLowerCase() === `${systemRoot.toLowerCase()}\\system32\\wscript.exe`,
+  })
+}
 
 describe('systemd payloads', () => {
   it('writes a user unit with Type=exec, Restart and an explicit environment', () => {
@@ -132,6 +150,38 @@ describe('windows payloads', () => {
     expect(script).not.toContain('-AtLogOn')
     expect(script).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount")
     expect(script).toContain("Register-ScheduledTask -TaskName 'home-hosted-boot'")
+  })
+
+  /**
+   * The builders stay **pure**: they take a spec and interpolate it. Which spec they are
+   * handed is the provider's decision, and this is that decision's payload half — the logon
+   * task's action names `wscript.exe` with the wrapper, while the boot task's still names
+   * the real node (session 0 shows no window, measured).
+   */
+  it('names wscript.exe in a logon task built from the derived spec', () => {
+    const ctx = windowsCtx()
+    const original = winSpec()
+    const derived = windowlessSpec(ctx, original)
+    const xml = scheduledTaskXml(derived)
+    expect(xml).toContain('<Command>C:\\Windows\\System32\\wscript.exe</Command>')
+    expect(xml).toContain(`//B //nologo ${hiddenLaunchPath(ctx, original)}`)
+    expect(xml).not.toContain('nodejs\\node.exe')
+    // The marker and the restart policy are untouched, so `RestartOnFailure` still works.
+    expect(xml).toContain('<Description>managed-by:dsh-home-hosted</Description>')
+    expect(xml).toContain('<RestartOnFailure>')
+
+    const script = registerTaskScript(derived)
+    expect(script).toContain("-Execute 'C:\\Windows\\System32\\wscript.exe'")
+    expect(script).not.toContain('node.exe')
+  })
+
+  it('leaves the boot task naming the real node, because session 0 has no window', () => {
+    // The wrapper is deliberately NOT applied here: a SYSTEM task in session 0 measured
+    // `visible=False`, so wrapping it would add an artifact for no window to remove.
+    const xml = bootTaskXml(winSpec())
+    expect(xml).toContain('<Command>C:\\Program Files\\nodejs\\node.exe</Command>')
+    expect(xml).not.toContain('wscript.exe')
+    expect(registerBootTaskScript(winSpec())).toContain("-Execute 'C:\\Program Files\\nodejs\\node.exe'")
   })
 
   it('builds the Register-ScheduledTask script from cmdlets', () => {

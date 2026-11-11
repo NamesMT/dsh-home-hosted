@@ -6,16 +6,104 @@ import {
   createWindowsBootProvider,
   createWindowsRunProvider,
   createWindowsTaskProvider,
+  hiddenLaunch,
+  hiddenLaunchPath,
+  hiddenLaunchScript,
   MARKER_KEY,
   RUN_KEY,
   scheduledTaskXml,
+  windowlessSpec,
   windowsRunPayload,
+  wscriptExecutable,
 } from '../../src/boot/windows.js'
-import { windowsCommandLine } from '../../src/boot/escape.js'
+import { windowsCommandLine, xmlEscape } from '../../src/boot/escape.js'
 import type { FakeHandler } from './harness.js'
 import { cleanup, ctxFor, fakeRun, tempHome, winSpec } from './harness.js'
 
 const regKeyOf = (key: string, name: string): string => `${key}\u0000${name}`
+
+const WINDOWS_ROOT = 'C:\\Windows'
+const WSCRIPT = 'C:\\Windows\\System32\\wscript.exe'
+const DEFAULT_MARKER = 'managed-by:dsh-home-hosted'
+
+/**
+ * A Windows context whose file-system facts are `wscript.exe` and whatever is really on disk.
+ *
+ * `exists` is one probe serving two questions — "is the wrapper available" and "is the
+ * artifact there" — so it answers `wscript.exe` from a pinned machine fact and everything
+ * else from the real FS. An override replaces a *whole* field (`env`, `exists`), never a
+ * nested key, so passing `exists: () => false` is the "no wscript on this machine" branch.
+ */
+function winCtx(overrides: Parameters<typeof ctxFor>[0]): Parameters<typeof ctxFor>[0] {
+  const { home, run, ...rest } = overrides
+  const base = {
+    platform: 'win32' as const,
+    env: { USER: 'tester', SystemRoot: WINDOWS_ROOT, LOCALAPPDATA: path.join(home, 'AppData', 'Local'), TEMP: home } as Record<string, string | undefined>,
+    exists: (file: string): boolean => file.toLowerCase() === WSCRIPT.toLowerCase() || fs.existsSync(file),
+  }
+  const defined = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined))
+  return {
+    ...base,
+    ...defined,
+    home,
+    run,
+    env: { ...base.env, ...(rest.env ?? {}) },
+    exists: rest.exists ?? base.exists,
+  }
+}
+
+/** One registered task action, as `Export-ScheduledTask` reports it. */
+interface RegisteredAction {
+  command: string
+  args: string
+  cwd: string
+  marker: string
+  boot: boolean
+}
+
+/** Read `New-ScheduledTaskAction …` back out of the script the provider emitted. */
+function actionOf(script: string, boot: boolean): RegisteredAction | null {
+  const unquote = (text: string): string => text.replace(/''/g, '\'')
+  const match = /-Execute '((?:[^']|'')*)' -Argument '((?:[^']|'')*)' -WorkingDirectory '((?:[^']|'')*)'/.exec(script)
+  if (match === null)
+    return null
+  return {
+    command: unquote(match[1] ?? ''),
+    args: unquote(match[2] ?? ''),
+    cwd: unquote(match[3] ?? ''),
+    marker: unquote(/-Description '((?:[^']|'')*)'/.exec(script)?.[1] ?? DEFAULT_MARKER),
+    boot,
+  }
+}
+
+/**
+ * The XML `Export-ScheduledTask` reports for one registered action.
+ *
+ * The fields are passed in, so the fake can only ever answer with what was actually
+ * registered. A fake that answered a fixed fixture would report "already matches" after
+ * any install — hiding exactly the drift this suite exists to catch.
+ */
+function exportedXml(action: RegisteredAction): string {
+  return `${[
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    '<RegistrationInfo>',
+    `<Description>${xmlEscape(action.marker)}</Description>`,
+    '</RegistrationInfo>',
+    '<Triggers>',
+    action.boot ? '<BootTrigger><Enabled>true</Enabled></BootTrigger>' : '<LogonTrigger><Enabled>true</Enabled></LogonTrigger>',
+    '</Triggers>',
+    '<Actions Context="Author">',
+    '<Exec>',
+    `<Command>${xmlEscape(action.command)}</Command>`,
+    `<Arguments>${xmlEscape(action.args)}</Arguments>`,
+    `<WorkingDirectory>${xmlEscape(action.cwd)}</WorkingDirectory>`,
+    '</Exec>',
+    '</Actions>',
+    '</Task>',
+    '',
+  ].join('\r\n')}`
+}
 
 /** An in-memory HKCU, so the reg.exe exit codes are the real ones. */
 function regHandler(store: Map<string, string>): FakeHandler {
@@ -53,16 +141,16 @@ describe('windows run key', () => {
   })
   afterEach(() => cleanup(home))
 
-  function makeProvider(handler: FakeHandler = regHandler(store)) {
+  function makeProvider(handler: FakeHandler = regHandler(store), options: { wscript?: boolean } = {}) {
     const runner = fakeRun(handler)
+    const { wscript = true } = options
     return {
       runner,
-      provider: createWindowsRunProvider(ctxFor({
+      provider: createWindowsRunProvider(ctxFor(winCtx({
         home,
         run: runner.run,
-        platform: 'win32',
-        env: { USER: 'tester', LOCALAPPDATA: path.join(home, 'AppData', 'Local'), TEMP: home },
-      })),
+        exists: wscript ? undefined : () => false,
+      }))),
     }
   }
 
@@ -81,13 +169,31 @@ describe('windows run key', () => {
     expect(status.detail).toContain(RUN_KEY)
   })
 
-  it('writes the direct command line and a separate marker value', async () => {
+  /**
+   * The reported defect, pinned as the value Windows is actually given.
+   *
+   * `node.exe` is console-subsystem, so a `Run` value naming it shows a console window at
+   * every logon (measured `visible=True`). The value here must therefore name
+   * `wscript.exe` — GUI-subsystem, which *cannot* allocate one — with the real command
+   * line in the wrapper instead.
+   */
+  it('starts wscript.exe, not node.exe, and keeps the real command line in the wrapper', async () => {
     const { provider, runner } = makeProvider()
     const result = await provider.install(winSpec())
     expect(result.ok).toBe(true)
     expect(result.changed).toBe(true)
-    expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toBe(windowsCommandLine(winSpec().command, winSpec().args))
-    expect(store.get(regKeyOf(MARKER_KEY, 'home-hosted'))).toBe('managed-by:dsh-home-hosted')
+    const data = store.get(regKeyOf(RUN_KEY, 'home-hosted'))
+    expect(data).toBeDefined()
+    expect(data).toContain('wscript.exe')
+    expect(data).not.toContain('node.exe')
+    // The wrapper carries the node command line, so the panel is still what starts.
+    // Asserted in the *literal* form VBScript requires: an embedded `"` is doubled,
+    // which is why a raw substring search for the command line would not match.
+    const script = fs.readFileSync(hiddenLaunchPath(ctxFor(winCtx({ home, run: runner.run })), winSpec()), 'utf8')
+    const literal = windowsCommandLine(winSpec().command, winSpec().args).split('"').join('""')
+    expect(script).toContain(`sh.Run("${literal}", 0, True)`)
+    expect(script).toContain(DEFAULT_MARKER)
+    expect(store.get(regKeyOf(MARKER_KEY, 'home-hosted'))).toBe(DEFAULT_MARKER)
     expect(runner.lines().some(line => line.startsWith('reg.exe add '))).toBe(true)
   })
 
@@ -98,8 +204,25 @@ describe('windows run key', () => {
     const before = adds()
     const second = await provider.install(winSpec())
     expect(second.ok).toBe(true)
+    // Idempotence is the whole point: the wrapper is byte-identical, the value already
+    // reads back, so a re-install changes nothing and the page shows no drift.
     expect(second.changed).toBe(false)
     expect(adds()).toBe(before)
+    expect((await provider.status(winSpec())).state).toBe('enabled-running')
+  })
+
+  it('stays idempotent when the wrapper was deleted underneath it', async () => {
+    const { provider, runner } = makeProvider()
+    const ctx = ctxFor(winCtx({ home, run: runner.run }))
+    await provider.install(winSpec())
+    fs.rmSync(hiddenLaunchPath(ctx, winSpec()), { force: true })
+    // A `Run` value whose wrapper is gone starts nothing, so it is reported as failing
+    // rather than healthy — the state a person has to see to know why nothing came up.
+    expect((await provider.status(winSpec())).state).toBe('enabled-failing')
+    const again = await provider.install(winSpec())
+    expect(again.ok).toBe(true)
+    expect(again.changed).toBe(true)
+    expect(fs.existsSync(hiddenLaunchPath(ctx, winSpec()))).toBe(true)
     expect((await provider.status(winSpec())).state).toBe('enabled-running')
   })
 
@@ -131,19 +254,57 @@ describe('windows run key', () => {
     expect(windowsRunPayload(ctx, fine).wrapperContent).toContain('@echo off')
   })
 
-  it('writes a .cmd wrapper when the command line exceeds the Run value limit', async () => {
+  /**
+   * The `.cmd` wrapper is the **fallback**, not dead code: it is the path on a machine
+   * without `wscript.exe`, where the command line can still exceed the `Run` value
+   * budget. Its `%`-neutralisation and its metacharacter care are guard logic on a real
+   * injection surface, so both stay pinned — against the branch that uses them.
+   */
+  it('writes a .cmd wrapper when the command line exceeds the limit and wscript is absent', async () => {
     const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', `C:\\Users\\tester\\${'x'.repeat(260)}`] })
-    const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)
+    const ctx = ctxFor(winCtx({ home, run: fakeRun().run, exists: () => false }))
+    const payload = windowsRunPayload(ctx, long)
     expect(payload.wrapperPath).not.toBeNull()
     expect(payload.data).toContain('cmd.exe /c ')
     expect(payload.wrapperContent).toContain('@echo off')
-    expect(payload.wrapperContent).toContain('managed-by:dsh-home-hosted')
+    expect(payload.wrapperContent).toContain(DEFAULT_MARKER)
 
-    const { provider } = makeProvider()
+    const { provider } = makeProvider(regHandler(store), { wscript: false })
     const result = await provider.install(long)
     expect(result.ok).toBe(true)
-    expect(fs.readFileSync(payload.wrapperPath ?? '', 'utf8')).toContain('managed-by:dsh-home-hosted')
+    expect(fs.readFileSync(payload.wrapperPath ?? '', 'utf8')).toContain(DEFAULT_MARKER)
     expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toContain('cmd.exe /c ')
+  })
+
+  it('is idempotent on the fallback branch too', async () => {
+    const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', `C:\\Users\\tester\\${'x'.repeat(260)}`] })
+    const { provider } = makeProvider(regHandler(store), { wscript: false })
+    expect((await provider.install(long)).changed).toBe(true)
+    const second = await provider.install(long)
+    expect(second.ok).toBe(true)
+    expect(second.changed).toBe(false)
+  })
+
+  /**
+   * Converging between the two branches, which is what makes a re-install quiet on a
+   * machine that gained (or lost) `wscript.exe`: the artifact the *other* launch needs is
+   * written, and the one this launch no longer uses is removed.
+   */
+  it('converges between the wrapper and the fallback when the machine changes', async () => {
+    const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--foreground', '--home', `C:\\Users\\tester\\${'x'.repeat(260)}`] })
+    const fallbackCtx = ctxFor(winCtx({ home, run: fakeRun().run, exists: () => false }))
+    const wrapperCtx = ctxFor(winCtx({ home, run: fakeRun().run }))
+    const fallback = makeProvider(regHandler(store), { wscript: false }).provider
+    await fallback.install(long)
+    const cmdPath = windowsRunPayload(fallbackCtx, long).wrapperPath ?? ''
+    expect(fs.existsSync(cmdPath)).toBe(true)
+
+    const wrapper = makeProvider(regHandler(store)).provider
+    expect((await wrapper.install(long)).ok).toBe(true)
+    // The wrapper took over: a short value, the `.vbs` present, the `.cmd` gone.
+    expect(fs.existsSync(hiddenLaunchPath(wrapperCtx, long))).toBe(true)
+    expect(fs.existsSync(cmdPath)).toBe(false)
+    expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toContain('wscript.exe')
   })
 
   it('refuses a foreign Run value', async () => {
@@ -182,7 +343,7 @@ describe('windows run key', () => {
   it('neutralises batch metacharacters in the .cmd wrapper', () => {
     const spaced = `C:\\Users\\tester\\A & B\\${'x'.repeat(240)}`
     const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--home', spaced, '%TEMP%'] })
-    const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)
+    const payload = windowsRunPayload(ctxFor(winCtx({ home, run: fakeRun().run, exists: () => false })), long)
     expect(payload.wrapperPath).not.toBeNull()
     expect(payload.wrapperContent).toContain('A ^& B')
     expect(payload.wrapperContent).toContain('%%TEMP%%')
@@ -198,12 +359,12 @@ describe('windows run key', () => {
    * proved to be ours *before* the registry is mutated.
    */
   it('refuses a foreign wrapper without touching the Run value', async () => {
-    const { provider } = makeProvider()
+    const { provider } = makeProvider(regHandler(store), { wscript: false })
     await provider.install(winSpec())
 
     // Replace the wrapper the install just wrote with somebody else's file.
-    const long = winSpec({ args: ['C:\home-hosted\dist\cli.js', 'up', '--home', 'C:\\Users\\tester\\' + 'x'.repeat(240)] })
-    const payload = windowsRunPayload(ctxFor({ home, run: fakeRun().run, platform: 'win32', env: { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } }), long)
+    const long = winSpec({ args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--home', 'C:\\Users\\tester\\' + 'x'.repeat(240)] })
+    const payload = windowsRunPayload(ctxFor(winCtx({ home, run: fakeRun().run, exists: () => false })), long)
     expect(payload.wrapperPath).not.toBeNull()
     fs.mkdirSync(path.dirname(payload.wrapperPath!), { recursive: true })
     fs.writeFileSync(payload.wrapperPath!, 'somebody else wrote this\r\n', 'utf8')
@@ -212,19 +373,39 @@ describe('windows run key', () => {
     const before = store.get(regKeyOf(RUN_KEY, 'home-hosted'))
     const refused = await provider.uninstall(long)
     expect(refused.ok).toBe(false)
-    expect(refused.ok).toBe(false)
     // `inspectOwned`'s own sentence: the file exists and is not marked as ours.
     expect(refused.detail).toMatch(/does not carry this plugin's marker/)
     // The whole point: the value is still there, so the entry is still removable next time.
     expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toBe(before)
   })
 
-  it('deletes the value and the marker, tolerating reg exit 1', async () => {
+  /** A `.vbs` somebody else wrote at our path is refused the same way, before any mutation. */
+  it('refuses a foreign .vbs without touching the Run value', async () => {
     const { provider } = makeProvider()
     await provider.install(winSpec())
+    const script = hiddenLaunchPath(ctxFor(winCtx({ home, run: fakeRun().run })), winSpec())
+    fs.writeFileSync(script, 'somebody else wrote this\r\n', 'utf8')
+    const before = store.get(regKeyOf(RUN_KEY, 'home-hosted'))
+    const install = await provider.install(winSpec())
+    expect(install.ok).toBe(false)
+    expect(install.detail).toMatch(/does not carry this plugin's marker/)
+    const refused = await provider.uninstall(winSpec())
+    expect(refused.ok).toBe(false)
+    expect(refused.detail).toMatch(/does not carry this plugin's marker/)
+    expect(store.get(regKeyOf(RUN_KEY, 'home-hosted'))).toBe(before)
+  })
+
+  it('deletes the value, the marker and the wrapper, tolerating reg exit 1', async () => {
+    const { provider } = makeProvider()
+    const ctx = ctxFor(winCtx({ home, run: fakeRun().run }))
+    await provider.install(winSpec())
+    const script = hiddenLaunchPath(ctx, winSpec())
+    expect(fs.existsSync(script)).toBe(true)
+
     const removed = await provider.uninstall(winSpec())
     expect(removed.ok).toBe(true)
     expect(removed.changed).toBe(true)
+    expect(fs.existsSync(script)).toBe(false)
     expect(store.has(regKeyOf(RUN_KEY, 'home-hosted'))).toBe(false)
     expect(store.has(regKeyOf(MARKER_KEY, 'home-hosted'))).toBe(false)
 
@@ -232,6 +413,21 @@ describe('windows run key', () => {
     expect(again.ok).toBe(true)
     expect(again.changed).toBe(false)
     expect(again.detail).toMatch(/already gone/)
+  })
+
+  it('retires the wrapper only when the marker proves it is ours', async () => {
+    const ctx = ctxFor(winCtx({ home, run: fakeRun().run }))
+    const runner = fakeRun(regHandler(store))
+    const provider = createWindowsRunProvider({ ...ctx, run: runner.run })
+    await provider.install(winSpec())
+    const script = hiddenLaunchPath(ctx, winSpec())
+    const retirement = await provider.retireCommands?.(winSpec())
+    expect(retirement?.commands.flat().join(' ')).toContain(script)
+
+    // A file somebody else wrote is never named by a removal step.
+    fs.writeFileSync(script, 'foreign\r\n', 'utf8')
+    const after = await provider.retireCommands?.(winSpec())
+    expect(after?.commands.flat().join(' ')).not.toContain(script)
   })
 
   /**
@@ -254,70 +450,79 @@ describe('windows scheduled task', () => {
   let home: string
 
   beforeEach(() => { home = tempHome() })
-  afterEach(() => cleanup(home))
+  afterEach(() => { cleanup(home) })
 
   interface TaskMockOptions {
     cmdlet?: boolean
     elevated?: boolean
-    startWith?: string | null
+    /** A pre-registered action, so a test can start from a task somebody else shaped. */
+    startWith?: RegisteredAction | null
     deleteExit?: number
   }
 
+  /**
+   * A Windows task store that answers with what was actually registered.
+   *
+   * The fixtures the rules read are the **real** shapes captured from `powershell.exe` on a
+   * Windows host, not invented ones — a guessed string is exactly where a rule that matches
+   * output hides. Two details matter and neither is obvious:
+   *
+   * - the present-cmdlet table goes to **stdout** and says `Function`, not `Cmdlet`;
+   * - the absent-cmdlet error *quotes the name being asked for* and goes to **stderr**.
+   *
+   * `Export-ScheduledTask` is answered from the emitted `New-ScheduledTaskAction`, never
+   * from a fixture: a fixed answer would report "already registered" whatever the provider
+   * wrote, which is how a drift check starts pretending to work.
+   */
   function taskRunner(options: TaskMockOptions = {}) {
     const { cmdlet = true, elevated = true, startWith = null, deleteExit = 0 } = options
-    let xml = startWith
-    /**
-     * The fixtures below are the **real** shapes, captured from `powershell.exe` on a
-     * Windows host, not invented ones — a guessed string is exactly where a rule that
-     * matches output hides.
-     *
-     * Two details matter and neither is obvious:
-     *
-     * - the present-cmdlet table goes to **stdout** and says `Function`, not `Cmdlet`;
-     * - the absent-cmdlet error *quotes the name being asked for*
-     *   (`The term 'Register-ScheduledTask' is not recognized...`) and goes to **stderr**.
-     *
-     * So the rule would read an absent cmdlet as present *if* the streams were merged or
-     * if it scanned stderr. `src/util/exec.ts` keeps them separate and the rule reads
-     * `stdout` only, which is why it is sound. `windowsTextRules` below pins both facts.
-     */
+    let exported: string | null = startWith === null ? null : exportedXml(startWith)
     const handler: FakeHandler = (command, args) => {
       if (command === 'powershell.exe') {
         const script = args[2] ?? ''
         if (script === 'Get-Command Register-ScheduledTask')
-          return { code: 0, stdout: cmdlet ? '\r\nCommandType     Name\r\n-----------     ----\r\nCmdlet          Register-ScheduledTask\r\n' : '' }
+          return { code: 0, stdout: cmdlet ? '\r\nCommandType     Name\r\n-----------     ----\r\nCommand         Register-ScheduledTask\r\n' : '' }
         if (script.includes('IsInRole'))
           return { code: 0, stdout: elevated ? 'True\r\n' : 'False\r\n' }
-        if (script.startsWith('$action ='))
-          xml = scheduledTaskXml(winSpec())
+        if (script.startsWith('$action =')) {
+          const action = actionOf(script, script.includes('-AtStartup'))
+          if (action !== null)
+            exported = exportedXml(action)
+        }
         if (script.startsWith('Unregister-ScheduledTask'))
-          xml = null
+          exported = null
         return { code: 0, stdout: '' }
       }
       if (command === 'schtasks.exe') {
         if (args[0] === '/Query')
-          return xml === null ? { code: 1, stderr: 'ERROR: The system cannot find the file specified.\r\n' } : { code: 0, stdout: xml }
+          return exported === null ? { code: 1, stderr: 'ERROR: The system cannot find the file specified.\r\n' } : { code: 0, stdout: exported }
         if (args[0] === '/Create') {
           const file = args[args.indexOf('/XML') + 1] ?? ''
-          xml = fs.readFileSync(file, 'utf16le').replace(/^\uFEFF/, '')
+          exported = fs.readFileSync(file, 'utf16le').replace(/^\uFEFF/, '')
           return { code: 0, stdout: 'SUCCESS: The scheduled task was successfully created.\r\n' }
         }
         if (args[0] === '/Delete') {
-          xml = null
+          exported = null
           return { code: deleteExit, stderr: deleteExit === 1 ? 'ERROR: The system cannot find the file specified.\r\n' : '' }
         }
       }
       return { code: 1 }
     }
     const runner = fakeRun(handler)
+    const ctx = ctxFor(winCtx({ home, run: runner.run }))
     return {
       runner,
-      provider: createWindowsTaskProvider(ctxFor({
-        home,
-        run: runner.run,
-        platform: 'win32',
-        env: { USER: 'tester', TEMP: home },
-      })),
+      ctx,
+      /** The command and arguments the registered task actually runs. */
+      action: (): { command: string, args: string } | null => {
+        if (exported === null)
+          return null
+        return {
+          command: /<Command>([\s\S]*?)<\/Command>/.exec(exported)?.[1] ?? '',
+          args: /<Arguments>([\s\S]*?)<\/Arguments>/.exec(exported)?.[1] ?? '',
+        }
+      },
+      provider: createWindowsTaskProvider(ctx),
     }
   }
 
@@ -336,42 +541,74 @@ describe('windows scheduled task', () => {
     expect(status.detail).toMatch(/no scheduled task/)
   })
 
-  it('registers through Register-ScheduledTask and verifies with schtasks /Query', async () => {
-    const { provider, runner } = taskRunner()
+  /**
+   * The defect, at the artifact a logon runs: `wscript.exe`, never `node.exe`.
+   *
+   * A task starting `node.exe` measured `visible=True` — the console window at every logon.
+   * The registered command must be the GUI-subsystem wrapper (which *cannot* allocate a
+   * console), and the wrapper must carry the real node command line so the panel is still
+   * what starts.
+   */
+  it('registers the logon task against wscript.exe, with the panel in the wrapper', async () => {
+    const { provider, ctx, action } = taskRunner()
     const result = await provider.install(winSpec())
     expect(result.ok).toBe(true)
     expect(result.changed).toBe(true)
-    expect(runner.lines().some(line => line.includes('$action = New-ScheduledTaskAction'))).toBe(true)
+    const registered = action()
+    expect(registered?.command).toBe(WSCRIPT)
+    expect(registered?.args).toBe(`//B //nologo ${hiddenLaunchPath(ctx, winSpec())}`)
+    // The real command line lives in the wrapper, with the marker.
+    const wrapper = fs.readFileSync(hiddenLaunchPath(ctx, winSpec()), 'utf8')
+    expect(wrapper).toContain(DEFAULT_MARKER)
+    expect(wrapper).toContain('node.exe')
     expect((await provider.status(winSpec())).state).toBe('enabled-running')
   })
 
-  it('falls back to task XML when the cmdlet is missing', async () => {
-    const { provider, runner } = taskRunner({ cmdlet: false })
+  it('falls back to task XML when the cmdlet is missing, still windowless', async () => {
+    const { provider, ctx, action } = taskRunner({ cmdlet: false })
     const result = await provider.install(winSpec())
     expect(result.ok).toBe(true)
-    expect(runner.lines().some(line => line.includes('/Create /TN home-hosted /XML'))).toBe(true)
-    expect(runner.lines().some(line => line.includes('New-ScheduledTaskAction'))).toBe(false)
+    // The XML path registered the same windowless action.
+    expect(action()?.command).toBe(WSCRIPT)
+    expect(action()?.args).toBe(`//B //nologo ${hiddenLaunchPath(ctx, winSpec())}`)
   })
 
+  /** The idempotence the page depends on: a second install must not rewrite a matching task. */
   it('is a no-op when the registered task already matches', async () => {
-    const { provider, runner } = taskRunner({ startWith: scheduledTaskXml(winSpec()) })
-    const result = await provider.install(winSpec())
-    expect(result.ok).toBe(true)
-    expect(result.changed).toBe(false)
-    expect(runner.lines().some(line => line.includes('New-ScheduledTaskAction'))).toBe(false)
+    const { provider, runner } = taskRunner()
+    await provider.install(winSpec())
+    const writes = () => runner.lines().filter(line => line.includes('New-ScheduledTaskAction')).length
+    const before = writes()
+    const second = await provider.install(winSpec())
+    expect(second.ok).toBe(true)
+    expect(second.changed).toBe(false)
+    expect(writes()).toBe(before)
   })
 
-  it('re-registers a task whose action drifted', async () => {
-    const drifted = scheduledTaskXml(winSpec()).replace('<Command>C:\\Program Files\\nodejs\\node.exe</Command>', '<Command>C:\\old\\node.exe</Command>')
+  it('re-registers a task whose action drifted back to node.exe', async () => {
+    // The exact regression: a task left pointing at node.exe from an earlier version.
+    const drifted: RegisteredAction = {
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: 'C:\\home-hosted\\dist\\cli.js up',
+      cwd: 'C:\\Users\\tester',
+      marker: DEFAULT_MARKER,
+      boot: false,
+    }
     const { provider, runner } = taskRunner({ startWith: drifted })
     const result = await provider.install(winSpec())
     expect(result.ok).toBe(true)
     expect(result.changed).toBe(true)
-    expect(runner.lines().some(line => line.includes('$action = New-ScheduledTaskAction'))).toBe(true)
+    expect(runner.lines().some(line => line.includes('New-ScheduledTaskAction'))).toBe(true)
   })
 
   it('refuses to overwrite a foreign task with our name', async () => {
-    const foreign = scheduledTaskXml(winSpec()).replace('managed-by:dsh-home-hosted', 'someone-elses-task')
+    const foreign: RegisteredAction = {
+      command: WSCRIPT,
+      args: '//B //nologo C:\\Users\\tester\\x.vbs',
+      cwd: 'C:\\Users\\tester',
+      marker: 'someone-elses-task',
+      boot: false,
+    }
     const { provider, runner } = taskRunner({ startWith: foreign })
     const install = await provider.install(winSpec())
     expect(install.ok).toBe(false)
@@ -391,17 +628,75 @@ describe('windows scheduled task', () => {
   })
 
   it('unregisters through the cmdlet and tolerates schtasks /Delete exit 1', async () => {
-    const cmdletRun = taskRunner({ startWith: scheduledTaskXml(winSpec()) })
+    const cmdletRun = taskRunner()
+    await cmdletRun.provider.install(winSpec())
     const removed = await cmdletRun.provider.uninstall(winSpec())
     expect(removed.ok).toBe(true)
     expect(removed.changed).toBe(true)
     expect(cmdletRun.runner.lines().some(line => line.includes('Unregister-ScheduledTask'))).toBe(true)
 
-    const legacy = taskRunner({ cmdlet: false, startWith: scheduledTaskXml(winSpec()), deleteExit: 1 })
+    const legacy = taskRunner({ cmdlet: false, deleteExit: 1 })
+    await legacy.provider.install(winSpec())
     const legacyRemoved = await legacy.provider.uninstall(winSpec())
     expect(legacyRemoved.ok).toBe(true)
     expect(legacyRemoved.changed).toBe(true)
     expect(legacy.runner.lines().some(line => line.includes('/Delete /TN home-hosted /F'))).toBe(true)
+  })
+
+  it('removes the wrapper on uninstall', async () => {
+    const { provider, ctx } = taskRunner()
+    await provider.install(winSpec())
+    const script = hiddenLaunchPath(ctx, winSpec())
+    expect(fs.existsSync(script)).toBe(true)
+    expect((await provider.uninstall(winSpec())).ok).toBe(true)
+    expect(fs.existsSync(script)).toBe(false)
+  })
+
+  /**
+   * A refusal must leave the machine as it was — the rule `windows-run.uninstall` already
+   * paid for. Proving the wrapper *after* unregistering would report failure with the entry
+   * already gone, and the retry could never recover.
+   */
+  it('refuses a foreign wrapper without unregistering the task', async () => {
+    const { provider, ctx } = taskRunner()
+    await provider.install(winSpec())
+    const script = hiddenLaunchPath(ctx, winSpec())
+    fs.writeFileSync(script, 'somebody else wrote this\r\n', 'utf8')
+    const refused = await provider.uninstall(winSpec())
+    expect(refused.ok).toBe(false)
+    expect(refused.detail).toMatch(/does not carry this plugin's marker/)
+    // Still registered, so the entry is still removable once the file is dealt with.
+    expect((await provider.status(winSpec())).state).toMatch(/enabled-/)
+  })
+
+  it('reports a missing wrapper as failing rather than healthy', async () => {
+    const { provider, ctx } = taskRunner()
+    await provider.install(winSpec())
+    fs.rmSync(hiddenLaunchPath(ctx, winSpec()), { force: true })
+    const status = await provider.status(winSpec())
+    expect(status.state).toBe('enabled-failing')
+    expect(status.detail).toMatch(/wrapper .* is missing/)
+    // And a repair install puts it back.
+    expect((await provider.install(winSpec())).changed).toBe(true)
+    expect((await provider.status(winSpec())).state).toBe('enabled-running')
+  })
+
+  /**
+   * A switch retires the mechanism it came from, and the wrapper goes with it — but only
+   * a file the marker proves is ours. `home-hosted` is the generic name the machine-default
+   * install uses, so a `.vbs` at that path may belong to somebody else.
+   */
+  it('retires the task\'s wrapper only when the marker proves it is ours', async () => {
+    const { provider, ctx } = taskRunner()
+    await provider.install(winSpec())
+    const script = hiddenLaunchPath(ctx, winSpec())
+    const ours = await provider.retireCommands?.(winSpec())
+    expect(ours?.commands.flat().join(' ')).toContain(script)
+
+    // Somebody else's file at our path is never named by a removal step.
+    fs.writeFileSync(script, 'foreign\r\n', 'utf8')
+    const theirs = await provider.retireCommands?.(winSpec())
+    expect(theirs?.commands.flat().join(' ')).not.toContain(script)
   })
 
   it('treats an absent task as already gone on uninstall', async () => {
@@ -543,8 +838,11 @@ describe('windows boot task (SYSTEM, before login)', () => {
           const name = /TaskName '([^']+)'/.exec(script)?.[1]
           // `-AtStartup` is the boot task; store the XML that matches, or the test
           // would compare the wrong artifact to the wrong name.
-          if (name !== undefined)
-            tasks.set(name, script.includes('-AtStartup') ? bootTaskXml(winSpec()) : scheduledTaskXml(winSpec()))
+          if (name !== undefined) {
+            const action = actionOf(script, script.includes('-AtStartup'))
+            if (action !== null)
+              tasks.set(name, exportedXml(action))
+          }
           return { code: 0, stdout: '' }
         }
         if (script.startsWith('Unregister-ScheduledTask')) {
@@ -571,8 +869,8 @@ describe('windows boot task (SYSTEM, before login)', () => {
       return { code: 1 }
     }
     const runner = fakeRun(handler)
-    const ctx = ctxFor({ home, run: runner.run, platform: 'win32', env: { USER: 'tester', TEMP: home } })
-    return { tasks, boot: createWindowsBootProvider(ctx), logon: createWindowsTaskProvider(ctx) }
+    const ctx = ctxFor(winCtx({ home, run: runner.run }))
+    return { tasks, ctx, boot: createWindowsBootProvider(ctx), logon: createWindowsTaskProvider(ctx) }
   }
 
   it('registers under its own name, leaving the logon task untouched', async () => {
@@ -583,6 +881,23 @@ describe('windows boot task (SYSTEM, before login)', () => {
     expect([...tasks.keys()].sort()).toEqual(['home-hosted', 'home-hosted-boot'])
     expect(tasks.get('home-hosted')).toContain('<LogonTrigger>')
     expect(tasks.get('home-hosted-boot')).toContain('<BootTrigger>')
+  })
+
+  /**
+   * The split the measurement dictates: only the *logon* task needs the wrapper.
+   *
+   * A SYSTEM task runs in session 0, which has no interactive desktop, so starting
+   * `node.exe` there already measured `visible=False`. Wrapping it would add an artifact
+   * between SYSTEM and the panel for no window to remove.
+   */
+  it('leaves the boot task on the real node, and only wraps the logon task', async () => {
+    const { tasks, boot, logon } = bootRunner()
+    expect((await boot.install(winSpec())).ok).toBe(true)
+    expect((await logon.install(winSpec())).ok).toBe(true)
+    const bootAction = /<Command>([\s\S]*?)<\/Command>/.exec(tasks.get('home-hosted-boot') ?? '')?.[1] ?? ''
+    const logonAction = /<Command>([\s\S]*?)<\/Command>/.exec(tasks.get('home-hosted') ?? '')?.[1] ?? ''
+    expect(bootAction).toBe('C:\\Program Files\\nodejs\\node.exe')
+    expect(logonAction).toBe(WSCRIPT)
   })
 
   it('uninstalling one mechanism leaves the other installed', async () => {
@@ -615,5 +930,169 @@ describe('windows boot task (SYSTEM, before login)', () => {
     const result = await boot.install(winSpec())
     expect(result.ok).toBe(false)
     expect(result.detail).toMatch(/elevated/)
+  })
+})
+
+/**
+ * The hidden-launch derivation, on its own.
+ *
+ * Every path that has to agree about the windowless launch goes through `hiddenLaunch`:
+ * `install()` writes its artifact, `status()`/`inspect()` compare the registered action
+ * against it, and `uninstall()`/`retireCommands()` remove it. Deriving it twice — even
+ * identically-looking — is how a re-install starts reporting `changed: true` forever and
+ * the page shows drift that is not there, so the derivation is pinned directly as well as
+ * through the providers.
+ */
+describe('the windowless launch', () => {
+  let home: string
+  beforeEach(() => { home = tempHome() })
+  afterEach(() => { cleanup(home) })
+
+  const ctx = (overrides: Partial<Parameters<typeof ctxFor>[0]> = {}) => ctxFor(winCtx({ home, run: fakeRun().run, ...overrides }))
+
+  it('derives wscript + //B //nologo + the .vbs, copying everything else', () => {
+    const spec = winSpec()
+    const derived = windowlessSpec(ctx(), spec)
+    expect(derived.command).toBe(WSCRIPT)
+    expect(derived.args).toEqual(['//B', '//nologo', hiddenLaunchPath(ctx(), spec)])
+    // Everything else is the caller's spec, unchanged.
+    expect(derived.cwd).toBe(spec.cwd)
+    expect(derived.env).toEqual(spec.env)
+    expect(derived.marker).toBe(spec.marker)
+    expect(derived.unitName).toBe(spec.unitName)
+    expect(derived.label).toBe(spec.label)
+    expect(derived.logDir).toBe(spec.logDir)
+    // And the input is not mutated: the `.vbs` is built from the original spec.
+    expect(spec.command).toBe('C:\\Program Files\\nodejs\\node.exe')
+  })
+
+  /**
+   * `//B` is load-bearing, measured in all four combinations: without it a missing `.vbs`
+   * (deleted by hand, or an interrupted uninstall) puts up a modal "Input Error" dialog and
+   * the wrapper **never exits** — still alive after 120 s. A dialog at every logon would be
+   * worse than the console window this replaces.
+   *
+   * `//B` is not sufficient on its own, which is why the script also carries the `On Error`
+   * guards: with `//B` and no guards, an unstartable child makes the wrapper exit **0**, and
+   * `RestartOnFailure` would never fire — the same blind spot that disqualified
+   * `conhost --headless`. Both are asserted, in the two tests around this one.
+   */
+  it('runs wscript in batch mode, so a missing script cannot open a modal dialog', () => {
+    expect(windowlessSpec(ctx(), winSpec()).args[0]).toBe('//B')
+    expect(windowlessSpec(ctx(), winSpec()).args[1]).toBe('//nologo')
+  })
+
+  it('puts the .vbs beside the .cmd fallback, named for the unit', () => {
+    expect(hiddenLaunchPath(ctx(), winSpec())).toBe(path.join(home, 'AppData', 'Local', 'home-hosted', 'home-hosted.vbs'))
+    // The unit name is what keys the artifact, so two specs cannot share one file.
+    expect(hiddenLaunchPath(ctx(), winSpec({ unitName: 'home-hosted-1a2b3c4d' })))
+      .toContain(`${path.sep}home-hosted-1a2b3c4d.vbs`)
+  })
+
+  /**
+   * Pinned **directly**, because every production path reaches this through
+   * `hiddenLaunch`, whose `validate(spec)` refuses an illegal unit name first — so the
+   * rule that runs on the normal path is the caller's, and removing this one changes
+   * nothing reachable. `hiddenLaunchPath` is exported, though, so a direct caller has no
+   * preceding check, and `../evil` would otherwise name a file outside the directory.
+   * This is the same shape as `assertLabel`/`assertRegistryValueName` above: the only
+   * place that rule is exercised at all.
+   */
+  it('refuses a unit name that would escape the directory, when called directly', () => {
+    expect(() => hiddenLaunchPath(ctx(), winSpec({ unitName: '../evil' }))).toThrow(/unit name/)
+    expect(() => hiddenLaunchPath(ctx(), winSpec({ unitName: '..\\evil' }))).toThrow(/unit name/)
+    expect(hiddenLaunchPath(ctx(), winSpec({ unitName: 'ok.name_1' }))).toContain('ok.name_1.vbs')
+  })
+
+  /** No `wscript.exe` on the machine is not an error: it is today's direct command. */
+  it('falls back to the direct command when wscript cannot be found', () => {
+    const spec = winSpec()
+    const none = ctx({ exists: () => false })
+    expect(wscriptExecutable(none)).toBeNull()
+    expect(windowlessSpec(none, spec)).toEqual(spec)
+    expect(hiddenLaunch(none, spec)).toEqual({ spec, scriptPath: null })
+  })
+
+  it('does not guess a wscript path without a SystemRoot', () => {
+    // A bare `wscript.exe` is not absolute, so naming it would break `validate()` — the
+    // honest answer is "no wrapper", not a crash at install time.
+    const noRoot = ctxFor({
+      home,
+      platform: 'win32',
+      run: fakeRun().run,
+      env: { USER: 'tester', LOCALAPPDATA: path.join(home, 'AppData', 'Local') },
+      exists: () => true,
+    })
+    expect(wscriptExecutable(noRoot)).toBeNull()
+    expect(windowlessSpec(noRoot, winSpec())).toEqual(winSpec())
+  })
+
+  it('honours windir when SystemRoot is absent', () => {
+    const windir = ctx({ env: { USER: 'tester', windir: WINDOWS_ROOT, LOCALAPPDATA: path.join(home, 'AppData', 'Local') } })
+    expect(wscriptExecutable(windir)).toBe(WSCRIPT)
+  })
+
+  it('builds the script around the real command line and the marker', () => {
+    const script = hiddenLaunchScript(winSpec())
+    // The marker on its own first line, so `inspectOwned` can prove the file is ours.
+    expect(script.split('\r\n')[0]).toBe(`' ${DEFAULT_MARKER}`)
+    // The ORIGINAL command line, not the wscript form — otherwise the wrapper recurses.
+    expect(script).toContain('node.exe')
+    expect(script).toContain('sh.Run(')
+    expect(script).toContain(', 0, True)')
+    expect(script).toContain('WScript.Quit rc')
+    expect(script).not.toContain('wscript.exe')
+    // CRLF, because the file is read by a Windows host.
+    expect(script).toContain('\r\n')
+    expect(script.split('\n').every(line => !line.endsWith('\r') || line.length > 0)).toBe(true)
+  })
+
+  /**
+   * A bare `sh.Run` on a program that cannot start does not raise into the script: it opens
+   * a **modal dialog** and the wrapper never finishes (measured: no exit in 120 s, with a
+   * live `wscript.exe` holding a window). The guards turn that into a nonzero exit, which
+   * is what `RestartOnFailure` can act on.
+   */
+  it('guards sh.Run so an unstartable child reports failure, not exit 0', () => {
+    const script = hiddenLaunchScript(winSpec())
+    expect(script).toContain('On Error Resume Next')
+    // The code is nonzero on purpose: measured, `//B` alone turns an unstartable child into
+    // exit **0**, so a wrapper without these guards tells `RestartOnFailure` it succeeded.
+    expect(script).toContain('If Err.Number <> 0 Then WScript.Quit 90')
+    expect(script).not.toContain('WScript.Quit 0')
+    expect(script).toContain('WScript.Quit rc')
+  })
+
+  /**
+   * The wrapper's exit code is the child's, which is the whole reason this shape was chosen
+   * over `conhost --headless` (measured: child 7 -> conhost 0). Asserted here as the source
+   * shape; the measurement itself was `Last Result: 7` on a real task.
+   */
+  it('returns the child\'s exit code', () => {
+    const statements = hiddenLaunchScript(winSpec()).split('\r\n').filter(line => line !== '')
+    // The capture is from `sh.Run`, and it is what `Quit` reports: not a constant, which
+    // is what makes `RestartOnFailure` able to see a failure at all.
+    expect(statements.some(line => line.startsWith('rc = sh.Run('))).toBe(true)
+    expect(statements.at(-1)).toBe('WScript.Quit rc')
+    // Exactly one capture: `Quit` reads `rc`, so a second assignment would be the bug
+    // that makes the reported code something other than the child's.
+    expect(statements.filter(line => line.startsWith('rc = ')).length).toBe(1)
+  })
+
+  /** The marker is interpolated, so it goes through `assertMarker` like every other writer. */
+  it('refuses a marker a newline would take out of the comment', () => {
+    expect(() => hiddenLaunchScript(winSpec({ marker: 'ok\r\nWScript.Quit 0' }))).toThrow(/control characters/)
+    expect(hiddenLaunchScript(winSpec({ marker: 'other-marker' }))).toContain('\' other-marker')
+  })
+
+  it('keeps a non-ASCII path out of the raw source', () => {
+    // The ANSI-source rule: a raw non-ASCII byte would be mojibake, so it is a ChrW run.
+    const script = hiddenLaunchScript(winSpec({
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\home-hosted\\dist\\cli.js', 'up', '--home', 'C:\\Users\\José\\.home-hosted'],
+    }))
+    expect(script).toContain('ChrW(&H00E9)')
+    // eslint-disable-next-line no-control-regex -- the assertion IS about ASCII-only output.
+    expect(/^[\u0000-\u007F]*$/.test(script)).toBe(true)
   })
 })
