@@ -603,6 +603,29 @@ describe('windows scheduled task', () => {
     expect(action()?.command).toMatch(/wscript(\.exe)?$/i)
   })
 
+  /**
+   * The fallback branch installs no wrapper, so a missing one is not a defect there.
+   *
+   * `artifactOf()` answers "which file could this plugin own" and is deliberately
+   * capability-independent, but the wrapper-missing check needs a different question: "does
+   * *this* launch want a wrapper". Collapsing the two made every `%NAME%` fallback install
+   * report `enabled-failing` the moment it was installed, and the reinstall hint was a dead
+   * end — re-installing cannot write a file the branch that avoids it forbids. `windows-run`
+   * gets this right; this is the same asymmetry on the task side.
+   */
+  it('reports a fallback install as healthy, because it needs no wrapper', async () => {
+    const { provider } = taskRunner()
+    // A `%NAME%` pair puts this on the fallback branch: no wrapper is written for it.
+    const spec = winSpec({ args: ['cli.js', 'up', '--home', 'C:\\Users\\%USERNAME%\\hh'], env: { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' } })
+
+    const installed = await provider.install(spec)
+    expect(installed.ok).toBe(true)
+    // No wrapper exists by design, and that must not read as a failure.
+    const status = await provider.status(spec)
+    expect(status.state).toBe('enabled-running')
+    expect(status.detail).not.toMatch(/wrapper .* is missing/)
+  })
+
   it('refuses a foreign wrapper and does not register the task', async () => {
     const { provider, ctx, action } = taskRunner()
     const spec = winSpec()
@@ -1090,6 +1113,55 @@ describe('a command line the wrapper could rewrite', () => {
     finally {
       cleanup(dir)
     }
+  })
+})
+
+/**
+ * A capability can be removed from Windows: VBScript is an optional feature.
+ *
+ * When `wscript.exe` is gone the launch falls back to the direct command, but the `.vbs` an
+ * earlier install wrote is still this plugin's artifact and must still be removable. Deriving
+ * cleanup from "what should the entry run *now*" made it `null` exactly then, so `uninstall()`
+ * reported success while leaving the file, `status()` kept saying `enabled-running`, and a
+ * reinstall converged the task back to `node.exe` — silently restoring the console window.
+ */
+describe('a task whose wrapper the machine can no longer launch', () => {
+  let home: string
+  let store: Map<string, string>
+
+  beforeEach(() => {
+    home = tempHome()
+    store = new Map()
+  })
+  afterEach(() => cleanup(home))
+
+  /** A provider whose `wscript.exe` does not resolve, with one owned `.vbs` already on disk. */
+  function withoutWscript(spec = winSpec()) {
+    const runner = fakeRun(regHandler(store))
+    const ctx = ctxFor(winCtx({ home, run: runner.run, exists: () => false }))
+    const scriptPath = hiddenLaunchPath(ctx, spec)
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
+    fs.writeFileSync(scriptPath, hiddenLaunchScript(spec), 'utf8')
+    // The task itself is registered, with our marker.
+    store.set('task:home-hosted', spec.marker)
+    return { ctx, scriptPath, spec }
+  }
+
+  it('still reports the missing/foreign artifact rather than claiming health', () => {
+    const { ctx, spec, scriptPath } = withoutWscript()
+    // The artifact exists, so this is the healthy case even with no wscript.
+    expect(inspectOwned(scriptPath, spec.marker).owned).toBe(true)
+    // And the derivation that removal must NOT use is null here — the whole point.
+    expect(hiddenLaunch(ctx, spec).scriptPath).toBeNull()
+  })
+
+  it('names the wrapper in its retirement plan even though wscript is unavailable', async () => {
+    const { ctx, spec, scriptPath } = withoutWscript()
+    const provider = createWindowsTaskProvider(ctx)
+    const retirement = await provider.retireCommands?.(spec)
+    expect(retirement).toBeDefined()
+    // The file must appear in at least one removal step; otherwise it is stranded.
+    expect(JSON.stringify(retirement!.commands)).toContain(scriptPath)
   })
 })
 

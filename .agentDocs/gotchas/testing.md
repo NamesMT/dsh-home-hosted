@@ -32,6 +32,13 @@ if the code broke. Read this when you write or trust a test.
   absent-case test its own fixture, or it passes for a previous test's leftover state.
 - Tests here never bind a fixed port, start a real service manager, or write outside a temp dir;
   compare canonical paths (macOS `/var` → `/private/var`). Windows is not gated yet.
+- **Two branches that share one state value cannot be told apart by asserting the state.** The Windows
+  task `status()` returns `bootState(true, true, true)` both for "the wrapper it names is missing" and
+  for "the registered action is not this launch", so a drift test that only asserted
+  `enabled-failing` passed with the drift check deleted — the other branch reported the same state
+  first. Assert the `detail`, or arrange for the other cause to be absent. The same test also passed
+  while its guard was missing because the fixture had no `.vbs` at all; **one defect can mask another,
+  and the mask is what the assertion has to name.**
 - **When CI cannot gate a platform, drive the real thing by hand and record it.** The Windows
   autostart path was verified through WSL interop with Administrator rights: real `schtasks.exe`
   registrations, a real copy of the pinned panel CLI, and `/healthz` answering. That is how the

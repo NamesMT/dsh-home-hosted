@@ -859,13 +859,21 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
           return { state: 'not-installed', unitPath: null, detail: `no scheduled task named ${name}`, commands: [] }
         if (!info.marked)
           return { state: 'not-installed', unitPath: null, detail: `task ${name} exists but does not carry this plugin's marker; refusing to treat it as this plugin's entry`, commands: [] }
-        // The action names the wrapper, so a missing wrapper means the logon would start
-        // nothing. Reported as failing rather than healthy, because the entry a person
-        // relies on is the one that does not work.
-        const scriptPath = artifactOf(spec)
-        if (scriptPath !== null && !existsOf(ctx, scriptPath)) {
+        /**
+         * A missing wrapper is only a defect when this launch *wants* one.
+         *
+         * `artifactOf()` answers "which file could this plugin own", deliberately independent
+         * of the machine's capabilities so cleanup can find it. That is the wrong question
+         * here: the fallback branch (no `wscript.exe`, or a command line a wrapper would
+         * rewrite) installs no `.vbs` at all, so demanding one reported every such install as
+         * `enabled-failing` the moment it was made — with a reinstall hint that could never
+         * succeed, because the branch that writes the file is the one being avoided.
+         * `windows-run` already asks the launch; this is the same asymmetry, task side.
+         */
+        const launch = entryOf(spec)
+        if (launch.scriptPath !== null && !existsOf(ctx, launch.scriptPath)) {
           const state: BootState = bootState(true, true, true)
-          return { state, unitPath: null, detail: `scheduled task ${name} is registered, but its wrapper ${scriptPath} is missing, so it would start nothing (${flavour.describe})`, commands: [] }
+          return { state, unitPath: null, detail: `scheduled task ${name} is registered, but its wrapper ${launch.scriptPath} is missing, so it would start nothing (${flavour.describe})`, commands: [] }
         }
         /**
          * The registered action must be the one this machine wants, not merely present.
