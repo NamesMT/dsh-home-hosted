@@ -563,6 +563,27 @@ describe('windows scheduled task', () => {
    * a task pointing at somebody else's file is worse than no task.
    */
   /**
+   * A task that exists but is not ours must be named as such, not reported as drift.
+   *
+   * This branch had no test at all: deleting it left the suite green, and the fall-through then
+   * reported somebody else's task as "does not name this machine's launch, so a reinstall is
+   * needed" — a report that lies and offers a remedy `install()` will refuse. It is the twin of
+   * `windows-run`'s "reports a Run value without our marker as not-installed", which the task
+   * provider never got. The assertion names the `detail`, because both causes share
+   * `not-installed` and the state alone cannot tell them apart.
+   */
+  it('reports a task without our marker as not-installed, and does not call it drift', async () => {
+    const spec = winSpec()
+    // Somebody else's task: right name, no marker.
+    const { provider } = taskRunner({ startWith: { command: 'C:\\other\\thing.exe', args: '', cwd: spec.cwd, marker: 'somebody else wrote this', boot: false } })
+
+    const status = await provider.status(spec)
+    expect(status.state).toBe('not-installed')
+    expect(status.detail).toMatch(/does not carry this plugin's marker/)
+    expect(status.detail).not.toMatch(/reinstall is needed/)
+  })
+
+  /**
    * The registered action must be the one this machine wants, not merely present.
    *
    * `inspect()` computed `matches` and only `install()` read it, so an action reverted to the
