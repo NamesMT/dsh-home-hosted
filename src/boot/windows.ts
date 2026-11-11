@@ -65,38 +65,28 @@ export function wscriptExecutable(ctx: BootProviderContext): string | null {
 }
 
 /**
- * Would `sh.Run` rewrite this command line?
+ * Could `sh.Run` rewrite this command line under *some* environment?
  *
- * `WScript.Shell.Run` expands `%NAME%` for every variable the environment actually
- * defines, and passes anything else through untouched — measured: `%USERNAME%` reached the
- * child as `Administrator`, while `%NOT_AN_ENV_VAR%`, a lone `100%` and `a%b_not_set%c`
- * all arrived verbatim. That expansion is the one thing this wrapper must not introduce:
- * the direct command never did it, so a panel root like `C:\\Users\\%USERNAME%\\hh` would
- * silently start against a *different* state root instead of failing.
+ * `WScript.Shell.Run` expands `%NAME%` against the environment of the process that runs the
+ * wrapper — **at logon**, not at install. So the installing process's own environment cannot
+ * answer this: measured, one already-installed `.vbs` naming `C:\Users\%QA_LATE_DEFINED%\hh`
+ * passed the variable through verbatim when it was undefined, and produced
+ * `C:\Users\LATEVALUE\hh` from the *same file* once the variable existed. A guard that read
+ * `process.env` at install time therefore re-opened the very corruption it was written for,
+ * through a user-level variable set later, a service-account install, or any elevated install
+ * whose environment differs from the logon one.
  *
- * `Shell.Application.ShellExecute` does pass `%USERNAME%` through literally, but it returns
- * as soon as the child starts (measured: 0.16 s), so it cannot report the exit code and
- * would defeat `RestartOnFailure`. So a command line that would be rewritten falls back to
- * the direct launch: the console window returns, which is cosmetic, instead of the panel
- * running against the wrong root, which is not.
+ * It also cannot enumerate names correctly: Windows allows a space in a variable name and
+ * `sh.Run` expands one (measured `%QA SPACE NAME%`), and names are case-insensitive. So the
+ * question is asked about the **shape**, not about a particular environment: any `%NAME%` pair
+ * is treated as expanding.
+ *
+ * `%%` really is inert — `100%%` arrives as `100%%`, and `%%USERNAME%%` becomes
+ * `%Administrator%`, i.e. the inner pair expanded — which is exactly what this pattern says:
+ * it needs a non-`%` run between two `%`. That is why the measured cases all classify correctly.
  */
-export function expandableByWscript(commandLine: string, env: Readonly<Record<string, string | undefined>> = process.env): boolean {
-  /**
-   * Compared **case-insensitively**, because Windows environment variable names are.
-   *
-   * Measured: `%username%` and `%UserName%` are both substituted for `USERNAME`, so a
-   * case-sensitive lookup over looked exactly the arguments it existed to catch — the
-   * worst kind of guard, one that passes the case it was written for and misses the rest.
-   * The names are collected once rather than per match, since this runs per install.
-   */
-  const defined = new Set(Object.keys(env).filter(key => env[key] !== undefined && env[key] !== null).map(key => key.toUpperCase()))
-  for (const match of commandLine.matchAll(/%([^%\s]+)%/g)) {
-    // Only a name the environment really defines is substituted. An empty value still
-    // counts: `%EMPTY%` expands to nothing, which shortens the argument just the same.
-    if (defined.has((match[1] ?? '').toUpperCase()))
-      return true
-  }
-  return false
+export function mayExpandByWscript(commandLine: string): boolean {
+  return /%[^%]+%/.test(commandLine)
 }
 
 /** The `.vbs` this spec's launch goes through, in the same directory as the `.cmd` fallback. */
@@ -186,7 +176,8 @@ export function hiddenLaunch(ctx: BootProviderContext, spec: BootSpec): HiddenLa
   validate(spec)
   const wscript = wscriptExecutable(ctx)
   // A command line the wrapper would rewrite must not go through it: see `expandableByWscript`.
-  if (wscript === null || expandableByWscript(windowsCommandLine(spec.command, spec.args), ctx.env))
+  // See `mayExpandByWscript` for why this reads the command line's shape and not `ctx.env`.
+  if (wscript === null || mayExpandByWscript(windowsCommandLine(spec.command, spec.args)))
     return { spec, scriptPath: null }
   const scriptPath = hiddenLaunchPath(ctx, spec)
   return { spec: { ...spec, command: wscript, args: ['//B', '//nologo', scriptPath] }, scriptPath }
@@ -875,6 +866,19 @@ function createTaskProvider(ctx: BootProviderContext, flavour: TaskFlavour): Boo
         if (scriptPath !== null && !existsOf(ctx, scriptPath)) {
           const state: BootState = bootState(true, true, true)
           return { state, unitPath: null, detail: `scheduled task ${name} is registered, but its wrapper ${scriptPath} is missing, so it would start nothing (${flavour.describe})`, commands: [] }
+        }
+        /**
+         * The registered action must be the one this machine wants, not merely present.
+         *
+         * `inspect()` already computed `matches`, but only `install()` read it, so an action
+         * reverted to a direct `node.exe` — a hand edit, or an entry written before the
+         * wrapper existed — reported `enabled-running` while every logon showed a console
+         * window again: the regression the wrapper exists to prevent, on the mechanism it was
+         * written for. `install()` converges it, so the remedy the detail names is real.
+         */
+        if (!info.matches) {
+          const state: BootState = bootState(true, true, true)
+          return { state, unitPath: null, detail: `scheduled task ${name} does not name this machine's launch, so a reinstall is needed (${flavour.describe})`, commands: [] }
         }
         const state: BootState = bootState(true, true, false)
         return { state, unitPath: null, detail: `scheduled task ${name} is registered (${flavour.describe})`, commands: [] }
