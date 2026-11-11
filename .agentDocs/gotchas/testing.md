@@ -32,3 +32,10 @@ if the code broke. Read this when you write or trust a test.
   absent-case test its own fixture, or it passes for a previous test's leftover state.
 - Tests here never bind a fixed port, start a real service manager, or write outside a temp dir;
   compare canonical paths (macOS `/var` → `/private/var`). Windows is not gated yet.
+- **When CI cannot gate a platform, drive the real thing by hand and record it.** The Windows
+  autostart path was verified through WSL interop with Administrator rights: real `schtasks.exe`
+  registrations, a real copy of the pinned panel CLI, and `/healthz` answering. That is how the
+  console-window defect and the swallowed exit code were found — neither is visible to a unit test,
+  and neither shows up when a process is started from WSL, which has no console at all. What that
+  still does not cover: a real logon (so the `Run` key is verified by the shape it writes, not by
+  explorer launching it), a real reboot, and macOS/launchd. Say which when claiming a bug is fixed.
