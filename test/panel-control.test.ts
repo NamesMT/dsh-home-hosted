@@ -280,10 +280,18 @@ describe('panel control', () => {
       start: [['systemctl', '--user', 'start', 'home-hosted.service']],
     })
     const { spawnSync } = await import('node:child_process')
+    /**
+     * The helper waits out its **full 10 s** escalation loop here by design (40 × 250 ms, against
+     * a pid that is this process and therefore never dies), and then runs the fallback. So this
+     * test is not slow by accident and not flaky by accident: it costs ~10 s every run, and a
+     * loaded machine squeezed the 30 s ceiling enough to produce phantom reds in other people's
+     * full-suite runs — reported as "1 failed" with no cause, three separate times. The ceiling
+     * is what needs headroom, not the wait: 90 s is ~9× the designed cost.
+     */
     const run = spawnSync(process.execPath, [helper], {
       env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: 90_000,
     })
     expect(run.status, run.stderr).toBe(0)
 

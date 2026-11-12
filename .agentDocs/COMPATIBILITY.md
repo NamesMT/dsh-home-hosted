@@ -100,7 +100,7 @@ policy, never the steps.
 
 **The decision is the panel's answer, not its failure text.** `migrate --dry-run` prints
 ``migrating <label>: config schema A → B`` at column 0 per file; `^migrating ` is the discriminator,
-and it is byte-identical from 0.9.0 through 0.11.0. Branching on `refusing to start: config schema 1
+and it is byte-identical from 0.9.0 through 0.13.0. Branching on `refusing to start: config schema 1
 needs 1 migration` instead would be a branch on wording, and the exit code cannot stand in for it:
 pending-with-`--dry-run` and nothing-to-do both exit 0. `test/panel-migrate` reads the pinned release's
 own `migrate` module from the sourcemap and fails if that line's shape moves — an unanchored match

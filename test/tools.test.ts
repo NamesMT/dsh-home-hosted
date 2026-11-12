@@ -690,6 +690,34 @@ describe('panel targeting', () => {
     expect(refused.length).toBeGreaterThan(15)
   })
 
+  /**
+   * Every spelling of "this field accepts null", not only the one the pinned release happens to
+   * use today.
+   *
+   * The reader matched a bare `\w+` schema name, so a field written as a quoted union
+   * (`'string | null'`) was invisible to it — the field would silently drop out of the nullable
+   * list, and a `null` this plugin's file fallback is allowed to carry would then be refused by
+   * the panel. Not live in 0.13.0 (every real field names a schema), which is exactly why it
+   * needed a synthetic block: the real one cannot exercise it.
+   */
+  it('reads every spelling a nullable patch field may use', () => {
+    const block = [
+      'function editableFields() {',
+      '  return {',
+      '    named: someOrNullSchema,',
+      '    wrapped: labelOrNullSchema.optional(),',
+      "    quoted: 'string | null',",
+      "    inline: type('string | null'),",
+      "    union: type('string').or(type('null')),",
+      "    notNullable: 'string?',",
+      "    plainBoolean: 'boolean = true',",
+      '  } as const',
+      '}',
+    ].join('\n')
+    expect(panelNullablePatchFields(block).sort())
+      .toEqual(['inline', 'named', 'quoted', 'union', 'wrapped'])
+  })
+
   it('does not repair the managed token for a failure on another panel', async () => {
     const refused = new PanelError('authentication required', 'AUTH_REQUIRED', 401)
     const h = harness({

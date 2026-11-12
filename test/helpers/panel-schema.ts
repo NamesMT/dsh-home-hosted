@@ -96,7 +96,7 @@ export function panelEntryFields(): string[] {
   // The declaration ends at its own `onUndeclaredKey('reject')`, which sits *inside* the
   // `lazy(() => …)` wrapper in 0.13. A bare `}))` fallback would have matched an inner
   // `type(` call and cut the field list to a third of itself — which is exactly what it did
-  // before this comment: 9 fields instead of 30, and the count guard is what caught it.
+  // before this comment: 9 fields instead of 25, and the count guard is what caught it.
   const end = source.indexOf(".onUndeclaredKey('reject')", start)
   if (end === -1)
     throw new Error(`the pinned panel\'s serverSchema has no onUndeclaredKey marker in ${found.file}`)
@@ -181,8 +181,11 @@ function panelEditableFieldsSource(): string {
  * 0.7.21, when `label` joined the set. A null the panel rejects is a 400, and one our file
  * fallback is allowed to carry but the panel is not is a config the panel refuses to boot.
  */
-export function panelNullablePatchFields(): string[] {
-  const source = panelEditableFieldsSource()
+export function panelNullablePatchFields(sourceOverride?: string): string[] {
+  // The seam exists so a *synthetic* block can be read: the shipped schema is the only one this
+  // runs against in CI, and a spelling the real one does not currently use would otherwise be
+  // untestable — which is how a field silently drops out of this list.
+  const source = sourceOverride ?? panelEditableFieldsSource()
   const declarations = ['const editableFields = {', 'function editableFields() {', 'function editableFields() {\n  return {']
   const start = declarations.map(declaration => source.indexOf(declaration)).filter(at => at !== -1)[0]
   if (start === undefined)
@@ -195,15 +198,35 @@ export function panelNullablePatchFields(): string[] {
   // The object form indents its fields two spaces (`const editableFields = {`), the 0.13.0
   // function form indents them four (inside `return {`). Anchoring on exactly two matched
   // nothing and the emptiness guard reported it rather than a vacuous pass.
-  const lines = [...block.matchAll(/^ {2,6}([a-zA-Z]+):\s*(\w+)/gm)]
+  /**
+   * The **whole value**, not just its first token.
+   *
+   * A field may name a schema (`portSchema`), write the union inline (`'string | null'`), or call
+   * `type('…')`. Matching only a bare `\w+` saw the quoted form as nothing at all, so a field the
+   * panel accepts as `null` would be silently left out of this list — the exact failure the
+   * comment above warns about, arriving through a spelling rather than through a new field.
+   * Measured on a synthetic block of `a: someOrNullSchema`, `b: 'string | null'`,
+   * `c: type('string | null')`, `d: portSchema`, `e: type('boolean = true')`: the old pattern
+   * matched a, c (as `type`) and d — `b` vanished entirely.
+   */
+  const lines = [...block.matchAll(/^ {2,6}([a-zA-Z]+):\s*(.*)$/gm)]
   const nullable = lines
-    .filter(([, , schema]) => {
-      if (schema === undefined)
+    .filter(([, , value]) => {
+      if (value === undefined)
         return false
-      if (schema.endsWith('OrNullSchema'))
+      const declared = value.trim().replace(/,$/, '')
+      // Written inline, either as a quoted union or through `type(…)`.
+      if (/\|\s*null|\.or\(type\('null'\)\)/.test(declared))
         return true
-      // A schema declared as a union containing `null`, e.g. `portSchema`.
-      const declaration = new RegExp(`const ${schema} = [^\\n]*`).exec(source)
+      // The field's own schema admits null, with or without an `optional()` wrap:
+      // `labelOrNullSchema` and `labelOrNullSchema.optional()` both count.
+      if (/^[A-Za-z_]\w*OrNullSchema\b/.test(declared))
+        return true
+      // Names a schema declared elsewhere as a union containing `null`, e.g. `portSchema`.
+      const named = /^([A-Za-z_]\w*)/.exec(declared)?.[1]
+      if (named === undefined)
+        return false
+      const declaration = new RegExp(`const ${named} = [^\\n]*`).exec(source)
       return declaration !== null && /\|\s*null|\.or\(type\('null'\)\)/.test(declaration[0])
     })
     .map(([, field]) => field!)
