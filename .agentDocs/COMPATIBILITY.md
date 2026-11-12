@@ -10,7 +10,7 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 range. The page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one
 alone makes it recommend a range the plugin is not built against.
 
-The pin is `^0.11.0`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
+The pin is `^0.13.0`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
 **and** made an unstamped file read as schema 1, so a config this plugin created without a stamp is
 refused by 0.9 ("config schema 1 needs 1 migration") while a schema-2 stamp is refused by 0.8 as a
 newer release's file. No stamp satisfies both gates, so a 0.8.x panel is not a lesser-supported copy —
@@ -30,6 +30,40 @@ a WSL-temperature schema this plugin never reads). See
 `GET /api/workspaces`, `GET /api/settings` (its `control` block only) and the entry writes — and none
 of them carried those fields. The config schema did not move, so for this plugin it is a
 patch-shaped bump; for anyone who built a client against the frame it is a read-the-notes upgrade.
+
+**0.12.0 and 0.13.0 are both minors, and the one that reaches this plugin is 0.13.0's build layout.**
+0.12.0's breaking changes are all about *inbound* API use, which this plugin does not do: a
+workspace-scoped route now rejects a query key it does not declare (400 rather than a silent drop),
+a public `Host` must be listed in `control.allowedHosts` (421 otherwise), `trustProxy` defaults to
+`loopback`, and `include: ["secrets"]` on a restore needs a session. This plugin sends only the
+`workspace` key, reaches the panel on loopback, and drives no restore — checked by reading
+`ws()` in `panel.ts`, which appends exactly one declared parameter.
+
+0.12.0 also answers **`409 CONFIG_CHANGED_ON_DISK`** where it used to answer 400, when a save would
+overwrite an edit the panel has not read. That cannot reach this plugin: it writes a config file
+directly only on the path where the panel did **not** answer (`service.ts` `applyIntents` and the
+boot-intent helpers), so there is no panel-held baseline to conflict with. It also matters that
+0.13.0 *watches* the file and reloads a hand edit, which is what makes the plugin's own out-of-band
+writes visible to a later panel save rather than silently overwritten.
+
+**0.13.0 code-splits its CLI, and that is what this plugin had to change for.** `CONFIG_SCHEMA` and
+every schema the parity guards read used to live in `dist/cli.js.map`; they now live in
+content-hashed chunks (`dist/chunks/parse-<hash>.js.map`, `dist/chunks/contracts-<hash>.js.map`,
+`dist/chunks/migrate-<hash>.js.map`). Two readers hard-coded the single map path and therefore
+returned nothing:
+
+- `panel-schema.ts` `readConfigSchemaFrom` returned `null`, which this module treats as "unknown"
+  and refuses to stamp on — so every config file the plugin *creates* would have been written
+  without a `meta.schema`, and the panel reads an absent stamp as the **oldest** schema and refuses
+  to boot it. Silent, and in the worst direction.
+- The parity guards read the same map, so `panelEntryFields`, `panelPortConflictPolicies`,
+  `panelNullablePatchFields` and `panelMergeKeys` all threw "not found".
+
+Both now **discover** the published maps and read the first that declares what they want. The
+declarations themselves also changed shape in 0.13.0 — schemas are built on first use
+(`lazy(() => type({…}))`), and `editableFields` became a function — so each reader accepts both
+spellings rather than anchoring on one. `CONFIG_SCHEMA` is still **2**, with the same single 1→2
+step, so no state root needs migrating and `MIN_SUPPORTED_VERSION` does not move.
 
 **One pin bump here is a fix, not a formality: 0.9.10 stopped a bare Windows command resolving to a
 POSIX shim.** `providers/process.ts` tried the extension-less `foo` first, then `.cmd`/`.exe`/… — and

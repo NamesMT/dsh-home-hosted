@@ -40,14 +40,58 @@ export function resetPanelConfigSchema(): void {
 export function readConfigSchemaFrom(manifestPath: string | null): number | null {
   if (manifestPath === null)
     return null
-  try {
-    const mapPath = path.join(path.dirname(manifestPath), 'dist', 'cli.js.map')
-    const map = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as { sourcesContent?: Array<string | null> }
-    const source = map.sourcesContent?.find((text): text is string => typeof text === 'string' && text.includes('export const CONFIG_SCHEMA'))
-    const match = source === undefined ? null : /export const CONFIG_SCHEMA = (\d+)/.exec(source)
-    return match === null ? null : Number.parseInt(match[1]!, 10)
+  for (const mapPath of publishedSourcemaps(path.dirname(manifestPath))) {
+    let map: { sourcesContent?: Array<string | null> }
+    try {
+      map = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as { sourcesContent?: Array<string | null> }
+    }
+    catch {
+      continue
+    }
+    for (const text of map.sourcesContent ?? []) {
+      if (typeof text !== 'string' || !text.includes('export const CONFIG_SCHEMA'))
+        continue
+      const match = /export const CONFIG_SCHEMA = (\d+)/.exec(text)
+      if (match !== null)
+        return Number.parseInt(match[1]!, 10)
+    }
   }
-  catch {
-    return null
+  return null
+}
+
+/**
+ * Every sourcemap the pinned release publishes, `dist/cli.js.map` first.
+ *
+ * **Not one hard-coded path.** home-hosted 0.13.0 code-splits its CLI, so `CONFIG_SCHEMA` moved
+ * out of `dist/cli.js.map` into `dist/chunks/parse-<hash>.js.map` — and the hash is not knowable
+ * in advance. A fixed path therefore returned null, which this module treats as "unknown" and
+ * refuses to stamp on, so every config file the plugin creates would have been written without a
+ * stamp: the panel reads that as the *oldest* schema and refuses to boot it. Silent, and the
+ * wrong direction to fail in.
+ *
+ * The entry bundle is read first so a chunk cannot win by directory order, and the caller stops
+ * at the first declaration, so one answer is returned exactly as before.
+ */
+function publishedSourcemaps(packageRoot: string): string[] {
+  const dist = path.join(packageRoot, 'dist')
+  const entry = path.join(dist, 'cli.js.map')
+  const found: string[] = []
+  const walk = (dir: string): void => {
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    }
+    catch {
+      return
+    }
+    for (const item of entries) {
+      const full = path.join(dir, item.name)
+      if (item.isDirectory())
+        walk(full)
+      else if (item.name.endsWith('.js.map'))
+        found.push(full)
+    }
   }
+  walk(dist)
+  return found.sort((a, b) => (a === entry ? -1 : b === entry ? 1 : a.length - b.length))
 }

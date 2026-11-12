@@ -116,7 +116,20 @@ describe('the three consumers of the panel entry surface', () => {
    * evaluated at collection time and reports `skipped`, which is the truth.
    */
   it.skipIf(PANEL_SOURCE === null)('can set every field this editor leaves out', () => {
-    const panelUi = fs.readFileSync(PANEL_SOURCE!, 'utf8')
+    /**
+     * The whole server-UI directory, not one file.
+     *
+     * A field is often built in a *sibling* module: `resources` is set by `addServerForm.ts`
+     * (`resources: { maxRssBytes: … }`) while its control lives in `ServerConfigEditor.vue`,
+     * so reading only the component reported "the panel UI should be able to set resources"
+     * for a panel that plainly can. This assertion exists to catch a field the panel *cannot*
+     * set anywhere, so it has to look everywhere the UI is written.
+     */
+    const directory = path.dirname(PANEL_SOURCE!)
+    const panelUi = fs.readdirSync(directory)
+      .filter(name => /\.(?:vue|ts)$/.test(name))
+      .map(name => fs.readFileSync(path.join(directory, name), 'utf8'))
+      .join('\n')
     for (const field of OUT_OF_SCOPE_FIELDS)
       expect(panelUi, `the panel UI should be able to set ${field}`).toContain(field)
   })

@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MIGRATION_STEP_ANCHOR, MIGRATION_STEP_SOURCE, migrationNote, migrationSteps, migrationTransitions, repairPanelMigration } from '../src/home-hosted/panel-migrate.js'
 import { buildLauncherSource, launcherPath, writeLauncher } from '../src/home-hosted/launcher.js'
 import type { CliAnswer } from '../src/home-hosted/panel-migrate.js'
-import { panelSchemaMapPath } from './helpers/panel-schema.js'
+import { panelDistPath, panelSchemaMaps } from './helpers/panel-schema.js'
 import { run } from '../src/util/exec.js'
 import { tempDir, writeJsonFile } from './helpers/temp.js'
 import type { TempDir } from './helpers/temp.js'
@@ -37,14 +37,20 @@ function answer(stdout = '', stderr = '', code = 0): CliAnswer {
   return { code, stdout, stderr }
 }
 
-/** The pinned release's `migrate` module, from the shipped sourcemap. */
+/** The pinned release's `migrate` module, from whichever published sourcemap carries it. */
 function pinnedMigrateSource(): string {
-  const map = JSON.parse(fs.readFileSync(panelSchemaMapPath(), 'utf8')) as { sources: string[], sourcesContent: Array<string | null> }
-  const index = map.sources.findIndex(source => /cli[\\/]migrate\.ts$/.test(source))
-  const source = index === -1 ? null : map.sourcesContent[index]
-  if (typeof source !== 'string')
-    throw new Error(`the pinned panel's migrate module was not found in ${panelSchemaMapPath()}`)
-  return source
+  // 0.13.0 code-splits the CLI, so this module moved from `dist/cli.js.map` into a
+  // content-hashed chunk. The map is discovered rather than named, because the hash is not
+  // knowable in advance; a fixed path reported "migrate module not found", which reads like the
+  // anchor had been removed upstream when only the build layout had changed.
+  for (const file of panelSchemaMaps()) {
+    const map = JSON.parse(fs.readFileSync(file, 'utf8')) as { sources: string[], sourcesContent: Array<string | null> }
+    const index = map.sources.findIndex(source => /cli[\\/]migrate\.ts$/.test(source))
+    const source = index === -1 ? null : map.sourcesContent[index]
+    if (typeof source === 'string')
+      return source
+  }
+  throw new Error(`the pinned panel's migrate module was not found in any sourcemap under ${panelDistPath()}`)
 }
 
 describe('the migration anchor', () => {

@@ -21,7 +21,7 @@ import { launchArgv } from './node-interpreter.js'
 import type { NodeInterpreterSource } from './node-interpreter.js'
 
 /** The range the plugin ships and is tested against. `dependencies['home-hosted']` must match. */
-export const EXPECTED_RANGE = '^0.11.0'
+export const EXPECTED_RANGE = '^0.13.0'
 
 /**
  * Oldest release whose API, config schema and CLI this plugin relies on.
