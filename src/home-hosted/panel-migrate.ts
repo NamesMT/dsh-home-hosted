@@ -39,9 +39,12 @@ export type MigrationCli = (words: string[]) => Promise<CliAnswer>
 /**
  * A step line `migrate --dry-run` prints for one file, anchored at column 0.
  *
- * Byte-identical from 0.9.0 through 0.11.0 (`src/cli/migrate.ts`:
+ * Byte-identical from 0.9.0 through **0.13.0** (`src/cli/migrate.ts`, now published as
+ * `dist/chunks/migrate-<hash>.js.map`:
  * ``process.stdout.write(`migrating ${target.label}: config schema ${from} → ${plan.to}\n`)``).
- * The step lines under it are indented, so only this header line matches.
+ * The step lines under it are indented, so only this header line matches. `test/panel-migrate`
+ * re-reads it from whichever sourcemap the pinned release publishes, so the range above is a
+ * claim the suite re-checks on every bump rather than a comment that quietly expires.
  */
 export const MIGRATION_STEP_ANCHOR = /^migrating .+: config schema \d+ → \d+$/m
 
