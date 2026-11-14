@@ -49,7 +49,12 @@ export function isOwnNavRow(rowText: string | null | undefined, wantedLabel: str
 /** Hide the shell's gear on the marked row; draw the house in its place. */
 export function navIconCss(maskUrl: string): string {
   return [
-    `[${NAV_ICON_MARKER}] > svg { display: none; }`,
+    // A **descendant** svg, not a child: 0.2.2 nests the glyph inside a `.navIcon` span, and a
+    // `>` here hides nothing there — which is what let the host's gear sit beside the mask. The
+    // row holds an icon and a label span and nothing else, so a descendant match cannot hit
+    // anything but the glyph, and it keeps this module correct even when it is used on a host
+    // that did grow the seat (an `inject` that throws leaves no way to tell).
+    `[${NAV_ICON_MARKER}] svg { display: none; }`,
     `[${NAV_ICON_MARKER}]::before {`,
     `  content: '';`,
     `  flex: none;`,

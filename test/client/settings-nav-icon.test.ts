@@ -143,12 +143,35 @@ describe('the settings-nav glyph', () => {
 
   it('hides the shell\'s glyph and draws ours from a mask, at the shell\'s own 16px', () => {
     const css = navIconCss(houseMaskUrl())
-    // Hidden, not removed: the row's box model stays the shell's.
-    expect(css).toContain(`[${NAV_ICON_MARKER}] > svg { display: none; }`)
+    // Hidden, not removed: the row's box model stays the shell's. The rule must reach a
+    // **descendant** svg, because dsh 0.2.2 nests the glyph inside a `.navIcon` span; a child
+    // selector matched nothing there and the gear stayed visible beside the house.
+    expect(css).toContain(`[${NAV_ICON_MARKER}] svg { display: none; }`)
+    expect(css).not.toContain(`[${NAV_ICON_MARKER}] > svg`)
     expect(css).toContain('mask-image: url("data:image/svg+xml,')
     expect(css).toContain('-webkit-mask-image:')
     expect(css).toContain('background-color: currentColor')
     expect(css).toContain('16px 16px')
+  })
+
+  /**
+   * The rule has to work on both nav structures, because this module is also the safety net for
+   * a host that *has* the icon seat but whose `inject` throws — then nothing tells us the seat
+   * exists, and the stand-in runs against the 0.2.2 markup.
+   */
+  it('hides a glyph the shell nested inside its own wrapper', () => {
+    document.body.innerHTML = `<div role="dialog"><nav><button type="button" ${NAV_ICON_MARKER}><span class="navIcon"><svg data-gear="1"></svg></span><span>Home Hosted</span></button></nav></div>`
+    const style = document.createElement('style')
+    style.textContent = navIconCss(houseMaskUrl())
+    document.head.append(style)
+    try {
+      const gear = document.querySelector('svg[data-gear]') as SVGElement
+      expect(getComputedStyle(gear).display, 'a nested gear must still be hidden').toBe('none')
+    }
+    finally {
+      style.remove()
+      document.body.innerHTML = ''
+    }
   })
 
   it('draws the house as a stroked mask, not a filled blob', () => {
