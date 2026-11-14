@@ -31,11 +31,16 @@ function marked(): string[] {
 /** The module syncs from a MutationObserver callback, which happy-dom delivers as a task. */
 const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
 
-/** Install through the seam the client uses, so the test can dispose the same way. */
+/**
+ * Install through the seam the client uses, so the test can dispose the same way.
+ *
+ * `installSettingsNavIcon` now returns a stopper (the client needs one when a host turns out to
+ * paint nav glyphs itself after the stand-in went in), and `effect` runs its body the way cordis
+ * does. Both paths must end in the same cleanup, so the test disposes through the stopper.
+ */
 function install(resolveLabel: () => string): { dispose: () => void } {
-  let disposer: (() => void) | null = null
-  installSettingsNavIcon({ effect: (callback) => { disposer = callback() ?? null } }, resolveLabel)
-  return { dispose: () => { disposer?.(); disposer = null } }
+  const stop = installSettingsNavIcon({ effect: callback => { callback() } }, resolveLabel)
+  return { dispose: stop }
 }
 
 /** Retype a nav label, as the shell does on a locale switch. */

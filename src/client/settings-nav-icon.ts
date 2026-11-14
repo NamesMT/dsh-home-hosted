@@ -1,10 +1,20 @@
 /**
- * The settings-nav glyph for this section.
+ * The settings-nav glyph for hosts **without** a `settings.section.icon` slot.
  *
- * The shell resolves nav glyphs from a closed list of section ids and falls back to its own
- * gear for everything else, and `settings.section` projects only `id`/`order`/`label` — so
- * every third-party section wears the gear. This marks our own row and masks the house in
- * place of it. Delete this module the day the slot grows an `icon` field.
+ * Before dsh 0.2.2 the shell resolved nav glyphs from a closed list of section ids and fell back
+ * to its own gear for everything else, while `settings.section` projected only
+ * `id`/`order`/`label` — so every third-party section wore the gear. This marks our own row and
+ * masks the house in place of it.
+ *
+ * **0.2.2 has the seat**: a `settings.section.icon` list, scoped by the same id, rendered as
+ * `{ size, active }` over a gear fallback. Two things changed with it and both broke this
+ * stand-in, which is why callers now use it only when the slot is absent
+ * (`index.tsx`): the gear moved *inside* a `.navIcon` span, so `button > svg` no longer matches
+ * and nothing is hidden — leaving the host's gear **beside** our house, the duplicate a user
+ * reports. Registering the slot while this is still up produces the same pair from the other
+ * side, so arriving must also stop this module.
+ *
+ * Delete this module the day the oldest supported host declares the icon slot.
  */
 import { HOUSE_PATH } from './icons.js'
 
@@ -69,9 +79,14 @@ export interface NavIconContext {
  *
  * @param resolveLabel - the same thunk the section registration passes, re-read on every
  *   sync so a locale switch re-claims the row.
+ * @returns a stopper that removes the marker and the stylesheet. The effect's own disposal
+ *   does the same, so calling it is safe before or after that, and safe to repeat. The caller
+ *   needs it when a host turns out to paint nav glyphs itself *after* this went in: leaving the
+ *   stand-in up paints a second glyph beside the host's, which is the duplication this whole
+ *   module exists to avoid.
  */
-export function installSettingsNavIcon(ctx: NavIconContext, resolveLabel: () => string): void {
-  if (typeof document === 'undefined') return
+export function installSettingsNavIcon(ctx: NavIconContext, resolveLabel: () => string): () => void {
+  if (typeof document === 'undefined') return () => {}
 
   const body = (): () => void => {
     const tag = document.createElement('style')
@@ -109,6 +124,10 @@ export function installSettingsNavIcon(ctx: NavIconContext, resolveLabel: () => 
     }
   }
 
-  if (typeof ctx.effect === 'function') ctx.effect(body, 'dsh-home-hosted: settings nav icon')
-  else body()
+  let stop = (): void => {}
+  if (typeof ctx.effect === 'function')
+    ctx.effect(() => { stop = body() }, 'dsh-home-hosted: settings nav icon')
+  else
+    stop = body()
+  return () => stop()
 }

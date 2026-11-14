@@ -35,3 +35,18 @@ Read before touching the settings page's state, or a sentence the host sends the
   way. The artwork itself is upstream's `docs/branding/logo-mark.svg` — the 16px mark, not the 512
   grid one: at the 30–36px slot the page renders, the full mark's three rack units and nine vent
   slots fall below a pixel and smear.
+- **A host that grows the seat you were working around turns the workaround into a second icon.**
+  dsh before 0.2.2 picked settings-nav glyphs from a closed list of section ids and fell back to its
+  own gear, and `settings.section` projects only `id`/`order`/`label` — so this plugin claimed its own
+  nav row and masked the gear with a house (`settings-nav-icon.ts`). dsh 0.2.2 added a
+  `settings.section.icon` list, scoped by the same id, rendered over that gear as a *fallback* — and
+  moved the gear **inside** a `.navIcon` span, so the stand-in's `button > svg` selector stopped
+  hiding anything. The row then showed the host's gear **beside** our house: the duplicated icon a
+  user reports. Two rules follow. Look for the seat before keeping a workaround, because the host's
+  own contract says it plainly ("register an icon component with the same `id` as its
+  `settings.section` contribution … the component receives `size` in pixels and `active` … without a
+  matching icon registration the shell renders its default glyph"); and treat the **slot's presence
+  as the detection**, stopping the stand-in when it arrives, because the settings shell can mount
+  after the plugin's effect — registering into the seat while the stand-in is still up paints the
+  same duplicate from the other side. A workaround that fakes host UI must be able to *stop*, so the
+  installer returns a stopper (`src/client/index.tsx`, `test/client/index.test.ts`).

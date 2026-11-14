@@ -5,10 +5,11 @@
  * booting breaks the settings dialog for every plugin, so a missing service or
  * a throwing registration only logs and skips.
  */
-import type { ClientContext, LocaleService, SlotsService } from './context.js'
+import type { ClientContext, LocaleService, SlotIconProps, SlotsService } from './context.js'
+import { IconHouse } from './icons.js'
 import { createTranslator, en, LOCALE_NS, zh } from './locales.js'
 import { HomeHostedPage } from './page.js'
-import { installSettingsNavIcon } from './settings-nav-icon.js'
+import { installSettingsNavIcon, NAV_ICON_SIZE } from './settings-nav-icon.js'
 
 /**
  * Slots owns the registration and locale backs the copy. Cordis scopes
@@ -67,10 +68,6 @@ export function apply(ctx: ClientContext): void {
   try {
     const locale = readService<LocaleService>(ctx, 'locale')
     const t = createTranslator(locale)
-    // The nav row wears the shell's fallback gear unless we claim it; there is no icon
-    // option on the registration. Same label thunk as the registration below, so a locale
-    // switch re-claims the row.
-    installSettingsNavIcon(ctx, () => t('tab'))
     if (locale === undefined) {
       warn('the locale service is unavailable; the page keeps its bundled English copy')
     }
@@ -130,6 +127,63 @@ export function apply(ctx: ClientContext): void {
         return () => {}
       }
     }, 'dsh-home-hosted: settings section')
+
+    /**
+     * The nav glyph, one of two ways depending on the host.
+     *
+     * dsh 0.2.2 wraps every nav glyph and adds a `settings.section.icon` list, scoped by the
+     * same id, rendered as `{ size, active }` with the shell's gear as the *fallback*. So on
+     * those hosts the glyph belongs in the slot.
+     *
+     * Before 0.2.2 there was no slot and the gear was the row's own child, so this plugin
+     * claimed its row and masked the gear with `settings-nav-icon.ts`. That stand-in hides
+     * `button > svg` — and on 0.2.2 the gear moved *inside* a `.navIcon` span, so the selector
+     * stopped reaching it and the row showed **both** the host's gear and our house. Registering
+     * the slot while leaving the stand-in up has the same effect from the other side, which is
+     * the duplicate a user sees.
+     *
+     * The slot is the detection. It can also arrive *after* this effect runs, when the settings
+     * shell mounts later, so arriving stops the stand-in rather than both being present.
+     */
+    let stopStandIn: (() => void) | undefined
+    let hostPaintsIcon = false
+    runEffect(ctx, () => {
+      let dispose = (): void => {}
+      try {
+        dispose = slots.inject('settings.section.icon', () => {
+          hostPaintsIcon = true
+          // The host owns the glyph now; the stand-in would paint a second one beside it.
+          stopStandIn?.()
+          stopStandIn = undefined
+          try {
+            return slots.register({
+              name: 'settings.section.icon',
+              id: 'home-hosted',
+              order: 60,
+            }, (props: SlotIconProps = {}) => <IconHouse size={props.size ?? NAV_ICON_SIZE} />)
+          }
+          catch (caught) {
+            warn('registering the settings nav icon failed', caught)
+            return () => {}
+          }
+        })
+      }
+      catch (caught) {
+        warn('injecting into settings.section.icon failed', caught)
+      }
+      return () => {
+        try {
+          dispose()
+        }
+        catch (caught) {
+          warn('disposing the settings nav icon failed', caught)
+        }
+      }
+    }, 'dsh-home-hosted: settings nav icon')
+
+    // A host without the slot falls back to the stand-in. Same label thunk as the section
+    // registration, so a locale switch re-claims the row.
+    if (!hostPaintsIcon) stopStandIn = installSettingsNavIcon(ctx, () => t('tab'))
   }
   catch (caught) {
     warn('client bootstrap failed', caught)
