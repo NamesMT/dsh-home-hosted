@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       home-hosted:
-        specifier: ^0.13.0
-        version: 0.13.0(zod@4.6.5)
+        specifier: ^0.13.1
+        version: 0.13.1(zod@4.6.5)
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ~4.0.5
@@ -903,8 +903,8 @@ packages:
     resolution: {integrity: sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ==}
     engines: {node: '>=20.0.0'}
 
-  home-hosted@0.13.0:
-    resolution: {integrity: sha512-0iVtR7AIOLD3/m+Ffvk8//6b/+fSuMEYUhGetaC5oz0zeIlI5Zet6DjGiOSFjZ5PC3ZntxMYaSUp1Q6qLV/n7A==}
+  home-hosted@0.13.1:
+    resolution: {integrity: sha512-KSXKKdqa1RCqzgf2M3wJRIQdaUJEjInABUliBIRPeplaila18zerVI99M6L+5GdDoOQ7PVBx7sOCiqpnLxH3rQ==}
     engines: {node: '>=24.0.0'}
     hasBin: true
 
@@ -1734,7 +1734,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  home-hosted@0.13.0(zod@4.6.5):
+  home-hosted@0.13.1(zod@4.6.5):
     dependencies:
       '@namesmt/utils': 0.5.21
       '@zip.js/zip.js': 2.24.0
