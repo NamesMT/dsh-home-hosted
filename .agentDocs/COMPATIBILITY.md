@@ -10,7 +10,7 @@ reason.** The rules are in `AGENTS.md`; this is the reasoning and the exact pin.
 range. The page offers `EXPECTED_RANGE` to install and warns when a global copy is older; bumping one
 alone makes it recommend a range the plugin is not built against.
 
-The pin is `^0.13.0`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
+The pin is `^0.13.1`, and `MIN_SUPPORTED_VERSION` is `0.9.0`: 0.9.0 raised the config schema to 2
 **and** made an unstamped file read as schema 1, so a config this plugin created without a stamp is
 refused by 0.9 ("config schema 1 needs 1 migration") while a schema-2 stamp is refused by 0.8 as a
 newer release's file. No stamp satisfies both gates, so a 0.8.x panel is not a lesser-supported copy —
@@ -30,6 +30,12 @@ a WSL-temperature schema this plugin never reads). See
 `GET /api/workspaces`, `GET /api/settings` (its `control` block only) and the entry writes — and none
 of them carried those fields. The config schema did not move, so for this plugin it is a
 patch-shaped bump; for anyone who built a client against the frame it is a read-the-notes upgrade.
+
+**0.13.1 is a patch with no reach into this plugin.** It only passes `windowsHide: true` to the four
+Windows helper spawns that lacked it, so the panel stops flashing a console window on every resource
+sample (the supervisor ticks each second and samples every five). No schema movement, no API change,
+no new file layout — for this plugin it is the same shape as 0.13.0, which is why the pin moved
+without a floor change.
 
 **0.12.0 and 0.13.0 are both minors, and the one that reaches this plugin is 0.13.0's build layout.**
 0.12.0's breaking changes are all about *inbound* API use, which this plugin does not do: a
