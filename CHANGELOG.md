@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v0.9.11
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.10...v0.9.11)
+
+### 🚀 Enhancements
+
+- **panel:** Show the first-run password, which Desktop used to swallow ([4b59f92](https://github.com/NamesMT/dsh-home-hosted/commit/4b59f92))
+
+### 🩹 Fixes
+
+- **client:** Drop the Windows kill-policy note on Desktop ([448fc61](https://github.com/NamesMT/dsh-home-hosted/commit/448fc61))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.10
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.9...v0.9.10)
