@@ -715,3 +715,24 @@ describe('generated launcher signal handling', () => {
     }
   })
 })
+
+/**
+ * The generated launcher must never show a console window.
+ *
+ * `stdio: 'ignore'` is not a hidden window on Windows — `windowsHide` is the only flag that
+ * suppresses the console a console-subsystem child is otherwise given. Without it, starting the
+ * panel from the page made a window flash: the launcher spawns the panel, and a person who asked
+ * for a background panel should not watch one appear. Every `spawn` in the generated source must
+ * carry it, or the next spawn added quietly reintroduces the flash.
+ */
+describe('the generated launcher hides its console windows', () => {
+  it('passes windowsHide to every spawn it writes', () => {
+    const source = buildLauncherSource({ stateDir: '/tmp/s', dshHome: '/tmp/h', resolvedEntry: '/tmp/e.mjs', minVersion: '0.4.1' } as never)
+    // One option bag per spawn: count both and require they agree, so a spawn added without the
+    // flag fails here rather than on somebody's screen.
+    const spawns = (source.match(/spawn\(/g) ?? []).length
+    const hidden = (source.match(/windowsHide: true/g) ?? []).length
+    expect(spawns).toBeGreaterThanOrEqual(2)
+    expect(hidden).toBe(spawns)
+  })
+})

@@ -486,8 +486,20 @@ async function helperProgram(source: NodeInterpreterSource): Promise<string | nu
 /** Spawn a helper process; injected so a test can drive the failure paths. */
 export type SpawnDetached = (program: string, args: string[]) => ChildProcess
 
-function spawnDetached(program: string, args: string[]): ChildProcess {
-  return spawn(program, args, { detached: true, stdio: 'ignore' })
+/**
+ * The real spawn, exported so a test can pin its options.
+ *
+ * The **options** are the part that matters and the part an injected fake never exercises: a
+ * helper that takes over the panel is started detached in the background, and on Windows a
+ * console-subsystem child without `windowsHide` is given a console window — visible to the person
+ * who asked for a background panel.
+ */
+export function spawnDetached(program: string, args: string[]): ChildProcess {
+  // `stdio: 'ignore'` is **not** a hidden window on Windows: `windowsHide` is the only flag that
+  // suppresses the console a console-subsystem child would otherwise be given. Measured from the
+  // other side in this repo already — a console-subsystem start shows a window even with no
+  // stdio attached — which is the same reason the boot entry launches through `wscript.exe`.
+  return spawn(program, args, { detached: true, stdio: 'ignore', windowsHide: true })
 }
 
 /**

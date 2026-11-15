@@ -117,8 +117,9 @@ function launchChild(program, prefix, words) {
       return
     }
     // Never a shell: the argv is complete, and a shell re-parses it, which splits a path that
-    // contains a space (measured).
-    const child = spawn(argv[0], argv.slice(1), { stdio: 'inherit' })
+    // contains a space (measured). windowsHide: this launcher starts the panel in the
+    // background, so a console window here is one a person did not ask for.
+    const child = spawn(argv[0], argv.slice(1), { stdio: 'inherit', windowsHide: true })
     current = child
     child.on('exit', (code, signal) => resolve({ code, signal }))
     child.on('error', (error) => {
@@ -196,7 +197,8 @@ function runQuiet(program, prefix, words) {
       resolve({ code: 1, output: 'refusing to run ' + program + ': command shim cannot be passed to cmd.exe safely' })
       return
     }
-    const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] })
+    // Same reason as above: a probe is not something a person should watch.
+    const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     let output = ''
     const collect = (chunk) => { output = (output + chunk).slice(-65536) }
     child.stdout?.on('data', collect)
