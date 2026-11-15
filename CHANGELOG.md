@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.9.12
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.11...v0.9.12)
+
+### 🩹 Fixes
+
+- **panel:** Recover the legacy password, and give a lockout a button ([3767a80](https://github.com/NamesMT/dsh-home-hosted/commit/3767a80))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.11
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.10...v0.9.11)
