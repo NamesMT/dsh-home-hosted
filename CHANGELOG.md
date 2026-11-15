@@ -1,6 +1,10 @@
 # Changelog
 
 
+## v0.9.14
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.13...v0.9.14)
+
 ## v0.9.13
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.12...v0.9.13)
