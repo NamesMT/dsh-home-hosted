@@ -108,6 +108,42 @@ exact stock body, guards every assignment, and replaces the response's `end` for
 authentication plugin's own page (or an exotic response) is passed through untouched rather than fought
 over. `authNotice` turns it off; `{url}` is read per 401.
 
+## The first-run password is shown on the page
+
+home-hosted does not ship a guessable default. A fresh home generates a **random** first-run
+password, prints it once when the panel starts, and keeps its text in `.hh/.control-secrets.json`
+(0600) so `home-hosted status` can report it until one is set. Its API will not tell you: in
+`GET /api/auth/session`, `usingDefaultPassword` is `true` while `defaultPassword` is **`null` on
+purpose** — the text is meant to stay on the machine that started the panel.
+
+That promise breaks on Desktop. This plugin starts the panel as a managed entry, so the one printed
+line goes into `.hh/.logs/home-hosted.log`, which no window shows — and the person meets a login
+screen with no way to pass it. So `PanelStatus.firstRunPassword` reads the same file the panel's own
+`status` command reads, and the panel section shows the password with a copy button. It needs no
+session, no token and no answering panel, which is the point: a locked-out person is exactly when
+none of those are available.
+
+Two states, because the advice differs and only one is a password:
+
+- **`recorded`** — the text is on disk; the page shows it and says to change it under Global
+  settings → Authentication.
+- **`unrecorded`** — the generated password is still in use but its text is **gone**. A restore of
+  `global:secrets` carries the hash and the flag, not always the text, so nothing can read it back
+  and the only way in is `home-hosted account reset` on the machine running the panel. The page says
+  that rather than showing an empty box, which would read as "your password is blank".
+
+**An agent never receives the text.** The page and the model are different audiences with different
+blast radii: the person's own machine and own panel, versus something that may summarise a payload
+into a transcript, a log or another tool call. `home_hosted_status` answers the whole status object,
+so its result is passed through `redactForAgent`, which drops `firstRunPassword.password` and keeps
+`state` — an agent advising a locked-out user still has to tell "the page shows it" apart from "only
+`account reset` helps". This is the same posture as the panel's API token, which every status surface
+reports as a word (`enrolled`/`present`/`stale`) and never as the value.
+
+Absent once the person sets their own password (`isDefault` goes false), so the usual case renders
+nothing. `test/first-run-password.test.ts` pins all four states against the real secrets-file shape,
+and `test/client/panel-first-run-password.test.ts` pins what the page does with the two that matter.
+
 ## Starting and stopping the panel
 
 `panel.start` and `panel.stop` ask the *installed* autostart entry first. They fall back to the CLI's

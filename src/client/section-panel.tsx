@@ -219,6 +219,33 @@ export function PanelSection({ t, status, run, updateSettings, busy, uiStyle }: 
           )}
       {tokenNote === null ? null : <Hint>{tokenNote}</Hint>}
 
+      {/*
+        The panel's first-run password, which it prints once on the machine that started it and
+        never sends over its API (`defaultPassword` is `null` on purpose). On Desktop this plugin
+        *is* that machine, and the printed line goes to a console nobody is shown — so the person
+        meets a login screen they cannot pass. Read from the secrets file, so it works while the
+        panel is refusing every request.
+      */}
+      {panel.firstRunPassword === undefined
+        ? null
+        : (
+            <Note tone="warn" title={t('panelFirstRunPasswordTitle')}>
+              {panel.firstRunPassword.state === 'recorded'
+                ? (
+                    <>
+                      <p>{t('panelFirstRunPasswordBody')}</p>
+                      <CommandBox
+                        text={panel.firstRunPassword.password}
+                        copyLabel={t('copy')}
+                        copiedLabel={t('copied')}
+                      />
+                    </>
+                  )
+                : <p>{t('panelFirstRunPasswordLost')}</p>}
+              <p>{t('panelFirstRunPasswordChange')}</p>
+            </Note>
+          )}
+
       {cli === undefined ? null : (
         <>
           <div className="hh-choice" role="radiogroup" aria-label={t('panelCopy')}>

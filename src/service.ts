@@ -36,6 +36,7 @@ import { launchArgv, NO_INTERPRETER_DETAIL, nodeInterpreter } from './home-hoste
 import type { NodeInterpreterSource } from './home-hosted/node-interpreter.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
+import { firstRunPassword } from './home-hosted/first-run-password.js'
 import { readPanelConsole } from './home-hosted/panel-console.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
@@ -639,6 +640,19 @@ export class HomeHostedService extends Service {
     // A token the panel refuses is not a write path, however present it is on disk.
     const writeVia: PanelStatus['writeVia'] = token === 'enrolled' ? 'api' : 'file'
 
+    /**
+     * The first-run password, when the panel is still using it.
+     *
+     * The panel never sends it over the API — `GET /api/auth/session` answers
+     * `usingDefaultPassword: true` with `defaultPassword: null` on purpose — because it prints the
+     * text once on the machine that started it. This plugin *is* that machine when it starts the
+     * panel as a managed entry, and nobody sees that console, so the text is read from the
+     * secrets file and shown here. Both states are reported: `unrecorded` means the text is gone
+     * (a restored `global:secrets` keeps the hash, not always the text) and `account reset` is the
+     * only way back, which the page must say rather than offering an empty field.
+     */
+    const password = firstRunPassword(this.options.home)
+
     return {
       home: this.options.home,
       reachable: answered,
@@ -649,6 +663,9 @@ export class HomeHostedService extends Service {
       writeVia,
       token,
       tokenVerified,
+      ...(password.state === 'recorded' || password.state === 'unrecorded'
+        ? { firstRunPassword: password.state === 'recorded' ? { state: 'recorded' as const, password: password.password } : { state: 'unrecorded' as const } }
+        : {}),
       detail: answered
         ? (token === 'enrolled'
             ? (this.tokenDetail || 'the panel is answering and this plugin holds a token')

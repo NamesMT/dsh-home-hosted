@@ -348,8 +348,33 @@ export interface PanelStatus {
   token: TokenState
   /** True when the panel was asked and accepted the token, so `token` is measured, not assumed. */
   tokenVerified?: boolean
+  /**
+   * The panel's **first-run password**, when it is still the generated one.
+   *
+   * home-hosted generates a random password on a fresh home and prints it once on the machine
+   * that started it; its API answers `usingDefaultPassword: true` with `defaultPassword: null` on
+   * purpose. This plugin starts the panel as a managed entry, so that printed line goes to a
+   * console nobody is shown — and the person meets a login screen they cannot pass.
+   *
+   * Read from this machine's `.hh/.control-secrets.json`, so it needs no session and works while
+   * the panel is refusing every request. Absent when there is nothing to report, which is the
+   * usual case.
+   */
+  firstRunPassword?: FirstRunPasswordView
   detail: string
 }
+
+/**
+ * What `get /api/auth/session` cannot tell a client, read from disk instead.
+ *
+ * `recorded` carries the text; `unrecorded` means the generated password is still in use but its
+ * text is gone (a `global:secrets` restore carries the hash, not always the text), so nobody can
+ * read it back and the panel's own remedy is `account reset`. The page must not offer an empty
+ * field for that case.
+ */
+export type FirstRunPasswordView =
+  | { state: 'recorded', password: string }
+  | { state: 'unrecorded' }
 
 /**
  * The panel's own console, as `panel.console` answers it.

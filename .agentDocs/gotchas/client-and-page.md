@@ -50,3 +50,24 @@ Read before touching the settings page's state, or a sentence the host sends the
   after the plugin's effect — registering into the seat while the stand-in is still up paints the
   same duplicate from the other side. A workaround that fakes host UI must be able to *stop*, so the
   installer returns a stopper (`src/client/index.tsx`, `test/client/index.test.ts`).
+- **A host that prints a secret once is a host whose secret you must go and read.** home-hosted
+  generates a random first-run password and prints it **once**, on the machine that started the
+  panel, deliberately never over its API (`GET /api/auth/session` answers
+  `usingDefaultPassword: true` with `defaultPassword: null`). That promise silently inverts when
+  *this plugin* is the thing that starts the panel as a managed entry: the line lands in
+  `.hh/.logs/home-hosted.log`, which no window shows, and the person is locked out by a password
+  nobody was told. So read the machine-local file the panel's own `status` command reads
+  (`.hh/.control-secrets.json`, `password.initial` while `isDefault` is true) and show it —
+  `src/home-hosted/first-run-password.ts`. Two things to keep straight: a restored `global:secrets`
+  keeps the hash but **not always the text**, so `unrecorded` needs `account reset` and an empty box
+  there would read as "your password is blank"; and `isDefault: false` means the stored text is
+  history, not the current password.
+- **A secret shown on the page is a secret you just widened the audience for.** The first-run
+  password is read from disk for the panel section (`PanelStatus.firstRunPassword`), and
+  `home_hosted_status` answers that same status object — so the text would have reached every agent
+  that called it. The fix is a redaction on the agent path only (`redactForAgent` in `src/tools.ts`):
+  keep `state`, drop `password`. Two lessons worth keeping. The page and the model are different
+  audiences, and "the page needs it" never implies "the tool should return it" — the panel's own API
+  token has always been reported as a word for this reason. And **a redaction helper no call site
+  invokes is worthless**: pinning the helper left the suite green with both agent call sites
+  un-wrapped, which only an end-to-end `status` tool call caught.

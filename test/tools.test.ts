@@ -6,7 +6,7 @@ import { AGENT_TOOL_NAMES, BOOT_MECHANISM_NAMES } from '../src/shared/contracts.
 import { PanelError } from '../src/home-hosted/panel.js'
 import type { HomeHostedService } from '../src/service.js'
 import { SettingsStore } from '../src/settings.js'
-import { registerAgentTools, toolNameFor } from '../src/tools.js'
+import { redactForAgent, registerAgentTools, toolNameFor } from '../src/tools.js'
 import { panelEntryFields, panelNullablePatchFields } from './helpers/panel-schema.js'
 import { tempDir } from './helpers/temp.js'
 
@@ -942,5 +942,72 @@ describe('session sandbox', () => {
     const answer = await h.execute(0, { action: 'start', id: 'other' }, { agent: 'a' })
     expect(h.approvals).toHaveLength(1)
     expect(answer).toContain('servers.start')
+  })
+})
+
+/**
+ * The panel's first-run password is for the person, not for the model.
+ *
+ * `status` answers the whole `HomeHostedStatus`, and the panel section shows that password on
+ * purpose — a locked-out person needs it, on their own machine, for their own panel. An agent is
+ * a different audience with a different blast radius: it may summarise the payload into a
+ * transcript, a log or another tool call, so the secret must not travel. The *state* does, because
+ * an agent advising a locked-out user has to tell "the page shows it" apart from "only
+ * `account reset` helps".
+ *
+ * This mirrors how the panel's own API token is reported everywhere else — as a word
+ * (`enrolled`/`present`/`stale`), never as the value.
+ */
+describe('what an agent may see of the panel password', () => {
+  it('withholds the text but keeps the state', () => {
+    const seen = redactForAgent({ panel: { firstRunPassword: { state: 'recorded', password: 'ab12-cd34-ef56' }, home: '/h' } }) as {
+      panel: { firstRunPassword: Record<string, unknown>, home: string }
+    }
+    expect(JSON.stringify(seen)).not.toContain('ab12-cd34-ef56')
+    expect(seen.panel.firstRunPassword).toEqual({ state: 'recorded' })
+    // Everything else in the payload survives, or status would lose its meaning.
+    expect(seen.panel.home).toBe('/h')
+  })
+
+  it('leaves the unrecorded state, which carries no secret', () => {
+    const seen = redactForAgent({ panel: { firstRunPassword: { state: 'unrecorded' } } }) as {
+      panel: { firstRunPassword: Record<string, unknown> }
+    }
+    expect(seen.panel.firstRunPassword).toEqual({ state: 'unrecorded' })
+  })
+
+  it('passes a payload without the field straight through', () => {
+    const payload = { panel: { home: '/h' }, entries: [] }
+    expect(redactForAgent(payload)).toEqual(payload)
+    // Non-object results are not rewritten, and nothing throws on one.
+    expect(redactForAgent('a string')).toBe('a string')
+    expect(redactForAgent(null)).toBeNull()
+  })
+})
+
+/**
+ * The test above pins the helper; this one pins that the tool **calls** it.
+ *
+ * Removing the call from both success paths left every test green, because nothing drove a real
+ * `status` end to end. That is the difference between a guard and a decoration: a redaction the
+ * agent path does not invoke is exactly as safe as no redaction at all.
+ */
+describe('the status tool a model actually receives', () => {
+  it('never carries the panel password to the model', async () => {
+    const h = harness({
+      allow: ['status'],
+      call: async () => ({
+        panel: { home: '/h', firstRunPassword: { state: 'recorded', password: 'zz99-top-secret' } },
+        entries: [],
+      }),
+    })
+    // `execute(index, input)`: the harness registers every allowed tool in order.
+    const index = h.registeredNames().indexOf(toolNameFor('status'))
+    expect(index).toBeGreaterThanOrEqual(0)
+    const text = await h.execute(index, {})
+    expect(text).not.toContain('zz99-top-secret')
+    // The state still travels, so an agent can advise a locked-out user intelligently.
+    expect(text).toContain('recorded')
+    expect(text).toContain('/h')
   })
 })

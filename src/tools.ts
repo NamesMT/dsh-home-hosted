@@ -742,6 +742,33 @@ function failureText(error: unknown): string {
   return `failed: ${messageOf(error)}`
 }
 
+/**
+ * Strip the panel's first-run password out of anything an **agent** is given.
+ *
+ * The page shows it on purpose: a locked-out person needs it, and it is their own machine and
+ * their own panel. A model is a different audience with a different blast radius — it may
+ * summarise the payload into a transcript, a log or another tool call — so the secret does not
+ * travel. The *state* does, because an agent advising a locked-out user needs to know the
+ * difference between "the password is on disk, the page shows it" and "the text is gone, only
+ * `account reset` helps".
+ *
+ * This mirrors how the panel's own API token is reported everywhere else: as a word
+ * (`enrolled`/`present`/`stale`), never as the value. A payload is only rewritten when it really
+ * carries the field, so every other result is passed through untouched rather than copied.
+ */
+export function redactForAgent(result: unknown): unknown {
+  if (result === null || typeof result !== 'object')
+    return result
+  const panel = (result as { panel?: unknown }).panel
+  if (panel === null || typeof panel !== 'object')
+    return result
+  const view = (panel as { firstRunPassword?: { state?: unknown, password?: unknown } }).firstRunPassword
+  if (view === undefined || view === null)
+    return result
+  const { password: _withheld, ...rest } = view
+  return { ...(result as object), panel: { ...panel, firstRunPassword: rest } }
+}
+
 function registerOne(ctx: Context, service: HomeHostedService, settings: SettingsStore, name: AgentToolName): () => void {
   const spec = TOOL_SPECS[name]
   const toolName = toolNameFor(name)
@@ -805,7 +832,7 @@ function registerOne(ctx: Context, service: HomeHostedService, settings: Setting
           + `${target.via === null ? '' : `, ${MECHANISM_WORDING[target.via].phrase}`}.`
 
       try {
-        return `${JSON.stringify(await service.call(request.endpoint, payload), null, 2)}${landing}`
+        return `${JSON.stringify(redactForAgent(await service.call(request.endpoint, payload)), null, 2)}${landing}`
       }
       catch (error) {
         // A foreign call carries its own credential; repairing this plugin's
@@ -823,7 +850,7 @@ function registerOne(ctx: Context, service: HomeHostedService, settings: Setting
           return `${failureText(error)} (token reclaim failed: ${messageOf(reclaimError)})`
         }
         try {
-          return `${JSON.stringify(await service.call(request.endpoint, payload), null, 2)}${landing}`
+          return `${JSON.stringify(redactForAgent(await service.call(request.endpoint, payload)), null, 2)}${landing}`
         }
         catch (retryError) {
           return failureText(retryError)
