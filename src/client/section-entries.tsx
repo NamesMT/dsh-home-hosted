@@ -44,7 +44,14 @@ export function EntriesSection({ t, status, run, busy }: SectionProps) {
         ? <Note tone="warn">{t('entriesManageDesktop', { id })}</Note>
         : <Hint>{t('entriesManageNote', { id })}</Hint>}
 
-      {windows ? <Note tone="warn">{t('entriesManageWinWarning', { id })}</Note> : null}
+      {/*
+        Only where the entry is actually handed over. The sentence describes what
+        happens to an entry *managed* through the `kill` policy, and on Desktop the
+        harness entry is never managed at all (the switch above is forced off), so
+        there it warns about a state the person cannot reach — noise next to the
+        web-only note that already explains why.
+      */}
+      {windows && !desktop ? <Note tone="warn">{t('entriesManageWinWarning', { id })}</Note> : null}
 
       {entries.length === 0
         ? <Hint>{t('entriesEmpty', { id })}</Hint>
