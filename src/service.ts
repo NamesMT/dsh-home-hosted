@@ -37,6 +37,7 @@ import type { NodeInterpreterSource } from './home-hosted/node-interpreter.js'
 import { PanelClient, PanelError, probeToken, verifyToken } from './home-hosted/panel.js'
 import { readRuntime, probePanel, pidAlive } from './home-hosted/runtime.js'
 import { firstRunPassword } from './home-hosted/first-run-password.js'
+import { resetPanelPassword } from './home-hosted/panel-password.js'
 import { readPanelConsole } from './home-hosted/panel-console.js'
 import { apiTokenEnrolled, ensureToken, readStoredToken, reclaimToken, tokenSlot } from './home-hosted/token.js'
 import type { SettingsStore } from './settings.js'
@@ -648,8 +649,9 @@ export class HomeHostedService extends Service {
      * text once on the machine that started it. This plugin *is* that machine when it starts the
      * panel as a managed entry, and nobody sees that console, so the text is read from the
      * secrets file and shown here. Both states are reported: `unrecorded` means the text is gone
-     * (a restored `global:secrets` keeps the hash, not always the text) and `account reset` is the
-     * only way back, which the page must say rather than offering an empty field.
+     * (a restored `global:secrets` keeps the hash, not always the text), and for it the page offers
+     * the `panel.resetPassword` button — never an empty field, and never a command to copy, since a
+     * Desktop user has no terminal in front of them and this plugin owns the panel's process.
      */
     const password = firstRunPassword(this.options.home)
 
@@ -2282,6 +2284,18 @@ export class HomeHostedService extends Service {
 
       case 'panel.reclaimToken':
         return await this.reclaimPanelToken()
+
+      // The locked-out recovery path: the panel's own `set-password`, so a person who cannot
+      // sign in does not also need a terminal. Returns the new password once.
+      case 'panel.resetPassword': {
+        const reset = await resetPanelPassword({
+          home: this.options.home,
+          exec: async (args, env) => await this.cliExec(args, env),
+        })
+        if (!reset.ok)
+          throw new HomeHostedError(reset.detail, 'PASSWORD_NOT_RESET')
+        return { ok: true, password: reset.password, detail: reset.detail }
+      }
 
       /**
        * The panel's console, read from disk: no session, no API token, and no

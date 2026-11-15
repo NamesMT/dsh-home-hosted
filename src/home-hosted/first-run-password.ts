@@ -13,15 +13,23 @@
  * machine that started the panel, never over the API"). So this reads the machine-local file,
  * the same way the panel's own `status` command does, rather than widening the API.
  *
- * Three states, because two of them need different advice:
+ * **It mirrors the panel's `initialPassword` getter exactly, including its legacy branch.**
+ * That matters and was got wrong once: a home from before 0.12 still holds a hash of the
+ * shared `hh` password with **no `initial` text**, so a reader that only looks for the text
+ * reports "unrecorded, nobody can read it back" for a password that is `hh` and perfectly
+ * recoverable. Measured on a real pre-0.12 root: the panel's `status` prints `password hh`
+ * while a text-only reader says nothing can be recovered. The branch is therefore a
+ * verification against that one constant, never a guess.
  *
- * - `recorded` — the text is on disk; show it.
- * - `unrecorded` — the password is still the generated one but its **text is gone**, which a
- *   restore of `global:secrets` does (it carries the hash and the flag, not always the text).
- *   Nobody can read it back; the panel's remedy is `account reset`, and showing a blank field
- *   would be a lie.
+ * Three states, because they need different advice:
+ *
+ * - `recorded` — the text is on disk (a generated password, or the legacy `hh`); show it.
+ * - `unrecorded` — a generated password is in use but its text is gone and it is not the
+ *   legacy default. A restore of `global:secrets` does this: it carries the hash and the
+ *   flag, not always the text. Nothing can read it back, so the only way in is a reset.
  * - `own` — a password the person set. Nothing to report.
  */
+import { scryptSync, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import { secretsFile } from './layout.js'
 
@@ -33,10 +41,50 @@ export type FirstRunPassword =
   /** The file is missing or unreadable — a panel that never started, or a foreign root. */
   | { state: 'unknown' }
 
-/** The field the panel keeps the plaintext in, while it is still the generated password. */
+/**
+ * The pre-0.12 boot password every install shared, as `src/config/secrets.ts` declares it.
+ *
+ * A copy, because the plugin runs against several panel releases and this constant belongs to
+ * the panel's internals. It is only ever used to *verify* a stored hash, never to create one,
+ * so a release that drops it makes this branch miss (returning `unrecorded`) rather than
+ * authenticating with a value the panel no longer accepts.
+ */
+const LEGACY_DEFAULT_PASSWORD = 'hh'
+
+/** The fields this needs from the panel's `PasswordRecord`. */
 interface SecretRecord {
+  algo?: unknown
+  salt?: unknown
+  hash?: unknown
+  keylen?: unknown
+  cost?: unknown
   isDefault?: unknown
   initial?: unknown
+}
+
+/**
+ * Does `password` hash to this record? The panel's `verifyPassword`, and nothing more.
+ *
+ * `cost` is an object (`{ N, r, p }`), not a number: passing it through unchanged is what makes
+ * a real record verify. Normalising first because the panel does — a non-ASCII password hashes
+ * by its NFKC form.
+ */
+function verifies(password: string, record: SecretRecord): boolean {
+  if (record.algo !== 'scrypt')
+    return false
+  if (typeof record.salt !== 'string' || typeof record.hash !== 'string' || typeof record.keylen !== 'number')
+    return false
+  if (record.cost === null || typeof record.cost !== 'object')
+    return false
+  try {
+    const expected = Buffer.from(record.hash, 'base64')
+    const actual = scryptSync(password.normalize('NFKC'), Buffer.from(record.salt, 'base64'), record.keylen, { ...(record.cost as object) })
+    // A length mismatch would make `timingSafeEqual` throw, which is why it is checked first.
+    return actual.length === expected.length && timingSafeEqual(actual, expected)
+  }
+  catch {
+    return false
+  }
 }
 
 /**
@@ -53,8 +101,6 @@ export function firstRunPassword(home: string): FirstRunPassword {
   catch {
     return { state: 'unknown' }
   }
-  // `password` is the panel-wide record; a home with no password at all has no such key, which
-  // is a panel that has never started rather than one waiting on a first-run secret.
   if (raw === null || typeof raw !== 'object')
     return { state: 'unknown' }
   const record = (raw as { password?: unknown }).password
@@ -66,8 +112,10 @@ export function firstRunPassword(home: string): FirstRunPassword {
   if (password.isDefault !== true)
     return { state: 'own' }
   const initial = password.initial
-  // An empty or absent text is the restored-from-backup case, not a blank password.
-  if (typeof initial !== 'string' || initial.length === 0)
-    return { state: 'unrecorded' }
-  return { state: 'recorded', password: initial }
+  // The panel's own order: the stored text first, then the legacy constant, verified.
+  if (typeof initial === 'string' && initial.length > 0)
+    return { state: 'recorded', password: initial }
+  if (verifies(LEGACY_DEFAULT_PASSWORD, password))
+    return { state: 'recorded', password: LEGACY_DEFAULT_PASSWORD }
+  return { state: 'unrecorded' }
 }

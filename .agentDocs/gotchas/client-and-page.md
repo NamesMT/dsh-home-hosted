@@ -59,9 +59,15 @@ Read before touching the settings page's state, or a sentence the host sends the
   nobody was told. So read the machine-local file the panel's own `status` command reads
   (`.hh/.control-secrets.json`, `password.initial` while `isDefault` is true) and show it —
   `src/home-hosted/first-run-password.ts`. Two things to keep straight: a restored `global:secrets`
-  keeps the hash but **not always the text**, so `unrecorded` needs `account reset` and an empty box
-  there would read as "your password is blank"; and `isDefault: false` means the stored text is
-  history, not the current password.
+  keeps the hash but **not always the text**, and an empty box there would read as "your password is
+  blank"; and `isDefault: false` means the stored text is history, not the current password. Two
+  corrections this cost, both worth not repeating: the reader must mirror the panel's `initialPassword`
+  getter **including its legacy branch** (a pre-0.12 home stores only a hash of the shared `hh`, so a
+  text-only reader calls a perfectly recoverable password unrecoverable), and the advice for the truly
+  lost case must be something the person can *do* — telling a Desktop user to run a CLI command was
+  wrong twice over, since this plugin starts the panel (no terminal in front of them) and the command
+  named (`account reset`) does not exist in the pinned release (`set-password` is the one). The page
+  offers a button that runs it; `src/home-hosted/panel-password.ts`.
 - **A secret shown on the page is a secret you just widened the audience for.** The first-run
   password is read from disk for the panel section (`PanelStatus.firstRunPassword`), and
   `home_hosted_status` answers that same status object — so the text would have reached every agent

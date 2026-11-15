@@ -49,6 +49,7 @@ export const RPC_ENDPOINT_NAMES = [
   'panel.stop',
   'panel.takeover',
   'panel.reclaimToken',
+  'panel.resetPassword',
   'panel.console',
   'cli.installGlobal',
   'ui.manage',
@@ -182,6 +183,15 @@ export interface EndpointPayloads {
    * Clearing first is what makes it work when home-hosted already holds a hash.
    */
   'panel.reclaimToken': Record<string, never>
+  /**
+   * Set a new panel password and return it **once**.
+   *
+   * The recovery path for a locked-out person: a generated first-run secret whose text is gone,
+   * or a forgotten password. Runs the panel's own `set-password` with the value in the
+   * environment, so nothing appears in a process list, and the panel picks it up without a
+   * restart. The password is generated here rather than typed, so it cannot be a weak choice.
+   */
+  'panel.resetPassword': Record<string, never>
   /**
    * The panel's own console output, read from its log file. Needs no session and
    * no API token, which is the point: a panel that is up but misbehaving is
@@ -369,8 +379,8 @@ export interface PanelStatus {
  *
  * `recorded` carries the text; `unrecorded` means the generated password is still in use but its
  * text is gone (a `global:secrets` restore carries the hash, not always the text), so nobody can
- * read it back and the panel's own remedy is `account reset`. The page must not offer an empty
- * field for that case.
+ * read it back and the page must not offer an empty field for it. That case gets a button that
+ * runs the panel's own `set-password` (`panel.resetPassword`) instead of a command to copy.
  */
 export type FirstRunPasswordView =
   | { state: 'recorded', password: string }

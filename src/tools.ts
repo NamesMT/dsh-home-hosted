@@ -749,8 +749,8 @@ function failureText(error: unknown): string {
  * their own panel. A model is a different audience with a different blast radius — it may
  * summarise the payload into a transcript, a log or another tool call — so the secret does not
  * travel. The *state* does, because an agent advising a locked-out user needs to know the
- * difference between "the password is on disk, the page shows it" and "the text is gone, only
- * `account reset` helps".
+ * difference between "the password is on disk, the page shows it" and "the text is gone, the page
+ * offers a reset".
  *
  * This mirrors how the panel's own API token is reported everywhere else: as a word
  * (`enrolled`/`present`/`stale`), never as the value. A payload is only rewritten when it really

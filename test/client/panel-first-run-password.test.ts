@@ -69,11 +69,22 @@ describe('the first-run password on the page', () => {
     expect(html).toContain(asMarkup(en.panelFirstRunPasswordChange))
   })
 
-  it('says the text is unrecoverable and names the remedy, instead of a blank box', () => {
+  /**
+   * The remedy must be something the person can **do**.
+   *
+   * The first version told a Desktop user to run `home-hosted account reset` — wrong twice over:
+   * this plugin starts the panel, so there is no terminal in front of them, and that command does
+   * not exist in the pinned release at all (`set-password` is the one). A sentence naming a
+   * command nobody can run is not a remedy, so this asserts the button and the absence of any
+   * terminal instruction.
+   */
+  it('offers a button instead of a command the person cannot run', () => {
     const html = markup(status({ state: 'unrecorded' }))
     expect(html).toContain(asMarkup(en.panelFirstRunPasswordLost))
-    // The remedy is a command, not a field the person could fill in.
-    expect(html).toContain('account reset')
+    expect(html).toContain(asMarkup(en.panelPasswordReset))
+    // No CLI instruction: the page does the work.
+    expect(html).not.toMatch(/home-hosted \w+/)
+    expect(html).not.toContain('account reset')
     expect(html).not.toContain(asMarkup(en.panelFirstRunPasswordBody))
   })
 

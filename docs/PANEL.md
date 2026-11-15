@@ -126,18 +126,30 @@ none of those are available.
 Two states, because the advice differs and only one is a password:
 
 - **`recorded`** — the text is on disk; the page shows it and says to change it under Global
-  settings → Authentication.
-- **`unrecorded`** — the generated password is still in use but its text is **gone**. A restore of
-  `global:secrets` carries the hash and the flag, not always the text, so nothing can read it back
-  and the only way in is `home-hosted account reset` on the machine running the panel. The page says
-  that rather than showing an empty box, which would read as "your password is blank".
+  settings → Authentication. This covers a generated password **and the legacy `hh`**: a pre-0.12
+  home holds only a hash of that shared constant with no text, so the reader verifies against it
+  exactly as the panel's own `initialPassword` does. Reading for text alone reported "nobody can
+  read it back" for a password that is `hh`.
+- **`unrecorded`** — the generated password is still in use but its text is **gone**, and it is not
+  the legacy value. A restore of `global:secrets` carries the hash and the flag, not always the
+  text. Nothing can read it back, so the page offers a **button** — see below — rather than stating
+  a fact and leaving the person stuck.
+
+**A lockout gets a button, not a command.** The first version told the reader to run
+`home-hosted account reset`. That was wrong twice: this plugin starts the panel, so a Desktop user
+has no terminal in front of them, and that command does not exist in the pinned release at all — the
+one is `set-password`. So `panel.resetPassword` runs it for them: it generates the value with the
+panel's own alphabet, passes it through `HHOSTED_PASSWORD` (never argv, which is visible in a process
+list), and returns it once for the page to show with a copy button. The panel's own output says a
+running panel picks a new password up immediately and signs every browser session out, so no restart
+is involved, and nothing on either side stores the value — a reload is what "shown once" means.
 
 **An agent never receives the text.** The page and the model are different audiences with different
 blast radii: the person's own machine and own panel, versus something that may summarise a payload
 into a transcript, a log or another tool call. `home_hosted_status` answers the whole status object,
 so its result is passed through `redactForAgent`, which drops `firstRunPassword.password` and keeps
-`state` — an agent advising a locked-out user still has to tell "the page shows it" apart from "only
-`account reset` helps". This is the same posture as the panel's API token, which every status surface
+`state` — an agent advising a locked-out user still has to tell "the page shows it" apart from "the
+page offers a reset". This is the same posture as the panel's API token, which every status surface
 reports as a word (`enrolled`/`present`/`stale`) and never as the value.
 
 Absent once the person sets their own password (`isDefault` goes false), so the usual case renders

@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { scryptSync } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { firstRunPassword } from '../src/home-hosted/first-run-password.js'
 import { secretsFile } from '../src/home-hosted/layout.js'
@@ -37,6 +38,21 @@ function homeWith(record: unknown): string {
   return root
 }
 
+/** A password record the way the panel writes one: scrypt with a `{N,r,p}` cost. */
+function passwordRecord(secret: string, options: { isDefault?: boolean, initial?: boolean } = {}): Record<string, unknown> {
+  const salt = Buffer.from('a-fixed-salt-value')
+  const cost = { N: 16384, r: 8, p: 1 }
+  return {
+    algo: 'scrypt',
+    salt: salt.toString('base64'),
+    hash: scryptSync(secret, salt, 64, cost).toString('base64'),
+    keylen: 64,
+    cost,
+    ...(options.isDefault === true ? { isDefault: true } : {}),
+    ...(options.initial === true ? { initial: secret } : {}),
+  }
+}
+
 describe('the first-run password', () => {
   it('reads the text while the generated password is still in use', () => {
     // The real record shape, captured from a live 0.13.0 panel.
@@ -51,6 +67,25 @@ describe('the first-run password', () => {
     // An empty string is the same case: never report a password nobody typed.
     const empty = homeWith({ password: { isDefault: true, initial: '' } })
     expect(firstRunPassword(empty)).toEqual({ state: 'unrecorded' })
+  })
+
+  /**
+   * The legacy branch, which the first version of this module got **wrong**.
+   *
+   * A home from before 0.12 holds a hash of the shared `hh` and no `initial` text. A reader that
+   * only looks for the text reports "unrecorded — nobody can read it back" for a password that is
+   * `hh` and trivially recoverable. Measured on a real pre-0.12 root: the panel's own `status`
+   * prints `password hh`.
+   *
+   * `cost` is the object the panel writes (`{ N, r, p }`), not a bare number — passing it through
+   * unchanged is what makes a real record verify.
+   */
+  it('recovers the legacy `hh` from a pre-0.12 home', () => {
+    const record = passwordRecord('hh', { isDefault: true, initial: false })
+    expect(firstRunPassword(homeWith({ password: record }))).toEqual({ state: 'recorded', password: 'hh' })
+    // And a hash of something else with no text is genuinely unrecorded.
+    const other = passwordRecord('a-password-nobody-kept', { isDefault: true, initial: false })
+    expect(firstRunPassword(homeWith({ password: other }))).toEqual({ state: 'unrecorded' })
   })
 
   it('reports `own` once the person has set their own, even if text is stored', () => {
