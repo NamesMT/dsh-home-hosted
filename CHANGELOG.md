@@ -1,6 +1,40 @@
 # Changelog
 
 
+## v0.9.10
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.9...v0.9.10)
+
+### 🚀 Enhancements
+
+- **windows:** Launch logon entries through wscript so no console window appears ([3c4b8e7](https://github.com/NamesMT/dsh-home-hosted/commit/3c4b8e7))
+
+### 🩹 Fixes
+
+- Resolve a real node and a real CLI, never the Desktop app or hh.exe ([019c8d2](https://github.com/NamesMT/dsh-home-hosted/commit/019c8d2))
+- **launcher:** Spawn a .cmd through cmd.exe, never through a shell ([dd56470](https://github.com/NamesMT/dsh-home-hosted/commit/dd56470))
+- Keep a recorded pin, and never half-remove a Run entry ([4f3f7be](https://github.com/NamesMT/dsh-home-hosted/commit/4f3f7be))
+- **windows:** Stop the wrapper corrupting args, and never strand its artifact ([87effda](https://github.com/NamesMT/dsh-home-hosted/commit/87effda))
+- **windows:** Compare %NAME% case-insensitively, as Windows does ([13dddee](https://github.com/NamesMT/dsh-home-hosted/commit/13dddee))
+- **windows:** Decide the wrapper from the command line's shape, not the install env ([853a519](https://github.com/NamesMT/dsh-home-hosted/commit/853a519))
+- **windows:** A fallback install needs no wrapper, and restore its pin ([54a5335](https://github.com/NamesMT/dsh-home-hosted/commit/54a5335))
+- **test:** Read every nullable spelling, and give the slow helper test headroom ([0d03715](https://github.com/NamesMT/dsh-home-hosted/commit/0d03715))
+- **client:** Use the host's own nav-icon seat, so the gear is not doubled ([b26e2de](https://github.com/NamesMT/dsh-home-hosted/commit/b26e2de))
+- **client:** Hide a nested nav glyph too, so a refused seat cannot double it ([6ca01ee](https://github.com/NamesMT/dsh-home-hosted/commit/6ca01ee))
+
+### 📖 Documentation
+
+- Record the end-to-end verification these Windows fixes now have ([ec71ade](https://github.com/NamesMT/dsh-home-hosted/commit/ec71ade))
+- The migration anchor still holds at 0.13.0, verified not assumed ([708fde1](https://github.com/NamesMT/dsh-home-hosted/commit/708fde1))
+
+### ✅ Tests
+
+- **windows:** Pin the unmarked-task status branch ([e44337b](https://github.com/NamesMT/dsh-home-hosted/commit/e44337b))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.9
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.8...v0.9.9)
