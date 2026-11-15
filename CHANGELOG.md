@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.9.13
+
+[compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.12...v0.9.13)
+
+### 🩹 Fixes
+
+- **windows:** Hide the console window when starting the panel ([a031fb7](https://github.com/NamesMT/dsh-home-hosted/commit/a031fb7))
+
+### ❤️ Contributors
+
+- NamesMT ([@NamesMT](https://github.com/NamesMT))
+
 ## v0.9.12
 
 [compare changes](https://github.com/NamesMT/dsh-home-hosted/compare/v0.9.11...v0.9.12)
